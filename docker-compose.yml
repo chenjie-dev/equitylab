@@ -1,0 +1,166 @@
+# EquityLab 多服务编排（项目名 equitylab，网络 equitylab-net）
+# 文档：docs/2026-10-15-containers.md · docs/2026-10-15-api.md · docs/2026-10-15-architecture.md
+# 启动：cp .env.example .env && docker compose up -d --build
+name: equitylab
+
+services:
+  # --- 基础设施 ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: equitylab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-equitylab}
+      POSTGRES_USER: ${POSTGRES_USER:-equitylab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-equitylab}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - equitylab_pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks: [equitylab]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: equitylab-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks: [equitylab]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    container_name: equitylab-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - equitylab_qdrant:/qdrant/storage
+    networks: [equitylab]
+
+  # --- 应用服务 ---
+  # 行情：Provider + Redis 短缓存；也可经网关 /api/market/* 访问
+  market-data:
+    build:
+      context: ./services/market-data
+      dockerfile: Dockerfile
+    image: equitylab-market-data:local
+    container_name: equitylab-market-data
+    restart: unless-stopped
+    environment:
+      PORT: "3002"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
+      MARKET_PROVIDER: ${MARKET_PROVIDER:-mock}
+      ALPHAFEED_API_KEY: ${ALPHAFEED_API_KEY:-}
+      ALPHAFEED_BASE_URL: ${ALPHAFEED_BASE_URL:-https://api.alphafeed.org/v1}
+    ports:
+      - "${MARKET_DATA_PORT:-3002}:3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [equitylab]
+
+  # Python 研究层：RAG / 因子 / 回测（内部 8002，经网关 /api/research/*）
+  research:
+    build:
+      context: ./apps/research
+      dockerfile: Dockerfile
+    image: equitylab-research:local
+    container_name: equitylab-research
+    restart: unless-stopped
+    environment:
+      PORT: "8002"
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      QDRANT_URL: http://qdrant:6333
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      MARKET_DATA_URL: http://market-data:3002
+    depends_on:
+      - qdrant
+      - market-data
+    networks: [equitylab]
+
+  # TS 编排层：Agent 路由与工具调用（内部 8001；聊天走网关 /api/chat）
+  orchestrator:
+    build:
+      context: ./apps/orchestrator
+      dockerfile: Dockerfile
+    image: equitylab-orchestrator:local
+    container_name: equitylab-orchestrator
+    restart: unless-stopped
+    environment:
+      PORT: "8001"
+      RESEARCH_URL: http://research:8002
+      MARKET_DATA_URL: http://market-data:3002
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEFAULT_CHAT_MODEL: ${DEFAULT_CHAT_MODEL:-deepseek-chat}
+    depends_on:
+      - research
+      - market-data
+    networks: [equitylab]
+
+  # Rust 网关：统一入口、限流、反代（宿主机默认 3000）
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    image: equitylab-gateway:local
+    container_name: equitylab-gateway
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      ORCHESTRATOR_URL: http://orchestrator:8001
+      RESEARCH_URL: http://research:8002
+      MARKET_DATA_URL: http://market-data:3002
+      RATE_LIMIT_PER_MINUTE: "120"
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    depends_on:
+      - orchestrator
+      - market-data
+    networks: [equitylab]
+
+  # Next.js 前端：浏览器走同源 /api/chat；容器内 BFF 经 Docker DNS 访问网关
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    image: equitylab-frontend:local
+    container_name: equitylab-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:${GATEWAY_PORT:-3000}
+      GATEWAY_URL: http://gateway:3000
+      # Next standalone 默认绑容器 hostname，探活需显式 0.0.0.0
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    ports:
+      - "${FRONTEND_PORT:-3001}:3000"
+    depends_on:
+      - gateway
+    networks: [equitylab]
+
+networks:
+  equitylab:
+    name: equitylab-net
+
+volumes:
+  equitylab_pgdata:
+    name: equitylab-pgdata
+  equitylab_qdrant:
+    name: equitylab-qdrant

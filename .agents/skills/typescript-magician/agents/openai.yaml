@@ -1,0 +1,3 @@
+interface:
+  display_name: "TypeScript Magician"
+  short_description: "Advanced TypeScript types and errors"

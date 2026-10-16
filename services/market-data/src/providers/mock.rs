@@ -1,0 +1,83 @@
+//! 确定性 Mock Provider：本地 / CI 无需 API Key 即可联调。
+//!
+//! 对常见 A 股代码给出固定基准价，其余符号回落为 100；K 线为可重复的合成序列。
+
+use super::{Bar, MarketDataProvider, ProviderError, Quote};
+use async_trait::async_trait;
+use chrono::Utc;
+
+/// 无状态 Mock 实现。
+#[derive(Default)]
+pub struct MockProvider;
+
+#[async_trait]
+impl MarketDataProvider for MockProvider {
+    async fn get_quote(&self, symbol: &str) -> Result<Quote, ProviderError> {
+        Ok(demo_quote(symbol))
+    }
+
+    async fn get_quotes(&self, symbols: &[&str]) -> Result<Vec<Quote>, ProviderError> {
+        Ok(symbols.iter().map(|s| demo_quote(s)).collect())
+    }
+
+    async fn get_bars(
+        &self,
+        symbol: &str,
+        period: &str,
+        count: usize,
+        _adjust: &str,
+    ) -> Result<Vec<Bar>, ProviderError> {
+        // 上限 120：避免误传超大 count 撑爆响应。
+        let mut bars = Vec::with_capacity(count.min(120));
+        let mut px = 100.0;
+        for i in 0..count.min(120) {
+            let open = px;
+            let close = px * (1.0 + ((i as f64 % 5.0) - 2.0) * 0.002);
+            bars.push(Bar {
+                symbol: symbol.to_string(),
+                period: period.to_string(),
+                datetime: format!("2024-01-{:02}", (i % 28) + 1),
+                open,
+                high: open.max(close) * 1.01,
+                low: open.min(close) * 0.99,
+                close,
+                volume: 1_000_000 + i as i64 * 1000,
+                amount: close * 1_000_000.0,
+            });
+            px = close;
+        }
+        Ok(bars)
+    }
+
+    async fn search(&self, q: &str) -> Result<Vec<Quote>, ProviderError> {
+        let candidates = ["600519.SH", "300750.SZ", "000001.SZ", "AAPL"];
+        Ok(candidates
+            .into_iter()
+            .filter(|s| s.to_lowercase().contains(&q.to_lowercase()) || q.is_empty())
+            .map(demo_quote)
+            .collect())
+    }
+}
+
+/// 按 symbol 映射演示基准价；未知代码统一 100，便于识别「未命中知名标的」。
+fn demo_quote(symbol: &str) -> Quote {
+    let base = match symbol {
+        "600519.SH" => 1680.0,
+        "300750.SZ" => 190.0,
+        "000001.SZ" => 11.2,
+        _ => 100.0,
+    };
+    Quote {
+        symbol: symbol.to_string(),
+        name: format!("DEMO-{symbol}"),
+        last_price: base,
+        open: base * 0.99,
+        high: base * 1.02,
+        low: base * 0.98,
+        close: base,
+        volume: 2_500_000,
+        amount: base * 2_500_000.0,
+        change_pct: 1.25,
+        timestamp: Utc::now().timestamp(),
+    }
+}
