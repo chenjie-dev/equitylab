@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 币安 Ondo 代币化美股只读行情台。
+ * 币安 Ondo 代币化美股只读行情台：全量列表 + 搜索；报价按需刷新。
  * 数据：/api/market/binance/rwa/*（公开 bapi，非纽交所原生 feed）。
  */
 
@@ -11,7 +11,8 @@ import {
   type Kline,
 } from "../../components/markets/BinanceChart";
 
-const WATCH = [
+/** 优先拉实时报价的热门标的（其余列表项点选后再取价） */
+const PRIORITY = [
   "AAPL",
   "NVDA",
   "TSLA",
@@ -21,6 +22,12 @@ const WATCH = [
   "META",
   "SPY",
   "QQQ",
+  "AMD",
+  "NFLX",
+  "COIN",
+  "MSTR",
+  "PLTR",
+  "BABA",
 ] as const;
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h", "12h", "1d"] as const;
@@ -77,11 +84,6 @@ type MarketStatus = {
   nextClose?: string;
 };
 
-type QuoteRow = {
-  token: StockToken;
-  dynamic: Dynamic | null;
-};
-
 function fmt(n: string | number | null | undefined, digits = 2): string {
   if (n == null || n === "") return "—";
   const v = typeof n === "string" ? Number(n) : n;
@@ -101,10 +103,24 @@ function refPrice(tokenPrice?: string, multiplier?: string): number | null {
   return p / m;
 }
 
+async function fetchDynamic(token: StockToken): Promise<Dynamic | null> {
+  try {
+    const res = await fetch(
+      `/api/market/binance/rwa/dynamic?chainId=${token.chainId}&contractAddress=${token.contractAddress}`,
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: Dynamic };
+    return body.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TokenizedStocksPage() {
   const [query, setQuery] = useState("");
   const [universe, setUniverse] = useState<StockToken[]>([]);
-  const [rows, setRows] = useState<QuoteRow[]>([]);
+  /** ticker → dynamic 报价缓存 */
+  const [quotes, setQuotes] = useState<Record<string, Dynamic>>({});
   const [selected, setSelected] = useState<string>("AAPL");
   const [interval, setIntervalTf] = useState<Interval>("1h");
   const [klines, setKlines] = useState<Kline[]>([]);
@@ -130,30 +146,57 @@ export default function TokenizedStocksPage() {
     setMarket(body.data ?? null);
   }, []);
 
-  const loadWatchQuotes = useCallback(async () => {
-    const list =
-      universe.length > 0
-        ? WATCH.map((t) => universe.find((u) => u.ticker === t)).filter(
-            Boolean,
-          ) as StockToken[]
-        : [];
-    if (!list.length) return;
-    const quotes = await Promise.all(
-      list.map(async (token) => {
-        try {
-          const res = await fetch(
-            `/api/market/binance/rwa/dynamic?chainId=${token.chainId}&contractAddress=${token.contractAddress}`,
-          );
-          if (!res.ok) return { token, dynamic: null };
-          const body = (await res.json()) as { data?: Dynamic };
-          return { token, dynamic: body.data ?? null };
-        } catch {
-          return { token, dynamic: null };
-        }
-      }),
-    );
-    setRows(quotes);
-  }, [universe]);
+  const mergeQuotes = useCallback((entries: { ticker: string; dyn: Dynamic | null }[]) => {
+    setQuotes((prev) => {
+      const next = { ...prev };
+      for (const { ticker, dyn } of entries) {
+        if (dyn) next[ticker] = dyn;
+      }
+      return next;
+    });
+  }, []);
+
+  /** 热门 + 当前选中 + 搜索命中前 40 条 */
+  const loadListQuotes = useCallback(
+    async (list: StockToken[], q: string, sel: string) => {
+      if (!list.length) return;
+      const byTicker = new Map(list.map((t) => [t.ticker, t]));
+      const want = new Set<string>();
+      for (const t of PRIORITY) {
+        if (byTicker.has(t)) want.add(t);
+      }
+      if (byTicker.has(sel)) want.add(sel);
+
+      const qq = q.trim().toUpperCase();
+      if (qq) {
+        const hits = list
+          .filter(
+            (t) =>
+              t.ticker.includes(qq) || t.symbol.toUpperCase().includes(qq),
+          )
+          .slice(0, 40);
+        for (const t of hits) want.add(t.ticker);
+      }
+
+      const tokens = [...want]
+        .map((t) => byTicker.get(t))
+        .filter(Boolean) as StockToken[];
+
+      // 分批，避免一次打爆上游
+      const batchSize = 8;
+      for (let i = 0; i < tokens.length; i += batchSize) {
+        const batch = tokens.slice(i, i + batchSize);
+        const results = await Promise.all(
+          batch.map(async (token) => ({
+            ticker: token.ticker,
+            dyn: await fetchDynamic(token),
+          })),
+        );
+        mergeQuotes(results);
+      }
+    },
+    [mergeQuotes],
+  );
 
   const loadDetail = useCallback(async (ticker: string) => {
     const res = await fetch(
@@ -168,6 +211,9 @@ export default function TokenizedStocksPage() {
     };
     setTokenMeta(body.token);
     setDetail(body.dynamic);
+    if (body.dynamic) {
+      setQuotes((prev) => ({ ...prev, [ticker]: body.dynamic }));
+    }
     return body;
   }, []);
 
@@ -207,16 +253,16 @@ export default function TokenizedStocksPage() {
 
   useEffect(() => {
     if (!universe.length) return;
-    void loadWatchQuotes();
-    const id = setInterval(() => setTick((n) => n + 1), 12_000);
+    void loadListQuotes(universe, query, selected);
+    const id = setInterval(() => setTick((n) => n + 1), 20_000);
     return () => clearInterval(id);
-  }, [universe, loadWatchQuotes]);
+  }, [universe, query, selected, loadListQuotes]);
 
   useEffect(() => {
     if (tick === 0) return;
-    void loadWatchQuotes();
+    void loadListQuotes(universe, query, selected);
     void loadMarket();
-  }, [tick, loadWatchQuotes, loadMarket]);
+  }, [tick, universe, query, selected, loadListQuotes, loadMarket]);
 
   useEffect(() => {
     void (async () => {
@@ -232,19 +278,27 @@ export default function TokenizedStocksPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    const base = rows.length
-      ? rows
-      : WATCH.map((t) => {
-          const token = universe.find((u) => u.ticker === t);
-          return token ? { token, dynamic: null } : null;
-        }).filter(Boolean) as QuoteRow[];
-    if (!q) return base;
-    return base.filter(
-      (r) =>
-        r.token.ticker.includes(q) ||
-        r.token.symbol.toUpperCase().includes(q),
-    );
-  }, [rows, universe, query]);
+    // 热门置顶，其余按 ticker 字母序（universe 已排序）
+    const priorityIdx = new Map(PRIORITY.map((t, i) => [t, i]));
+    let list = [...universe];
+    if (q) {
+      list = list.filter(
+        (t) =>
+          t.ticker.includes(q) || t.symbol.toUpperCase().includes(q),
+      );
+    }
+    list.sort((a, b) => {
+      const pa = priorityIdx.has(a.ticker as (typeof PRIORITY)[number])
+        ? (priorityIdx.get(a.ticker as (typeof PRIORITY)[number]) ?? 999)
+        : 999;
+      const pb = priorityIdx.has(b.ticker as (typeof PRIORITY)[number])
+        ? (priorityIdx.get(b.ticker as (typeof PRIORITY)[number]) ?? 999)
+        : 999;
+      if (pa !== pb) return pa - pb;
+      return a.ticker.localeCompare(b.ticker);
+    });
+    return list;
+  }, [universe, query]);
 
   const ti = detail?.tokenInfo;
   const si = detail?.stockInfo;
@@ -266,14 +320,19 @@ export default function TokenizedStocksPage() {
               onChange={(e) => setSelected(e.target.value)}
               aria-label="Stock ticker"
             >
-              {WATCH.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
+              {(universe.length ? universe : [{ ticker: selected } as StockToken]).map(
+                (t) => (
+                  <option key={t.ticker} value={t.ticker}>
+                    {t.ticker}
+                    {t.symbol ? ` · ${t.symbol}` : ""}
+                  </option>
+                ),
+              )}
             </select>
             <span className="bn-pill">Ondo · Tokenized</span>
-            <span className={open ? "bn-pill bn-pill-open" : "bn-pill bn-pill-closed"}>
+            <span
+              className={open ? "bn-pill bn-pill-open" : "bn-pill bn-pill-closed"}
+            >
               {market?.marketStatus ?? (open ? "open" : "closed")}
             </span>
           </div>
@@ -325,12 +384,15 @@ export default function TokenizedStocksPage() {
       <div className="bn-main bn-main-quotes">
         <aside className="bn-card bn-markets">
           <div className="bn-card-head">
-            <span>Watchlist</span>
-            <span className="bn-label">{universe.length} listed</span>
+            <span>Markets</span>
+            <span className="bn-label">
+              {filtered.length}
+              {query ? ` / ${universe.length}` : ""} symbols
+            </span>
           </div>
           <input
             className="bn-search"
-            placeholder="Search ticker"
+            placeholder="Search ticker or symbol"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -340,24 +402,25 @@ export default function TokenizedStocksPage() {
             <span>24h%</span>
           </div>
           <div className="bn-mkt-body">
-            {filtered.map((r) => {
-              const pct = Number(r.dynamic?.tokenInfo?.priceChangePct24h ?? NaN);
-              const active = r.token.ticker === selected;
+            {filtered.map((token) => {
+              const dyn = quotes[token.ticker];
+              const pct = Number(dyn?.tokenInfo?.priceChangePct24h ?? NaN);
+              const active = token.ticker === selected;
               return (
                 <button
-                  key={r.token.ticker}
+                  key={`${token.chainId}-${token.contractAddress}`}
                   type="button"
                   className={
                     active ? "bn-mkt-row-stock active" : "bn-mkt-row-stock"
                   }
-                  onClick={() => setSelected(r.token.ticker)}
+                  onClick={() => setSelected(token.ticker)}
                 >
                   <span className="bn-mkt-pair">
-                    {r.token.ticker}
-                    <em>{r.token.symbol}</em>
+                    {token.ticker}
+                    <em>{token.symbol}</em>
                   </span>
                   <span className="bn-mono">
-                    {fmt(r.dynamic?.tokenInfo?.price, 2)}
+                    {fmt(dyn?.tokenInfo?.price, 2)}
                   </span>
                   <span
                     className={
@@ -371,6 +434,9 @@ export default function TokenizedStocksPage() {
                 </button>
               );
             })}
+            {!filtered.length ? (
+              <p className="bn-empty">No symbols match</p>
+            ) : null}
           </div>
         </aside>
 
@@ -391,10 +457,7 @@ export default function TokenizedStocksPage() {
             </div>
             <span className="bn-label">Token K-Line · read-only</span>
           </div>
-          <BinanceChart
-            klines={klines}
-            symbol={`${selected}on`}
-          />
+          <BinanceChart klines={klines} symbol={`${selected}on`} />
         </section>
 
         <aside className="bn-right bn-right-quotes">
@@ -455,7 +518,7 @@ export default function TokenizedStocksPage() {
                     ? "BSC"
                     : tokenMeta?.chainId === "1"
                       ? "ETH"
-                      : tokenMeta?.chainId ?? "—"}
+                      : (tokenMeta?.chainId ?? "—")}
                 </dd>
               </div>
               <div>
@@ -469,7 +532,7 @@ export default function TokenizedStocksPage() {
             </dl>
             <p className="bn-demo-hint">
               *tokenInfo.volume24h 为底层美股成交额（USD），非链上 DEX 量。
-              代币 ≠ 1 股：ref = token÷multiplier。
+              代币 ≠ 1 股：ref = token÷multiplier。列表为全量；未刷到的价显示 —，点选后加载。
             </p>
           </div>
         </aside>
