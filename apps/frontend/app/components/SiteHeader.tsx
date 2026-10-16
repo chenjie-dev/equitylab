@@ -7,6 +7,7 @@ const NAV = [
   { href: "/", label: "Chat" },
   { href: "/markets", label: "Spot" },
   { href: "/markets/stocks", label: "Stocks" },
+  { href: "/markets/ashare", label: "A股" },
   { href: "/backtest", label: "Backtest" },
 ];
 

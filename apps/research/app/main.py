@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.observability import TraceMiddleware, setup_logging
-from app.routers import backtests, factors, health, rag
+from app.routers import ashare, backtests, factors, health, rag
 
 setup_logging()
 logger = logging.getLogger("equitylab.research")
@@ -30,7 +30,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="EquityLab Research",
         version="0.2.0",
-        description="量化研究层：RAG / 因子 / 回测。",
+        description="量化研究层：RAG / 因子 / 回测 / A 股行情(adata)。",
         lifespan=lifespan,
     )
     application.add_middleware(TraceMiddleware)
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     application.include_router(rag.router)
     application.include_router(factors.router)
     application.include_router(backtests.router)
+    application.include_router(ashare.router)
     return application
 
 

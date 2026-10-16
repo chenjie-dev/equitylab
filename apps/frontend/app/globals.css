@@ -1310,4 +1310,19 @@ code {
   color: var(--bn-text-secondary);
 }
 
+.bn-ashare-five {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.bn-ashare-five-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--bn-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 

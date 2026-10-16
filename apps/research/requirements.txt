@@ -3,3 +3,5 @@ uvicorn[standard]==0.34.0
 pydantic==2.10.6
 httpx==0.28.1
 qdrant-client==1.13.3
+pandas==2.2.3
+adata>=2.9.0
