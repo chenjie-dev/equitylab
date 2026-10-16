@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/", label: "对话" },
-  { href: "/backtest", label: "回测" },
+  { href: "/", label: "Chat" },
+  { href: "/markets", label: "Spot" },
+  { href: "/backtest", label: "Backtest" },
 ];
 
 export function SiteHeader() {
@@ -35,7 +36,7 @@ export function SiteHeader() {
             );
           })}
         </nav>
-        <span className="header-tag">Research · Demo</span>
+        <span className="header-tag">Quotes · Public</span>
       </div>
     </header>
   );

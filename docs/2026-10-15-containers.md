@@ -31,7 +31,8 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
-| `MARKET_PROVIDER` | `mock` | `mock` \| `alphafeed` |
+| `MARKET_PROVIDER` | `mock` | `mock` \| `binance` \| `alphafeed` |
+| `BINANCE_REST_URL` / `BINANCE_WS_URL` | data-api / data-stream | 币安公开行情基址 |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |

@@ -64,6 +64,8 @@ services:
       MARKET_PROVIDER: ${MARKET_PROVIDER:-mock}
       ALPHAFEED_API_KEY: ${ALPHAFEED_API_KEY:-}
       ALPHAFEED_BASE_URL: ${ALPHAFEED_BASE_URL:-https://api.alphafeed.org/v1}
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://data-api.binance.vision}
+      BINANCE_WS_URL: ${BINANCE_WS_URL:-wss://data-stream.binance.vision}
     ports:
       - "${MARKET_DATA_PORT:-3002}:3002"
     depends_on:

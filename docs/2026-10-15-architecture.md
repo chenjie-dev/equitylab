@@ -96,7 +96,7 @@ MVP：`POST /rag/search` 返回演示切片，尚未接 Embedding / Qdrant。
 | 历史 K 线 | REST → PG | 表 `klines` 已建；异步落库后续 |
 | 盘中推送 | WebSocket | 独立进程，不进 MCP（后续） |
 
-Provider Adapter：`MarketDataProvider` trait；`mock` / `alphafeed`；TickFlow / AkShare / 熔断后续。
+Provider Adapter：`MarketDataProvider` trait；`mock` / `binance` / `alphafeed`。多交易所代码在 `exchanges/`（币安深模块：`/exchanges/binance`，兼容 `/binance`）；TickFlow / OKX / 熔断后续。
 
 ## 7. 多模型路由（规划）
 

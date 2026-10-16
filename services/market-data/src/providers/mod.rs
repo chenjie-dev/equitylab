@@ -1,7 +1,7 @@
-//! 行情数据源适配层（Provider Adapter）。
+//! 统一行情 Provider 契约（Quote / Bars / Search）。
 //!
-//! 上层只依赖 [`MarketDataProvider`]，底层可切换 mock / AlphaFeed / TickFlow 等，
-//! 避免编排层与 MCP 绑定具体上游协议。
+//! 上层只依赖 [`MarketDataProvider`]。具体交易所实现放在 [`crate::exchanges`]，
+//! 再适配为本 trait（如 `exchanges::binance::Provider`）。
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

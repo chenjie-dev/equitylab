@@ -137,11 +137,12 @@ async fn proxy(
         .map(|c| c.0.ip())
         .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]));
 
-    if !state.rate_limiter.is_allowed(peer) {
+    let path = req.uri().path().to_string();
+    // 公开行情代理不计入网关 RPM（上游 Binance + market-data 缓存已自限）；对话等仍限流。
+    let skip_rate_limit = path.starts_with("/api/market");
+    if !skip_rate_limit && !state.rate_limiter.is_allowed(peer) {
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".into()));
     }
-
-    let path = req.uri().path().to_string();
     let query = req
         .uri()
         .query()
