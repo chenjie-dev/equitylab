@@ -12,6 +12,7 @@ import { z } from "zod";
 import { PORT } from "./config.js";
 import { runChatGraph } from "./graph/run.js";
 import { listTools } from "./tools/registry.js";
+import { log, TRACE_HEADER, traceMiddleware } from "./tracing.js";
 
 const ChatRequestSchema = z.object({
   message: z.string().min(1),
@@ -22,8 +23,9 @@ const ChatRequestSchema = z.object({
 });
 
 const app = express();
-app.use(cors());
+app.use(cors({ exposedHeaders: [TRACE_HEADER] }));
 app.use(express.json({ limit: "2mb" }));
+app.use(traceMiddleware);
 
 app.get("/health", (_req, res) => {
   res.json({ status: "UP", service: "orchestrator", ts: new Date().toISOString() });
@@ -48,6 +50,9 @@ app.post("/api/chat", async (req, res) => {
     const out = await runChatGraph({ message, agent });
     res.json(out);
   } catch (err) {
+    log("error", "chat failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
     });
@@ -55,5 +60,5 @@ app.post("/api/chat", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`equitylab-orchestrator listening on :${PORT}`);
+  log("info", "listening", { port: PORT });
 });

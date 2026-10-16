@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from app.observability import trace_headers
+
 DEFAULT_MARKET_DATA_URL = "http://127.0.0.1:3002"
 TIMEOUT_S = 15.0
 
@@ -22,12 +24,13 @@ async def fetch_bars(
     count: int = 120,
     adjust: str = "none",
 ) -> list[dict[str, Any]]:
-    """GET /bars/{symbol}；失败抛 httpx.HTTPError。"""
+    """GET /bars/{symbol}；失败抛 httpx.HTTPError。透传 X-Trace-Id。"""
     url = f"{market_data_base()}/bars/{symbol}"
     async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
         res = await client.get(
             url,
             params={"period": period, "count": count, "adjust": adjust},
+            headers=trace_headers(),
         )
         res.raise_for_status()
         data = res.json()

@@ -1,6 +1,7 @@
 """EquityLab 研究计算层（Python / FastAPI）。
 
 按 FastAPI 最佳实践拆分 router；RAG 对齐立项 chunk 与 Qdrant 探测。
+统一 X-Trace-Id + JSON 日志。
 """
 
 from __future__ import annotations
@@ -11,9 +12,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.observability import TraceMiddleware, setup_logging
 from app.routers import backtests, factors, health, rag
 
-logging.basicConfig(level=logging.INFO)
+setup_logging()
 logger = logging.getLogger("equitylab.research")
 
 
@@ -31,6 +33,7 @@ def create_app() -> FastAPI:
         description="量化研究层：RAG / 因子 / 回测。",
         lifespan=lifespan,
     )
+    application.add_middleware(TraceMiddleware)
     application.include_router(health.router)
     application.include_router(rag.router)
     application.include_router(factors.router)

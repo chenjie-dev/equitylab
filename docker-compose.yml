@@ -155,6 +155,55 @@ services:
       - gateway
     networks: [equitylab]
 
+  # --- 可观测性：JSON 日志 → Alloy → Loki → Grafana ---
+  loki:
+    image: grafana/loki:3.4.2
+    container_name: equitylab-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./infra/observability/loki-config.yaml:/etc/loki/config.yaml:ro
+      - equitylab_loki:/loki
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    networks: [equitylab]
+
+  alloy:
+    image: grafana/alloy:v1.8.1
+    container_name: equitylab-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./infra/observability/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - equitylab_alloy:/var/lib/alloy/data
+    depends_on:
+      - loki
+    networks: [equitylab]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: equitylab-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - equitylab_grafana:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3003}:3000"
+    depends_on:
+      - loki
+    networks: [equitylab]
+
 networks:
   equitylab:
     name: equitylab-net
@@ -164,3 +213,9 @@ volumes:
     name: equitylab-pgdata
   equitylab_qdrant:
     name: equitylab-qdrant
+  equitylab_loki:
+    name: equitylab-loki
+  equitylab_alloy:
+    name: equitylab-alloy
+  equitylab_grafana:
+    name: equitylab-grafana

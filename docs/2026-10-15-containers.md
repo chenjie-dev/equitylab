@@ -14,8 +14,13 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | postgres | equitylab-postgres | 5432 | 数据库 |
 | redis | equitylab-redis | **16379→6379** | 缓存（宿主机默认 16379，避免与本机其他 Redis 冲突） |
 | qdrant | equitylab-qdrant | 6333 | 向量库 |
+| loki | equitylab-loki | 3100 | 日志存储 |
+| alloy | equitylab-alloy | （内部） | 采集容器日志 → Loki（需 docker.sock） |
+| grafana | equitylab-grafana | **3003** | 日志查询 UI（匿名 Viewer） |
 
-卷：`equitylab-pgdata`、`equitylab-qdrant`。
+卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
+
+可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 
 ## 关键环境变量
 
@@ -30,6 +35,8 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |
+| `GRAFANA_PORT` / `LOKI_PORT` | 3003 / 3100 | Grafana / Loki 宿主机端口 |
+| `GRAFANA_ADMIN_*` | admin / admin | Grafana 管理员（本地演示） |
 
 服务间 URL 使用 Docker DNS（`http://orchestrator:8001` 等），不要写 `localhost`。
 

@@ -16,13 +16,13 @@
 mod cache;
 mod handlers;
 mod providers;
+mod trace;
 
-use axum::{routing::get, Router};
+use axum::{middleware::from_fn, routing::get, Router};
 use cache::QuoteCache;
 use providers::{mock::MockProvider, MarketDataProvider};
 use std::{net::SocketAddr, sync::Arc};
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 /// 行情服务共享状态：当前 Provider 与报价缓存。
@@ -34,7 +34,11 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
+        .json()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_current_span(false)
+        .with_span_list(false)
+        .flatten_event(true)
         .init();
 
     let port: u16 = std::env::var("PORT")
@@ -61,12 +65,17 @@ async fn main() {
         .route("/quotes/{symbol}", get(handlers::get_quote))
         .route("/bars/{symbol}", get(handlers::get_bars))
         .route("/search", get(handlers::search))
+        .layer(from_fn(trace::trace_middleware))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("equitylab-market-data listening on {addr} provider={provider_name}");
+    tracing::info!(
+        service = "market-data",
+        %addr,
+        provider = %provider_name,
+        "listening"
+    );
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app).await.expect("serve");
 }

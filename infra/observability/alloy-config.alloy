@@ -1,0 +1,69 @@
+// Grafana Alloy：仅采集 compose 项目 equitylab 的容器日志 → Loki
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+}
+
+discovery.relabel "equitylab" {
+  targets = discovery.docker.containers.targets
+
+  // 只保留本仓库 compose 项目，避免扫到本机其他容器的历史日志
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "equitylab"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.relabel.equitylab.output
+  labels        = {
+    "job" = "docker",
+  }
+  relabel_rules = discovery.relabel.equitylab.rules
+  forward_to    = [loki.process.json_fields.receiver]
+}
+
+loki.process "json_fields" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.json {
+    expressions = {
+      "traceId" = "traceId",
+      "level"   = "level",
+      "app"     = "service",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level   = "",
+      app     = "",
+      traceId = "",
+    }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
