@@ -2,6 +2,21 @@
 
 > 创建日：2026-10-16。代码落在 `services/market-data/src/exchanges/binance/`；无需 API Key。
 
+## 官方文档（权威来源）
+
+| 文档 | URL |
+|---|---|
+| 文档中心（总入口） | https://developers.binance.com/zh-CN/docs/introduction |
+| 仅市场数据 URL（REST / WS，免 Key） | https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/market_data_only |
+| 现货 REST / 市场流（完整规范） | 从文档中心进入 **Spot → REST API / WebSocket Streams** |
+
+EquityLab **只接**「仅市场数据」面：
+
+- REST：`https://data-api.binance.vision`（`BINANCE_REST_URL`）
+- WS：`wss://data-stream.binance.vision`（`BINANCE_WS_URL`）
+
+不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。上游限流与字段以官方文档为准；本仓模块为代理 + 短 TTL 缓存。
+
 ## 模块边界
 
 ```text
@@ -67,6 +82,7 @@ websocat 'ws://localhost:3002/binance/ws?streams=btcusdt@trade/btcusdt@ticker'
 
 ## 边界
 
-- 仅现货公开数据；不做合约/期权、签名账户、下单。
+- 仅现货公开数据；不做合约/期权、签名账户、下单（与官方「仅市场数据 URL」范围一致）。
 - `historicalTrades` 等需 Key 的接口不保证可用。
 - 双均线回测默认仍可用 mock；要对加密货币回测时把 Provider 切到 `binance` 并传 `BTCUSDT` 等符号。
+- 接口变更以 [币安开发者文档中心](https://developers.binance.com/zh-CN/docs/introduction) 为准，改代理路径时同步更新本页与 `docs/2026-10-15-api.md`。
