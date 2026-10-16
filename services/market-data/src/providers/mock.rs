@@ -27,16 +27,24 @@ impl MarketDataProvider for MockProvider {
         count: usize,
         _adjust: &str,
     ) -> Result<Vec<Bar>, ProviderError> {
-        // 上限 120：避免误传超大 count 撑爆响应。
-        let mut bars = Vec::with_capacity(count.min(120));
-        let mut px = 100.0;
-        for i in 0..count.min(120) {
+        // 上限 252：约一年交易日，足够 20/60 双均线演示。
+        let n = count.min(252);
+        let mut bars = Vec::with_capacity(n);
+        let base = demo_quote(symbol).last_price;
+        let start = chrono::NaiveDate::from_ymd_opt(2024, 1, 2).expect("valid date");
+        let mut px = base;
+        for i in 0..n {
+            let t = i as f64;
+            // 缓升趋势 + 慢波 + 快噪，便于金叉/死叉出现可观察净值变化。
+            let target =
+                base * (1.0 + 0.0006 * t + 0.05 * (t * 0.12).sin() + 0.01 * (t * 0.55).sin());
             let open = px;
-            let close = px * (1.0 + ((i as f64 % 5.0) - 2.0) * 0.002);
+            let close = open * 0.65 + target * 0.35;
+            let day = start + chrono::Duration::days(i as i64);
             bars.push(Bar {
                 symbol: symbol.to_string(),
                 period: period.to_string(),
-                datetime: format!("2024-01-{:02}", (i % 28) + 1),
+                datetime: day.format("%Y-%m-%d").to_string(),
                 open,
                 high: open.max(close) * 1.01,
                 low: open.min(close) * 0.99,

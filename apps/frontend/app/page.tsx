@@ -58,6 +58,9 @@ export default function HomePage() {
         自然语言驱动的研报问答、因子挖掘与行情查询。请求经 BFF → Rust 网关 → TypeScript
         编排图（route→plan→execute→synthesize）→ Python 研究层 / 行情服务。
       </p>
+      <p className="nav-links">
+        <a href="/backtest">双均线回测 →</a>
+      </p>
 
       <div className="suggestions" role="list">
         {SUGGESTIONS.map((s) => (

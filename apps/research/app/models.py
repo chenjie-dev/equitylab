@@ -23,6 +23,9 @@ class FactorIcRequest(BaseModel):
 
 class BacktestRequest(BaseModel):
     strategy: str = Field(default="dual_ma", description="策略标识")
-    fast: int = Field(default=20, description="快均线周期")
-    slow: int = Field(default=60, description="慢均线周期")
+    fast: int = Field(default=20, ge=1, le=120, description="快均线周期")
+    slow: int = Field(default=60, ge=2, le=250, description="慢均线周期")
     universe: str = Field(default="000300.SH", description="标的或指数宇宙")
+    period: str = Field(default="1d", description="K 线周期，传给 market-data")
+    count: int = Field(default=120, ge=30, le=500, description="拉取 K 线根数")
+    adjust: str = Field(default="none", description="复权：none / qfq / hfq")

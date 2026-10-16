@@ -167,3 +167,75 @@ pre.error {
   padding: 4px 10px;
   margin-bottom: 18px;
 }
+
+.nav-links {
+  margin: 0 0 20px;
+}
+
+.nav-links a {
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.nav-links a:hover {
+  text-decoration: underline;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+input {
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: #0d121a;
+  color: var(--foreground);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.metrics strong {
+  display: block;
+  font-size: 1.25rem;
+  margin-top: 4px;
+}
+
+.equity-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #0d121a;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.chart-line {
+  stroke: var(--primary);
+  stroke-width: 2;
+}
+
+.chart-grid {
+  stroke: var(--border);
+  stroke-dasharray: 4 4;
+}
+
+.chart-label {
+  fill: var(--muted-foreground);
+  font-size: 11px;
+}
+
+code {
+  font-size: 0.9em;
+  color: var(--primary);
+}

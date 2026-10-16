@@ -1,23 +1,70 @@
 from typing import Any
 
-from fastapi import APIRouter
+import httpx
+from fastapi import APIRouter, HTTPException
 
+from app.market_client import fetch_bars, market_data_base
 from app.models import BacktestRequest
+from app.strategies.dual_ma import run_dual_ma
 
 router = APIRouter(prefix="/backtests", tags=["backtests"])
 
 
 @router.post("/run")
-def run_backtest(body: BacktestRequest) -> dict[str, Any]:
-    """运行策略回测。MVP stub；不接真实券商。"""
+async def run_backtest(body: BacktestRequest) -> dict[str, Any]:
+    """双均线回测：拉 market-data /bars，确定性引擎出净值曲线。不接真实券商。"""
+    if body.strategy != "dual_ma":
+        raise HTTPException(status_code=400, detail=f"unsupported strategy: {body.strategy}")
+    if body.fast >= body.slow:
+        raise HTTPException(status_code=400, detail="fast must be < slow")
+
+    try:
+        bars = await fetch_bars(
+            body.universe,
+            period=body.period,
+            count=body.count,
+            adjust=body.adjust,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"market-data bars failed: {exc}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not bars:
+        raise HTTPException(status_code=422, detail="empty bars from market-data")
+
+    try:
+        result = run_dual_ma(bars, fast=body.fast, slow=body.slow)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     return {
         "strategy": body.strategy,
-        "params": {"fast": body.fast, "slow": body.slow, "universe": body.universe},
-        "metrics": {
-            "cum_return": 0.128,
-            "max_drawdown": -0.094,
-            "trades": 42,
-            "demo": True,
+        "params": {
+            "fast": body.fast,
+            "slow": body.slow,
+            "universe": body.universe,
+            "period": body.period,
+            "count": body.count,
+            "adjust": body.adjust,
         },
-        "assumptions": ["simplified demo backtest", "no live brokerage"],
+        "metrics": {
+            "cum_return": result.cum_return,
+            "max_drawdown": result.max_drawdown,
+            "trades": result.trades,
+            "bars": result.bars_used,
+        },
+        "equity_curve": result.equity_curve,
+        "mode": "market_bars",
+        "data_source": f"{market_data_base()}/bars/{body.universe}",
+        "assumptions": [
+            "long-only dual MA crossover (golden/death cross)",
+            "signal on close; same-day mark-to-market while in position",
+            "no fees / slippage / borrow",
+            "no live brokerage",
+            "bars from market-data (mock or upstream provider)",
+        ],
     }
