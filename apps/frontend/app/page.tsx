@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * EquityLab 对话壳。
- * 经同源 `/api/chat` BFF 转发网关；UI 使用语义化 token（对齐 shadcn 色彩语义，未强制引入 Tailwind）。
+ * EquityLab 对话壳 — 币安风格交易台布局。
+ * 经同源 `/api/chat` BFF 转发网关。
  */
 
 import { FormEvent, useState } from "react";
@@ -51,57 +51,64 @@ export default function HomePage() {
   }
 
   return (
-    <main>
-      <span className="badge">EquityLab · Agent MVP</span>
-      <h1>EquityLab</h1>
-      <p className="lead">
-        自然语言驱动的研报问答、因子挖掘与行情查询。请求经 BFF → Rust 网关 → TypeScript
-        编排图（route→plan→execute→synthesize）→ Python 研究层 / 行情服务。
-      </p>
-      <p className="nav-links">
-        <a href="/backtest">双均线回测 →</a>
-      </p>
-
-      <div className="suggestions" role="list">
-        {SUGGESTIONS.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className="chip"
-            onClick={() => setMessage(s)}
-          >
-            {s}
-          </button>
-        ))}
-      </div>
-
-      <form className="panel" onSubmit={onSubmit}>
-        <label className="field">
-          <span className="field-label">问题</span>
-          <textarea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="试着问：宁德时代研报要点 / 动量因子 IC / 600519.SH 报价"
-          />
-        </label>
-        <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
-          <button type="submit" disabled={loading || !message.trim()}>
-            {loading ? "思考中…" : "发送"}
-          </button>
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="page-kicker">Agent workspace</p>
+          <h1 className="page-title">智能研究对话</h1>
+          <p className="page-desc">
+            研报问答、因子与行情查询。请求经 BFF → 网关 → 编排层 → 研究 / 行情服务。
+          </p>
         </div>
-        {error ? <pre className="error">{error}</pre> : null}
-        {result ? (
-          <div className="result">
-            <div className="meta">
-              <span>agent: {result.agent}</span>
-              {result.trace?.length ? (
-                <span className="trace">{result.trace.join(" · ")}</span>
-              ) : null}
-            </div>
-            <pre>{result.answer}</pre>
+      </header>
+
+      <div className="layout-split">
+        <aside className="panel">
+          <h2 className="panel-title">快捷指令</h2>
+          <div className="suggestions" role="list">
+            {SUGGESTIONS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className="chip"
+                onClick={() => setMessage(s)}
+              >
+                {s}
+              </button>
+            ))}
           </div>
-        ) : null}
-      </form>
-    </main>
+          <p className="page-desc" style={{ marginTop: 8 }}>
+            也可在右侧自由输入；双均线回测见顶栏「回测」。
+          </p>
+        </aside>
+
+        <form className="panel" onSubmit={onSubmit}>
+          <h2 className="panel-title">提问</h2>
+          <label className="field">
+            <span className="field-label">Message</span>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="试着问：宁德时代研报要点 / 动量因子 IC / 600519.SH 报价"
+            />
+          </label>
+          <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+            <button type="submit" disabled={loading || !message.trim()}>
+              {loading ? "执行中…" : "发送"}
+            </button>
+          </div>
+          {error ? <pre className="error">{error}</pre> : null}
+          {result ? (
+            <div className="result">
+              <span className="agent-pill">agent · {result.agent}</span>
+              {result.trace?.length ? (
+                <span className="trace">{result.trace.join(" → ")}</span>
+              ) : null}
+              <pre>{result.answer}</pre>
+            </div>
+          ) : null}
+        </form>
+      </div>
+    </div>
   );
 }

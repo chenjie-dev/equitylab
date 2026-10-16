@@ -1,8 +1,8 @@
 /**
- * 根布局：全局 metadata 与基础 HTML 壳。
- * 样式见 globals.css；页面内容由各 route 注入 children。
+ * 根布局：币安风格顶栏 + 全局 token。
  */
 import type { Metadata } from "next";
+import { SiteHeader } from "./components/SiteHeader";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +13,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <SiteHeader />
+        {children}
+      </body>
     </html>
   );
 }

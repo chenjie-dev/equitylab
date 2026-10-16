@@ -1,10 +1,9 @@
 "use client";
 
 /**
- * 双均线回测页：调研究层 /backtests/run，用 SVG 画净值曲线。
+ * 双均线回测页 — 币安风格行情面板 + 净值曲线。
  */
 
-import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 
 type EquityPoint = {
@@ -36,31 +35,43 @@ type BacktestResponse = {
 };
 
 function pct(n: number): string {
-  return `${(n * 100).toFixed(2)}%`;
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${(n * 100).toFixed(2)}%`;
+}
+
+function toneClass(n: number): string {
+  if (n > 0) return "up";
+  if (n < 0) return "down";
+  return "neutral";
 }
 
 function EquityChart({ points }: { points: EquityPoint[] }) {
-  const { path, minE, maxE, w, h } = useMemo(() => {
+  const { linePath, areaPath, minE, maxE, w, h } = useMemo(() => {
     const w = 720;
-    const h = 280;
-    const pad = 24;
+    const h = 300;
+    const padX = 40;
+    const padY = 20;
     if (points.length < 2) {
-      return { path: "", minE: 1, maxE: 1, w, h };
+      return { linePath: "", areaPath: "", minE: 1, maxE: 1, w, h };
     }
     const eqs = points.map((p) => p.equity);
     const minE = Math.min(...eqs);
     const maxE = Math.max(...eqs);
     const span = maxE - minE || 0.01;
     const coords = points.map((p, i) => {
-      const x = pad + (i / (points.length - 1)) * (w - pad * 2);
-      const y = pad + (1 - (p.equity - minE) / span) * (h - pad * 2);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
+      const x = padX + (i / (points.length - 1)) * (w - padX * 2);
+      const y = padY + (1 - (p.equity - minE) / span) * (h - padY * 2);
+      return { x, y };
     });
-    return { path: `M ${coords.join(" L ")}`, minE, maxE, w, h };
+    const linePath = `M ${coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" L ")}`;
+    const last = coords[coords.length - 1];
+    const first = coords[0];
+    const areaPath = `${linePath} L ${last.x.toFixed(1)},${h - padY} L ${first.x.toFixed(1)},${h - padY} Z`;
+    return { linePath, areaPath, minE, maxE, w, h };
   }, [points]);
 
-  if (!path) {
-    return <p className="lead">净值点不足，无法绘图。</p>;
+  if (!linePath) {
+    return <p className="chart-empty">运行回测后显示净值曲线</p>;
   }
 
   return (
@@ -70,18 +81,19 @@ function EquityChart({ points }: { points: EquityPoint[] }) {
       role="img"
       aria-label="净值曲线"
     >
-      <line
-        x1="24"
-        y1={h / 2}
-        x2={w - 24}
-        y2={h / 2}
-        className="chart-grid"
-      />
-      <path d={path} className="chart-line" fill="none" />
-      <text x="24" y="18" className="chart-label">
+      <defs>
+        <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#f0b90b" stopOpacity="0.28" />
+          <stop offset="100%" stopColor="#f0b90b" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <line x1="40" y1={h / 2} x2={w - 40} y2={h / 2} className="chart-grid" />
+      <path d={areaPath} className="chart-fill" />
+      <path d={linePath} className="chart-line" fill="none" />
+      <text x="8" y="18" className="chart-label">
         {maxE.toFixed(3)}
       </text>
-      <text x="24" y={h - 8} className="chart-label">
+      <text x="8" y={h - 8} className="chart-label">
         {minE.toFixed(3)}
       </text>
     </svg>
@@ -127,101 +139,115 @@ export default function BacktestPage() {
   }
 
   return (
-    <main>
-      <span className="badge">EquityLab · Dual MA</span>
-      <h1>双均线回测</h1>
-      <p className="lead">
-        短均线上穿长均线买入、下穿卖出。研究层拉 market-data{" "}
-        <code>/bars</code>，确定性引擎输出净值曲线（模拟，非实盘）。
-      </p>
-      <p className="nav-links">
-        <Link href="/">← 对话</Link>
-      </p>
-
-      <form className="panel" onSubmit={onSubmit}>
-        <div className="form-grid">
-          <label className="field">
-            <span className="field-label">标的</span>
-            <input
-              value={universe}
-              onChange={(e) => setUniverse(e.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">快均线</span>
-            <input
-              type="number"
-              min={1}
-              max={120}
-              value={fast}
-              onChange={(e) => setFast(Number(e.target.value))}
-              required
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">慢均线</span>
-            <input
-              type="number"
-              min={2}
-              max={250}
-              value={slow}
-              onChange={(e) => setSlow(Number(e.target.value))}
-              required
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">K 线根数</span>
-            <input
-              type="number"
-              min={30}
-              max={252}
-              value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
-              required
-            />
-          </label>
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <p className="page-kicker">Strategy · dual_ma</p>
+          <h1 className="page-title">双均线回测</h1>
+          <p className="page-desc">
+            金叉买入 / 死叉卖出。研究层拉取 market-data <code>/bars</code>
+            ，输出模拟净值（非实盘）。
+          </p>
         </div>
-        <div className="row" style={{ marginTop: 16 }}>
-          <button type="submit" disabled={loading}>
-            {loading ? "回测中…" : "运行回测"}
-          </button>
-        </div>
-      </form>
+      </header>
 
-      {error && <pre className="error">{error}</pre>}
+      <div className="layout-split">
+        <form className="panel" onSubmit={onSubmit}>
+          <h2 className="panel-title">参数</h2>
+          <div className="form-grid">
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span className="field-label">标的</span>
+              <input
+                value={universe}
+                onChange={(e) => setUniverse(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">快均线</span>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                value={fast}
+                onChange={(e) => setFast(Number(e.target.value))}
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">慢均线</span>
+              <input
+                type="number"
+                min={2}
+                max={250}
+                value={slow}
+                onChange={(e) => setSlow(Number(e.target.value))}
+                required
+              />
+            </label>
+            <label className="field" style={{ gridColumn: "1 / -1" }}>
+              <span className="field-label">K 线根数</span>
+              <input
+                type="number"
+                min={30}
+                max={252}
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
+                required
+              />
+            </label>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <button type="submit" className="btn-block" disabled={loading}>
+              {loading ? "回测中…" : "运行回测"}
+            </button>
+          </div>
+          {error ? <pre className="error">{error}</pre> : null}
+        </form>
 
-      {result && (
-        <section className="panel result" style={{ marginTop: 16 }}>
-          <div className="metrics">
-            <div>
-              <span className="field-label">累计收益</span>
-              <strong>{pct(result.metrics.cum_return)}</strong>
-            </div>
-            <div>
-              <span className="field-label">最大回撤</span>
-              <strong>{pct(result.metrics.max_drawdown)}</strong>
-            </div>
-            <div>
-              <span className="field-label">成交次数</span>
-              <strong>{result.metrics.trades}</strong>
-            </div>
-            <div>
-              <span className="field-label">K 线数</span>
-              <strong>{result.metrics.bars}</strong>
-            </div>
-          </div>
-          <EquityChart points={result.equity_curve ?? []} />
-          <div className="meta">
-            <span>
-              {result.mode} · {result.data_source}
-            </span>
-            {result.assumptions?.length ? (
-              <span className="trace">{result.assumptions.join(" · ")}</span>
-            ) : null}
-          </div>
+        <section className="panel">
+          <h2 className="panel-title">净值</h2>
+          {result ? (
+            <>
+              <div className="metrics">
+                <div className="metric-cell">
+                  <span className="field-label">累计收益</span>
+                  <strong className={`metric-value ${toneClass(result.metrics.cum_return)}`}>
+                    {pct(result.metrics.cum_return)}
+                  </strong>
+                </div>
+                <div className="metric-cell">
+                  <span className="field-label">最大回撤</span>
+                  <strong className="metric-value down">
+                    {pct(result.metrics.max_drawdown)}
+                  </strong>
+                </div>
+                <div className="metric-cell">
+                  <span className="field-label">成交次数</span>
+                  <strong className="metric-value neutral">
+                    {result.metrics.trades}
+                  </strong>
+                </div>
+                <div className="metric-cell">
+                  <span className="field-label">K 线数</span>
+                  <strong className="metric-value neutral">
+                    {result.metrics.bars}
+                  </strong>
+                </div>
+              </div>
+              <EquityChart points={result.equity_curve ?? []} />
+              <p className="assumptions">
+                {result.mode} · {result.data_source}
+                {result.assumptions?.length
+                  ? ` · ${result.assumptions.slice(0, 2).join(" · ")}`
+                  : ""}
+              </p>
+            </>
+          ) : (
+            <EquityChart points={[]} />
+          )}
         </section>
-      )}
-    </main>
+      </div>
+    </div>
   );
 }
