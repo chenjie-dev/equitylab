@@ -81,6 +81,12 @@ export default function AsharePage() {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
+  const [kMeta, setKMeta] = useState<{
+    session?: string;
+    historyCount?: number;
+    hasRealtime?: boolean;
+    view?: string;
+  }>({});
 
   const loadCodes = useCallback(async () => {
     setLoadingCodes(true);
@@ -123,8 +129,9 @@ export default function AsharePage() {
   }, []);
 
   const loadKlines = useCallback(async (code: string, kt: string) => {
+    // view=merged：历史(WSD) + 盘中实时 bar(WSQ/WSI)，对齐 Wind 图
     const res = await fetch(
-      `/api/ashare/klines/${code}?k_type=${encodeURIComponent(kt)}&limit=300&adjust_type=1`,
+      `/api/ashare/klines/${code}?k_type=${encodeURIComponent(kt)}&limit=300&adjust_type=1&view=merged`,
     );
     if (!res.ok) throw new Error(`klines ${res.status}`);
     const body = (await res.json()) as {
@@ -135,7 +142,12 @@ export default function AsharePage() {
         low?: number;
         close?: number;
         volume?: number;
+        bar_kind?: string;
       }[];
+      session?: { status?: string };
+      history?: { count?: number };
+      realtime?: { bar?: unknown } | null;
+      view?: string;
     };
     const mapped: Kline[] = (body.data ?? [])
       .filter((r) => r.time != null)
@@ -148,6 +160,12 @@ export default function AsharePage() {
         String(r.volume ?? 0),
       ]);
     setKlines(mapped);
+    setKMeta({
+      session: body.session?.status,
+      historyCount: body.history?.count,
+      hasRealtime: Boolean(body.realtime?.bar),
+      view: body.view ?? "merged",
+    });
   }, []);
 
   const loadFive = useCallback(async (code: string) => {
@@ -218,6 +236,11 @@ export default function AsharePage() {
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
+    // 盘中刷新实时 bar（报价 15s；K 线 20s）
+    const id = setInterval(() => {
+      void loadKlines(selected, kType).catch(() => undefined);
+    }, 20_000);
+    return () => clearInterval(id);
   }, [selected, kType, loadKlines, loadFive]);
 
   const q = quotes[selected];
@@ -247,7 +270,7 @@ export default function AsharePage() {
                 <option value={selected}>{selected}</option>
               ) : null}
             </select>
-            <span className="bn-pill">A-Share · adata</span>
+            <span className="bn-pill">A-Share · Wind 风格</span>
           </div>
           <div className={`bn-top-last ${up ? "up" : "down"}`}>
             {q?.price != null ? fmt(q.price, 2) : "—"}
@@ -357,7 +380,12 @@ export default function AsharePage() {
                 </button>
               ))}
             </div>
-            <span className="bn-label">adata · 前复权 · 只读</span>
+            <span className="bn-label">
+              {kMeta.hasRealtime
+                ? `历史 ${kMeta.historyCount ?? "—"} + 实时 · ${kMeta.session ?? "—"}`
+                : `纯历史 ${kMeta.historyCount ?? klines.length} · ${kMeta.session ?? "closed"}`}
+              {" · 前复权"}
+            </span>
           </div>
           <BinanceChart klines={klines} symbol={`${selected}.CN`} />
         </section>
@@ -399,15 +427,15 @@ export default function AsharePage() {
               </dl>
             )}
             <p className="bn-demo-hint">
-              数据来自开源库{" "}
+              K 线按 Wind 语义拆分：历史(WSD)与实时(WSQ/WSI)分离后合图；数据来自{" "}
               <a
                 href="https://github.com/1nchaos/adata"
                 target="_blank"
                 rel="noreferrer"
               >
-                1nchaos/adata
+                adata
               </a>
-              ；多源公开行情，非券商实盘。列表默认展示前 800，搜索可筛全库。
+              /新浪公开源，非券商实盘。
             </p>
           </div>
         </aside>
@@ -415,9 +443,11 @@ export default function AsharePage() {
 
       <footer className="bn-status">
         <span className="bn-status-dot" />
-        <span>adata A-Share</span>
+        <span>A-Share · WSD+WSQ</span>
         <span className="bn-label">·</span>
-        <span className="bn-label">Quotes only · EquityLab Research</span>
+        <span className="bn-label">
+          {kMeta.session ?? "—"} · Quotes only
+        </span>
         <span className="bn-status-right">
           {selected} {name}
           {q?.price != null ? ` · ${fmt(q.price, 2)}` : ""}

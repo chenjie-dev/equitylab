@@ -210,9 +210,21 @@ class AshareService:
         end_date: str | None = None,
         adjust_type: int = 1,
         limit: int = 300,
+        view: str = "merged",
     ) -> dict[str, Any]:
+        """Wind 风格：历史(WSD)与实时(WSQ)分离，再按需合并。
+
+        - history：仅已收盘/已完成 bar
+        - realtime：当日快照合成的未完成 bar（盘中）
+        - merged：history + realtime（默认，供图表）
+        - view：history | realtime | merged
+        """
         code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
-        source = "adata.stock.market.get_market"
+        view = (view or "merged").lower()
+        if view not in ("history", "realtime", "merged"):
+            view = "merged"
+
+        raw_source = "adata.stock.market.get_market"
         rows: list[dict[str, Any]] = []
 
         # 1) 优先 adata（东方财富）；容器内东财常 502/超时，限时后回退
@@ -242,11 +254,11 @@ class AshareService:
             logger.warning("adata get_market failed code=%s: %s", code, e)
             rows = []
 
-        # 2) 回退新浪公开 K 线（与 adata 实时源同源可用）
+        # 2) 回退新浪公开 K 线
         if not rows:
             try:
                 rows = _klines_sina(code, k_type=k_type, limit=max(limit, 300))
-                source = "sina.CN_MarketData.getKLineData"
+                raw_source = "sina.CN_MarketData.getKLineData"
             except Exception as e:
                 logger.warning("sina kline failed code=%s: %s", code, e)
                 rows = []
@@ -254,33 +266,113 @@ class AshareService:
         if limit > 0 and len(rows) > limit:
             rows = rows[-limit:]
 
-        candles = []
-        for r in rows:
-            trade_date = str(r.get("trade_date") or r.get("day") or "")[:10]
-            trade_time = str(r.get("trade_time") or "")
-            ts_ms = _parse_ts_ms(trade_time or trade_date)
-            if ts_ms is None:
-                continue
-            candles.append(
-                {
-                    "time": ts_ms,
-                    "open": _num(r.get("open")),
-                    "high": _num(r.get("high")),
-                    "low": _num(r.get("low")),
-                    "close": _num(r.get("close")),
-                    "volume": _num(r.get("volume")),
-                    "trade_date": trade_date or None,
-                    "change_pct": r.get("change_pct"),
-                }
+        candles = [_to_candle(r, bar_kind="history") for r in rows]
+        candles = [c for c in candles if c.get("time") is not None]
+
+        session = _cn_session_status()
+        today = session["trade_date"]
+        in_session = session["status"] in ("pre", "trading", "lunch", "post")
+        is_daily = k_type in ("1d", "1w", "1M")
+
+        history: list[dict[str, Any]] = []
+        realtime_block: dict[str, Any] | None = None
+
+        if is_daily:
+            # —— 日/周/月：类 Wind WSD；盘中当日未完成 bar 剔出历史 ——
+            for c in candles:
+                d = str(c.get("trade_date") or "")[:10]
+                if not d or d < today:
+                    history.append(c)
+                elif d == today and not in_session:
+                    history.append(c)
+                # d == today 且盘中：不进 history
+
+            # —— 类 Wind WSQ：快照合成当日未完成 bar ——
+            need_rt = in_session or (
+                session["status"] == "closed"
+                and session["weekday"]
+                and not any(str(c.get("trade_date") or "")[:10] == today for c in history)
             )
-        return {
+            if need_rt:
+                snap = _snapshot_sina(code)
+                if snap and snap.get("price") is not None:
+                    bar = _realtime_bar_from_snap(snap, today, k_type=k_type)
+                    realtime_block = {
+                        "bar": bar,
+                        "quote": snap,
+                        "session": session["status"],
+                        "as_of": session["as_of"],
+                        "source": "sina.hq.sinajs.cn",
+                        "kind": "wsq_snapshot",
+                    }
+        else:
+            # —— 分钟：类 Wind WSI；已完成分钟进 history，末根未完成标 realtime ——
+            if in_session and candles:
+                last = candles[-1]
+                last_d = str(last.get("trade_date") or "")[:10]
+                if last_d == today:
+                    history = list(candles[:-1])
+                    last = {**last, "bar_kind": "realtime"}
+                    realtime_block = {
+                        "bar": last,
+                        "quote": None,
+                        "session": session["status"],
+                        "as_of": session["as_of"],
+                        "source": raw_source,
+                        "kind": "wsi_open_bar",
+                    }
+                else:
+                    history = list(candles)
+            else:
+                history = list(candles)
+
+        merged = list(history)
+        if realtime_block and realtime_block.get("bar"):
+            # 闭市且历史已有当日：realtime 仅作对照，不并入图
+            if not (
+                is_daily
+                and session["status"] == "closed"
+                and any(str(c.get("trade_date") or "")[:10] == today for c in history)
+            ):
+                merged.append(realtime_block["bar"])
+
+        payload: dict[str, Any] = {
             "stock_code": code,
             "k_type": k_type,
             "adjust_type": adjust_type,
-            "count": len(candles),
-            "data": candles,
-            "source": source,
+            "view": view,
+            "session": session,
+            "history": {
+                "count": len(history),
+                "data": history,
+                "source": raw_source,
+                "note": "已完成 K 线（类 Wind WSD / 已收盘分钟）；不含盘中未完成 bar",
+            },
+            "realtime": realtime_block,
+            "merged": {
+                "count": len(merged),
+                "data": merged,
+                "note": "history + realtime（类 Wind 图：WSD+WSQ / WSI）",
+            },
+            # 兼容旧前端：data = 按 view 选择
+            "count": 0,
+            "data": [],
+            "source": raw_source,
         }
+        if view == "history":
+            payload["data"] = history
+            payload["count"] = len(history)
+        elif view == "realtime":
+            bar = realtime_block["bar"] if realtime_block else None
+            payload["data"] = [bar] if bar else []
+            payload["count"] = len(payload["data"])
+            payload["source"] = (
+                realtime_block["source"] if realtime_block else raw_source
+            )
+        else:
+            payload["data"] = merged
+            payload["count"] = len(merged)
+        return payload
 
     def five(self, stock_code: str) -> dict[str, Any]:
         adata = self._ensure_adata()
@@ -342,6 +434,125 @@ def _parse_ts_ms(s: str) -> int | None:
         except ValueError:
             continue
     return None
+
+
+def _to_candle(r: dict[str, Any], bar_kind: str = "history") -> dict[str, Any]:
+    trade_date = str(r.get("trade_date") or r.get("day") or "")[:10]
+    trade_time = str(r.get("trade_time") or "")
+    ts_ms = _parse_ts_ms(trade_time or trade_date)
+    return {
+        "time": ts_ms,
+        "open": _num(r.get("open")),
+        "high": _num(r.get("high")),
+        "low": _num(r.get("low")),
+        "close": _num(r.get("close")),
+        "volume": _num(r.get("volume")),
+        "trade_date": trade_date or None,
+        "change_pct": r.get("change_pct"),
+        "bar_kind": bar_kind,
+    }
+
+
+def _cn_session_status() -> dict[str, Any]:
+    """A 股交易时段（上海时区），对齐 Wind 盘中/盘后语义。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    hm = now.hour * 100 + now.minute
+    weekday = now.weekday() < 5  # Mon-Fri
+    trade_date = now.strftime("%Y-%m-%d")
+    status = "closed"
+    if weekday:
+        if 915 <= hm < 930:
+            status = "pre"
+        elif 930 <= hm < 1130:
+            status = "trading"
+        elif 1130 <= hm < 1300:
+            status = "lunch"
+        elif 1300 <= hm < 1500:
+            status = "trading"
+        elif 1500 <= hm < 1530:
+            status = "post"
+        else:
+            status = "closed"
+    return {
+        "trade_date": trade_date,
+        "status": status,
+        "weekday": weekday,
+        "as_of": now.isoformat(),
+        "tz": "Asia/Shanghai",
+    }
+
+
+def _snapshot_sina(code: str) -> dict[str, Any] | None:
+    """新浪实时快照（类 Wind WSQ：开高低收量）。"""
+    import re
+
+    import requests
+
+    symbol = _sina_symbol(code)
+    url = f"https://hq.sinajs.cn/list={symbol}"
+    r = requests.get(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 EquityLab-research/ashare",
+            "Referer": "https://finance.sina.com.cn",
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+    # var hq_str_sh600519="名,开,昨收,现,高,低,...";
+    m = re.search(r'="([^"]*)"', r.text)
+    if not m or not m.group(1):
+        return None
+    parts = m.group(1).split(",")
+    if len(parts) < 10:
+        return None
+    return {
+        "stock_code": code.zfill(6),
+        "short_name": parts[0],
+        "open": _num(parts[1]),
+        "pre_close": _num(parts[2]),
+        "price": _num(parts[3]),
+        "high": _num(parts[4]),
+        "low": _num(parts[5]),
+        "volume": _num(parts[8]),
+        "amount": _num(parts[9]),
+        "trade_date": parts[30] if len(parts) > 30 else None,
+        "trade_time": parts[31] if len(parts) > 31 else None,
+    }
+
+
+def _realtime_bar_from_snap(
+    snap: dict[str, Any], today: str, k_type: str = "1d"
+) -> dict[str, Any]:
+    """用 WSQ 快照合成当日未完成 bar。"""
+    trade_date = str(snap.get("trade_date") or today)[:10] or today
+    # 日/周/月：用自然日 00:00 UTC；分钟周期用快照时刻
+    if k_type in ("5m", "15m", "30m", "60m", "1h") and snap.get("trade_time"):
+        ts_raw = f"{trade_date} {snap['trade_time']}"
+    else:
+        ts_raw = trade_date
+    open_ = snap.get("open") or snap.get("price")
+    high = snap.get("high") or snap.get("price")
+    low = snap.get("low") or snap.get("price")
+    close = snap.get("price")
+    pre = snap.get("pre_close")
+    chg_pct = None
+    if close is not None and pre not in (None, 0):
+        chg_pct = round((float(close) - float(pre)) / float(pre) * 100, 2)
+    return {
+        "time": _parse_ts_ms(ts_raw),
+        "open": open_,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": snap.get("volume"),
+        "trade_date": trade_date,
+        "change_pct": chg_pct,
+        "bar_kind": "realtime",
+    }
 
 
 # 新浪 scale：5/15/30/60 分钟；240 日；1200 周；7200 月

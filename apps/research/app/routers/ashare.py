@@ -21,12 +21,12 @@ class Catalog(BaseModel):
     name: str = "A-share public quotes (adata)"
     auth: str = "none"
     upstream: str = "https://github.com/1nchaos/adata"
-    note: str = "只读行情；无下单。数据源随 adata 多源融合。"
+    note: str = "只读行情；无下单。K 线按 Wind WSD/WSQ 拆分 history|realtime|merged。"
     endpoints: list[str] = Field(
         default_factory=lambda: [
             "GET /ashare/codes?q=&limit=",
             "GET /ashare/quotes?codes=000001,600519",
-            "GET /ashare/klines/{code}?k_type=1d&limit=",
+            "GET /ashare/klines/{code}?k_type=1d&view=merged&limit=",
             "GET /ashare/five/{code}",
             "GET /ashare/intraday/{code}",
         ]
@@ -77,6 +77,12 @@ async def klines(
     end_date: Annotated[str | None, Query()] = None,
     adjust_type: Annotated[int, Query(ge=0, le=2)] = 1,
     limit: Annotated[int, Query(ge=1, le=2000)] = 300,
+    view: Annotated[
+        str,
+        Query(
+            description="history=已完成(WSD) | realtime=盘中未完成(WSQ/WSI) | merged=合成图"
+        ),
+    ] = "merged",
 ) -> dict:
     try:
         return await asyncio.to_thread(
@@ -87,6 +93,7 @@ async def klines(
             end_date,
             adjust_type,
             limit,
+            view,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
