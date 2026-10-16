@@ -6,11 +6,12 @@
 //! - [`BinanceModule::provider`] → `MARKET_PROVIDER=binance`
 //!
 //! # 实现
-//! `client`（REST）· `http` · `ws` · `provider`（统一 Quote/Bars）
+//! `client`（现货 REST）· `rwa`（Ondo 代币化美股）· `http` · `ws` · `provider`
 
 mod client;
 mod http;
 mod provider;
+mod rwa;
 mod ws;
 
 pub use client::Client;
@@ -25,18 +26,20 @@ pub const ID: &str = "binance";
 #[derive(Clone)]
 pub struct BinanceModule {
     client: Arc<Client>,
+    rwa: Arc<rwa::RwaClient>,
 }
 
 impl BinanceModule {
     pub fn from_env() -> Self {
         Self {
             client: Arc::new(Client::from_env()),
+            rwa: Arc::new(rwa::RwaClient::from_env()),
         }
     }
 
-    /// 交易所原生 HTTP + WS；state 仅为本模块 Client。
+    /// 交易所原生 HTTP + WS + RWA；现货与 RWA 使用各自 state。
     pub fn router(&self) -> Router {
-        router(self.client.clone())
+        router(self.client.clone(), self.rwa.clone())
     }
 
     /// 接入统一 [`crate::providers::MarketDataProvider`]。
@@ -45,7 +48,7 @@ impl BinanceModule {
     }
 }
 
-fn router(client: Arc<Client>) -> Router {
+fn router(client: Arc<Client>, rwa_client: Arc<rwa::RwaClient>) -> Router {
     Router::new()
         .route("/", get(http::catalog))
         .route("/ping", get(http::ping))
@@ -63,4 +66,5 @@ fn router(client: Arc<Client>) -> Router {
         .route("/v3/{*path}", get(http::proxy_v3))
         .route("/ws", any(ws::ws_upgrade))
         .with_state(client)
+        .nest("/rwa", rwa::router(rwa_client))
 }

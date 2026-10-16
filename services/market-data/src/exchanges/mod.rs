@@ -22,10 +22,11 @@ pub fn registry() -> Value {
         "exchanges": [
             {
                 "id": binance::ID,
-                "name": "Binance Spot Public",
+                "name": "Binance Spot Public + Ondo RWA",
                 "auth": "none",
                 "mounts": ["/exchanges/binance", "/binance"],
                 "provider": "binance",
+                "rwa": "/exchanges/binance/rwa",
                 "docs": "docs/2026-10-16-binance-market.md"
             }
         ],

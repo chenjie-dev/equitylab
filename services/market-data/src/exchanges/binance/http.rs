@@ -181,7 +181,14 @@ pub async fn catalog() -> Json<Value> {
             "GET /bars/{symbol}?period=1h&count=100",
             "GET /search?q=BTC"
         ],
-        "symbol": "BTCUSDT (also btc/usdt)",
-        "note": "WebSocket 请直连 market-data 端口（网关 HTTP 反代不升级 WS）"
+        "rwa": [
+            "GET .../rwa/stocks",
+            "GET .../rwa/market/status",
+            "GET .../rwa/dynamic?chainId=&contractAddress=",
+            "GET .../rwa/klines?chainId=&contractAddress=&interval=",
+            "GET .../rwa/quote?ticker=AAPL"
+        ],
+        "symbol": "BTCUSDT (also btc/usdt); RWA ticker e.g. AAPL",
+        "note": "WebSocket 请直连 market-data 端口（网关 HTTP 反代不升级 WS）；RWA 为 Ondo 代币化美股公开行情"
     }))
 }

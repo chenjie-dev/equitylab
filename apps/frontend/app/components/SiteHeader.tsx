@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const NAV = [
   { href: "/", label: "Chat" },
   { href: "/markets", label: "Spot" },
+  { href: "/markets/stocks", label: "Stocks" },
   { href: "/backtest", label: "Backtest" },
 ];
 
@@ -24,7 +25,10 @@ export function SiteHeader() {
             const active =
               item.href === "/"
                 ? pathname === "/"
-                : pathname.startsWith(item.href);
+                : item.href === "/markets"
+                  ? pathname === "/markets"
+                  : pathname === item.href ||
+                    pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

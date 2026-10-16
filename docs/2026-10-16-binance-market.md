@@ -17,6 +17,23 @@ EquityLab **只接**「仅市场数据」面：
 
 不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。上游限流与字段以官方文档为准；本仓模块为代理 + 短 TTL 缓存。
 
+## 代币化美股（Ondo RWA）
+
+币安 **没有** 纽交所/纳斯达克原生美股 feed；公开面可接 **Web3 Ondo 代币化美股**（如 `AAPLon`）：
+
+| 变量 / 路径 | 说明 |
+|---|---|
+| `BINANCE_RWA_BASE_URL` | 默认 `https://www.binance.com` |
+| `GET .../rwa/stocks` | 列表（默认按 ticker 去重，优先 BSC `chainId=56`） |
+| `GET .../rwa/market/status` | 整体开闭市 |
+| `GET .../rwa/dynamic` | 链上价 + 美股基本面 |
+| `GET .../rwa/klines` | 代币 K 线 |
+| `GET .../rwa/quote?ticker=AAPL` | 按 ticker 解析合约并返回 dynamic |
+
+前端只读台：http://localhost:3001/markets/stocks  
+
+注意：`tokenInfo.price ÷ sharesMultiplier ≈` 每股参考价；`volume24h` 实为底层美股成交额（USD），非 DEX 量。
+
 ## 模块边界
 
 ```text
@@ -47,6 +64,7 @@ exchanges/                 ← 多交易所 seam（登记 /exchanges）
 |---|---|---|
 | `BINANCE_REST_URL` | `https://data-api.binance.vision` | REST 基址 |
 | `BINANCE_WS_URL` | `wss://data-stream.binance.vision` | WS 基址 |
+| `BINANCE_RWA_BASE_URL` | `https://www.binance.com` | Ondo RWA 公开 bapi 基址 |
 | `MARKET_PROVIDER` | `mock` | 设为 `binance` 时统一 Quote/Bars 走币安 |
 
 符号：`BTCUSDT`（也接受 `btc/usdt`）。
@@ -78,7 +96,10 @@ websocat 'ws://localhost:3002/binance/ws?streams=btcusdt@trade/btcusdt@ticker'
 
 ## 前端
 
-币安风格现货台：http://localhost:3001/markets（BFF `/api/market/*` → 网关）。
+- 现货加密：http://localhost:3001/markets  
+- 代币化美股：http://localhost:3001/markets/stocks  
+
+均经 BFF `/api/market/*` → 网关；只读行情，无下单。
 
 ## 边界
 
