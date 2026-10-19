@@ -10,12 +10,13 @@
 | 仅市场数据 URL（REST / WS，免 Key） | https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/market_data_only |
 | 现货 REST / 市场流（完整规范） | 从文档中心进入 **Spot → REST API / WebSocket Streams** |
 
-EquityLab **只接**「仅市场数据」面：
+EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 写入 qdb，market-data 只读 qdb。
 
-- REST：`https://data-api.binance.vision`（`BINANCE_REST_URL`）
-- WS：`wss://data-stream.binance.vision`（`BINANCE_WS_URL`）
+- 采集回源：`https://data-api.binance.vision`（`BINANCE_REST_URL`，仅 collector）
+- 公开流：`wss://data-stream.binance.vision`（`BINANCE_WS_URL`，WebSocket 仍是直连代理，不进 qdb）
+- 读：`QDB_URL`（默认 `http://qdb:9090`）。ticker / depth / trades 来自 `GET /v1/docs`，K 线来自 `GET /v1/klines`（`BINANCE:{SYMBOL}`）
 
-不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。上游限流与字段以官方文档为准；本仓模块为代理 + 短 TTL 缓存。
+不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。qdb 原生周期为 `1m/5m/15m/1h/4h/1d`；`3m/30m/2h/6h/12h/3d/1w/1M` 由读路径折叠。
 
 ## 代币化美股（Ondo RWA）
 
@@ -23,7 +24,8 @@ EquityLab **只接**「仅市场数据」面：
 
 | 变量 / 路径 | 说明 |
 |---|---|
-| `BINANCE_RWA_BASE_URL` | 默认 `https://www.binance.com` |
+| `BINANCE_RWA_BASE_URL` | 默认 `https://www.binance.com`（仅 collector 回源） |
+| `QDB_URL` | 读路径；列表 `rwa:stocks`，状态 `rwa:status`，报价 `rwa:quote:{TICKER}`，K 线 `ONDO:{TICKER}` |
 | `GET .../rwa/stocks` | 列表（默认按 ticker 去重，优先 BSC `chainId=56`） |
 | `GET .../rwa/market/status` | 整体开闭市 |
 | `GET .../rwa/dynamic` | 链上价 + 美股基本面 |

@@ -21,7 +21,7 @@ class Catalog(BaseModel):
     name: str = "A-share public quotes (adata)"
     auth: str = "none"
     upstream: str = "https://github.com/1nchaos/adata"
-    note: str = "只读行情；无下单。K 线按 Wind WSD/WSQ 拆分 history|realtime|merged。"
+    note: str = "只读 qdb。公开源采集在 collector 服务，不在读路径回源。"
     endpoints: list[str] = Field(
         default_factory=lambda: [
             "GET /ashare/codes?q=&limit=",

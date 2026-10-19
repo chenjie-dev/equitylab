@@ -4,7 +4,7 @@
 //! 挂载：`/exchanges/binance/rwa/*` · `/binance/rwa/*`
 
 use axum::{
-    extract::{Query, State},
+    extract::Query,
     http::StatusCode,
     routing::get,
     Json, Router,
@@ -32,6 +32,7 @@ pub struct RwaClient {
     cache: Arc<Mutex<HashMap<String, CacheEntry>>>,
 }
 
+#[allow(dead_code)]
 impl RwaClient {
     pub fn from_env() -> Self {
         Self {
@@ -180,19 +181,10 @@ fn default_prefer_chain() -> String {
     "56".into()
 }
 
-async fn stocks(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<StocksQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("type".into(), q.r#type.to_string());
-    let raw = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/stock/detail/list/ai",
-            &params,
-            Duration::from_secs(60),
-        )
-        .await?;
+async fn stocks(Query(q): Query<StocksQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let raw = crate::qdb_read::doc("rwa:stocks").await.unwrap_or_else(|| {
+        json!({"code": "000000", "success": true, "count": 0, "data": []})
+    });
 
     if q.all {
         return Ok(Json(raw));
@@ -248,16 +240,10 @@ async fn stocks(
     })))
 }
 
-async fn market_status(
-    State(client): State<Arc<RwaClient>>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let v = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/market/status/ai",
-            &HashMap::new(),
-            Duration::from_secs(15),
-        )
-        .await?;
+async fn market_status() -> Result<Json<Value>, (StatusCode, String)> {
+    let v = crate::qdb_read::doc("rwa:status")
+        .await
+        .unwrap_or_else(|| json!({"data": null}));
     Ok(Json(v))
 }
 
@@ -269,54 +255,27 @@ pub struct ChainContractQuery {
     pub contract_address: String,
 }
 
-async fn asset_status(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<ChainContractQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("chainId".into(), q.chain_id);
-    params.insert("contractAddress".into(), q.contract_address);
-    let v = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/asset/market/status/ai",
-            &params,
-            Duration::from_secs(10),
-        )
-        .await?;
+async fn asset_status(Query(q): Query<ChainContractQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let key = format!("rwa:status:{}:{}", q.chain_id, q.contract_address);
+    let v = crate::qdb_read::doc(&key)
+        .await
+        .unwrap_or_else(|| json!({"data": null}));
     Ok(Json(v))
 }
 
-async fn meta(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<ChainContractQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("chainId".into(), q.chain_id);
-    params.insert("contractAddress".into(), q.contract_address);
-    let v = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/meta/ai",
-            &params,
-            Duration::from_secs(300),
-        )
-        .await?;
+async fn meta(Query(q): Query<ChainContractQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let key = format!("rwa:meta:{}:{}", q.chain_id, q.contract_address);
+    let v = crate::qdb_read::doc(&key)
+        .await
+        .unwrap_or_else(|| json!({"data": null}));
     Ok(Json(v))
 }
 
-async fn dynamic(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<ChainContractQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("chainId".into(), q.chain_id);
-    params.insert("contractAddress".into(), q.contract_address);
-    let v = client
-        .get_bapi(
-            "/bapi/defi/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai",
-            &params,
-            Duration::from_secs(5),
-        )
-        .await?;
+async fn dynamic(Query(q): Query<ChainContractQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let key = format!("rwa:dynamic:{}:{}", q.chain_id, q.contract_address);
+    let v = crate::qdb_read::doc(&key)
+        .await
+        .unwrap_or_else(|| json!({"data": null}));
     Ok(Json(v))
 }
 
@@ -339,23 +298,22 @@ fn default_kline_limit() -> u32 {
     200
 }
 
-async fn klines(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<KlinesQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("chainId".into(), q.chain_id);
-    params.insert("contractAddress".into(), q.contract_address);
-    params.insert("interval".into(), q.interval);
-    params.insert("limit".into(), q.limit.min(300).to_string());
-    let v = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/dex/market/token/kline/ai",
-            &params,
-            Duration::from_secs(20),
-        )
-        .await?;
-    Ok(Json(v))
+async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let ticker = ticker_for_contract(&q.chain_id, &q.contract_address).await.unwrap_or_default();
+    let infos = crate::qdb_read::rwa_klines(&ticker, &q.interval, q.limit.min(300) as usize).await;
+    Ok(Json(json!({"data": {"klineInfos": infos}})))
+}
+
+async fn ticker_for_contract(chain: &str, contract: &str) -> Option<String> {
+    let doc = crate::qdb_read::doc("rwa:stocks").await?;
+    for row in doc.get("data")?.as_array()? {
+        let same_chain = row.get("chainId").and_then(|v| v.as_str()) == Some(chain);
+        let same_contract = row.get("contractAddress").and_then(|v| v.as_str()) == Some(contract);
+        if same_chain && same_contract {
+            return row.get("ticker").and_then(|v| v.as_str()).map(|s| s.to_uppercase());
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -366,78 +324,10 @@ pub struct QuoteQuery {
 }
 
 /// 按底层美股 ticker 解析合约并返回 dynamic（含 token/stock 信息）。
-async fn quote_by_ticker(
-    State(client): State<Arc<RwaClient>>,
-    Query(q): Query<QuoteQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+async fn quote_by_ticker(Query(q): Query<QuoteQuery>) -> Result<Json<Value>, (StatusCode, String)> {
     let ticker = q.ticker.trim().to_uppercase();
-    let mut params = HashMap::new();
-    params.insert("type".into(), "1".into());
-    let raw = client
-        .get_bapi(
-            "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/stock/detail/list/ai",
-            &params,
-            Duration::from_secs(60),
-        )
-        .await?;
-
-    let rows = raw
-        .get("data")
-        .and_then(|d| d.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let matches: Vec<_> = rows
-        .into_iter()
-        .filter(|r| {
-            r.get("ticker")
-                .and_then(|t| t.as_str())
-                .map(|t| t.eq_ignore_ascii_case(&ticker))
-                .unwrap_or(false)
-        })
-        .collect();
-    if matches.is_empty() {
-        return Err((StatusCode::NOT_FOUND, format!("ticker not found: {ticker}")));
+    if let Some(v) = crate::qdb_read::doc(&format!("rwa:quote:{ticker}")).await {
+        return Ok(Json(v));
     }
-    let pick = matches
-        .iter()
-        .find(|r| {
-            r.get("chainId").and_then(|c| c.as_str()) == Some(q.prefer_chain_id.as_str())
-        })
-        .or_else(|| matches.first())
-        .cloned()
-        .unwrap();
-
-    let chain_id = pick
-        .get("chainId")
-        .and_then(|c| c.as_str())
-        .unwrap_or("56")
-        .to_string();
-    let contract = pick
-        .get("contractAddress")
-        .and_then(|c| c.as_str())
-        .unwrap_or("")
-        .to_string();
-    if contract.is_empty() {
-        return Err((StatusCode::BAD_GATEWAY, "missing contractAddress".into()));
-    }
-
-    let mut dparams = HashMap::new();
-    dparams.insert("chainId".into(), chain_id.clone());
-    dparams.insert("contractAddress".into(), contract.clone());
-    let dyn_raw = client
-        .get_bapi(
-            "/bapi/defi/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai",
-            &dparams,
-            Duration::from_secs(5),
-        )
-        .await?;
-
-    Ok(Json(json!({
-        "ticker": ticker,
-        "token": pick,
-        "chainId": chain_id,
-        "contractAddress": contract,
-        "dynamic": dyn_raw.get("data").cloned().unwrap_or(Value::Null),
-        "upstreamCode": dyn_raw.get("code").cloned().unwrap_or(json!("000000")),
-    })))
+    Err((StatusCode::NOT_FOUND, format!("ticker not found: {ticker}")))
 }

@@ -17,6 +17,10 @@ impl Provider {
     }
 }
 
+fn field<'a>(v: &'a Value, key: &str) -> &'a str {
+    v.get(key).and_then(|x| x.as_str()).unwrap_or("")
+}
+
 fn parse_f64(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
 }
@@ -27,7 +31,7 @@ fn parse_i64_vol(s: &str) -> i64 {
 
 fn kline_to_bar(symbol: &str, period: &str, row: &Value) -> Option<Bar> {
     let a = row.as_array()?;
-    if a.len() < 7 {
+    if a.len() < 6 {
         return None;
     }
     let open_time = a[0].as_i64().unwrap_or(0);
@@ -67,23 +71,26 @@ fn kline_to_bar(symbol: &str, period: &str, row: &Value) -> Option<Bar> {
 impl MarketDataProvider for Provider {
     async fn get_quote(&self, symbol: &str) -> Result<Quote, ProviderError> {
         let sym = normalize_symbol(symbol);
-        let t = self.client.ticker_24hr(&sym).await?;
-        let last = parse_f64(&t.last_price);
+        let t = crate::qdb_read::doc(&format!("binance:ticker:{sym}"))
+            .await
+            .ok_or_else(|| ProviderError::NotFound(format!("no qdb ticker {sym}")))?;
+        let last = parse_f64(field(&t, "lastPrice"));
+        let close_time = t.get("closeTime").and_then(|v| v.as_i64()).unwrap_or(0);
         Ok(Quote {
-            symbol: t.symbol,
+            symbol: field(&t, "symbol").to_string(),
             name: format!("BINANCE-{sym}"),
             last_price: last,
-            open: parse_f64(&t.open_price),
-            high: parse_f64(&t.high_price),
-            low: parse_f64(&t.low_price),
+            open: parse_f64(field(&t, "openPrice")),
+            high: parse_f64(field(&t, "highPrice")),
+            low: parse_f64(field(&t, "lowPrice")),
             close: last,
-            volume: parse_i64_vol(&t.volume),
-            amount: parse_f64(&t.quote_volume),
-            change_pct: parse_f64(&t.price_change_percent),
-            timestamp: if t.close_time > 1_000_000_000_000 {
-                t.close_time / 1000
+            volume: parse_i64_vol(field(&t, "volume")),
+            amount: parse_f64(field(&t, "quoteVolume")),
+            change_pct: parse_f64(field(&t, "priceChangePercent")),
+            timestamp: if close_time > 1_000_000_000_000 {
+                close_time / 1000
             } else {
-                t.close_time
+                close_time
             },
         })
     }
@@ -105,7 +112,7 @@ impl MarketDataProvider for Provider {
     ) -> Result<Vec<Bar>, ProviderError> {
         let sym = normalize_symbol(symbol);
         let interval = map_interval(period);
-        let rows = self.client.klines(&sym, &interval, count).await?;
+        let rows = crate::qdb_read::binance_klines(&sym, &interval, count).await;
         Ok(rows
             .iter()
             .filter_map(|r| kline_to_bar(&sym, &interval, r))

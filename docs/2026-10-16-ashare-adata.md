@@ -31,7 +31,7 @@
 | 概念 | Wind | EquityLab | 说明 |
 |---|---|---|---|
 | 历史序列 | WSD | `history` | 仅**已完成** bar；盘中不含当日未收盘日 K |
-| 实时快照 | WSQ | `realtime`（日/周/月） | 新浪 `hq.sinajs.cn` 开高低现量 → 合成当日未完成 bar |
+| 实时快照 | WSQ | `realtime`（日/周/月） | 从 qdb `GET /v1/snapshots` 读；采集在 qdb 进程写入 |
 | 分钟未完成 | WSI 末根 | `realtime`（分钟） | 序列末根标 `bar_kind=realtime`，已完成分钟进 history |
 | 合图 | WSD+WSQ | `merged` / `data`（默认） | 图表用；`view=history\|realtime\|merged` |
 
@@ -51,7 +51,8 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 ## 边界
 
 - 多源公开爬虫/接口，可用性与字段以 adata 上游为准；非交易所官方低延迟 feed。
-- K 线：优先 `adata.get_market`（东财）；若空/失败则回退新浪 `CN_MarketData.getKLineData`（容器内东财常 502）。
-- 实时合成依赖新浪公开快照，非 Wind 终端授权数据。
+- 代码、报价、K 线、五档和分时都只读 `QDB_URL`（compose 内默认 `http://qdb:9090`）。不在研究层回源。
+- 回源在 `services/collector`：快照与 K 线写入 qdb。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中。
+- 实时合成依赖 qdb 采集缓存，非 Wind 终端授权数据。
 - 不做交易、账户、融资融券。
 - 分钟 K 历史深度受上游限制（见 adata issues）。

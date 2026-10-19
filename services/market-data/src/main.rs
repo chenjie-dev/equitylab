@@ -13,6 +13,7 @@
 
 mod cache;
 mod exchanges;
+mod qdb_read;
 mod handlers;
 mod providers;
 mod trace;

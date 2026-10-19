@@ -99,55 +99,113 @@ fn default_klines() -> usize {
     100
 }
 
-macro_rules! binance_get {
-    ($name:ident, $path:expr) => {
-        pub async fn $name(
-            State(client): State<Arc<Client>>,
-            Query(q): Query<HashMap<String, String>>,
-        ) -> Result<Json<Value>, (StatusCode, String)> {
-            let v = client.get_v3($path, &q).await.map_err(map_err)?;
-            Ok(Json(v))
+pub async fn ticker_price(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbols = ticker_symbols(&q);
+    let mut rows = Vec::new();
+    for symbol in symbols {
+        if let Some(row) = crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await {
+            rows.push(json!({
+                "symbol": symbol,
+                "price": row.get("lastPrice").cloned().unwrap_or(json!("0")),
+            }));
         }
-    };
+    }
+    if q.contains_key("symbol") {
+        return Ok(Json(rows.into_iter().next().unwrap_or(Value::Null)));
+    }
+    Ok(Json(Value::Array(rows)))
 }
 
-binance_get!(ticker_24hr, "ticker/24hr");
-binance_get!(ticker_price, "ticker/price");
-binance_get!(book_ticker, "ticker/bookTicker");
-binance_get!(avg_price, "avgPrice");
-binance_get!(ui_klines, "uiKlines");
-binance_get!(agg_trades, "aggTrades");
+pub async fn book_ticker(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbol = q.get("symbol").map(|s| normalize_symbol(s)).unwrap_or_default();
+    let depth = crate::qdb_read::doc(&format!("binance:depth:{symbol}"))
+        .await
+        .unwrap_or_else(|| json!({"bids": [], "asks": []}));
+    let bid = depth.get("bids").and_then(|v| v.as_array()).and_then(|a| a.first());
+    let ask = depth.get("asks").and_then(|v| v.as_array()).and_then(|a| a.first());
+    Ok(Json(json!({
+        "symbol": symbol,
+        "bidPrice": bid.and_then(|r| r.get(0)).cloned().unwrap_or(json!("0")),
+        "bidQty": bid.and_then(|r| r.get(1)).cloned().unwrap_or(json!("0")),
+        "askPrice": ask.and_then(|r| r.get(0)).cloned().unwrap_or(json!("0")),
+        "askQty": ask.and_then(|r| r.get(1)).cloned().unwrap_or(json!("0")),
+    })))
+}
+
+pub async fn avg_price(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbol = q.get("symbol").map(|s| normalize_symbol(s)).unwrap_or_default();
+    let row = crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await;
+    Ok(Json(json!({
+        "mins": 1440,
+        "price": row.as_ref().and_then(|r| r.get("weightedAvgPrice")).cloned().unwrap_or(json!("0")),
+    })))
+}
+
+pub async fn ui_klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    klines(Query(q)).await
+}
+
+pub async fn agg_trades(Query(q): Query<TradesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    trades(Query(q)).await
+}
+
+pub async fn ticker_24hr(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbols = ticker_symbols(&q);
+    let mut rows = Vec::new();
+    for symbol in symbols {
+        if let Some(row) = crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await {
+            rows.push(row);
+        }
+    }
+    if q.contains_key("symbol") {
+        return Ok(Json(rows.into_iter().next().unwrap_or(Value::Null)));
+    }
+    Ok(Json(Value::Array(rows)))
+}
+
+fn ticker_symbols(q: &HashMap<String, String>) -> Vec<String> {
+    if let Some(one) = q.get("symbol") {
+        return vec![normalize_symbol(one)];
+    }
+    let Some(raw) = q.get("symbols") else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| normalize_symbol(&s))
+        .collect()
+}
 
 pub async fn depth(
-    State(client): State<Arc<Client>>,
     Query(q): Query<DepthQuery>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("symbol".into(), normalize_symbol(&q.symbol));
-    params.insert("limit".into(), q.limit.min(5000).to_string());
-    let v = client.get_v3("depth", &params).await.map_err(map_err)?;
-    Ok(Json(v))
-}
-
-pub async fn trades(
-    State(client): State<Arc<Client>>,
-    Query(q): Query<TradesQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut params = HashMap::new();
-    params.insert("symbol".into(), normalize_symbol(&q.symbol));
-    params.insert("limit".into(), q.limit.min(1000).to_string());
-    let v = client.get_v3("trades", &params).await.map_err(map_err)?;
-    Ok(Json(v))
-}
-
-pub async fn klines(
-    State(client): State<Arc<Client>>,
-    Query(q): Query<KlinesQuery>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let rows = client
-        .klines(&q.symbol, &q.interval, q.limit)
+    let symbol = normalize_symbol(&q.symbol);
+    let v = crate::qdb_read::doc(&format!("binance:depth:{symbol}"))
         .await
-        .map_err(map_err)?;
+        .unwrap_or_else(|| json!({"lastUpdateId": 0, "bids": [], "asks": []}));
+    Ok(Json(v))
+}
+
+pub async fn trades(Query(q): Query<TradesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbol = normalize_symbol(&q.symbol);
+    let v = crate::qdb_read::doc(&format!("binance:trades:{symbol}"))
+        .await
+        .unwrap_or_else(|| json!([]));
+    Ok(Json(v))
+}
+
+pub async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let symbol = normalize_symbol(&q.symbol);
+    let rows = crate::qdb_read::binance_klines(&symbol, &q.interval, q.limit).await;
     Ok(Json(Value::Array(rows)))
 }
 

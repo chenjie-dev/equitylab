@@ -14,11 +14,15 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | postgres | equitylab-postgres | 5432 | 数据库 |
 | redis | equitylab-redis | **16379→6379** | 缓存（宿主机默认 16379，避免与本机其他 Redis 冲突） |
 | qdrant | equitylab-qdrant | 6333 | 向量库 |
+| qdb | equitylab-qdb | 9090 | 行情库（构建上下文 `../qdb`，不回源） |
+| collector | equitylab-collector | （内部） | 采集公开行情并写入 qdb |
 | loki | equitylab-loki | 3100 | 日志存储 |
 | alloy | equitylab-alloy | （内部） | 采集容器日志 → Loki（需 docker.sock） |
 | grafana | equitylab-grafana | **3003** | 日志查询 UI（匿名 Viewer） |
 
-卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
+卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
+
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口。`collector` 是唯一回源方：A 股、币安现货、Ondo 代币化美股写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data 只读 `http://qdb:9090`。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 
@@ -31,8 +35,8 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
-| `MARKET_PROVIDER` | `mock` | `mock` \| `binance` \| `alphafeed` |
-| `BINANCE_REST_URL` / `BINANCE_WS_URL` | data-api / data-stream | 币安公开行情基址 |
+| `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | 研究层与 market-data 读行情 |
+| `BINANCE_REST_URL` / `BINANCE_WS_URL` | data-api / data-stream | collector 回源与公开流代理基址 |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |

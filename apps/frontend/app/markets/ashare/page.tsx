@@ -427,15 +427,7 @@ export default function AsharePage() {
               </dl>
             )}
             <p className="bn-demo-hint">
-              K 线按 Wind 语义拆分：历史(WSD)与实时(WSQ/WSI)分离后合图；数据来自{" "}
-              <a
-                href="https://github.com/1nchaos/adata"
-                target="_blank"
-                rel="noreferrer"
-              >
-                adata
-              </a>
-              /新浪公开源，非券商实盘。
+              K 线按 Wind 语义拆分：历史走公开源，实时报价从 qdb 读取。
             </p>
           </div>
         </aside>

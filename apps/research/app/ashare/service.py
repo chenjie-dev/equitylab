@@ -83,38 +83,28 @@ class AshareService:
 
     def list_codes(self, q: str | None = None, limit: int = 5000) -> dict[str, Any]:
         now = time.monotonic()
-        source = "cache"
+        source = "qdb"
         if self._codes is None or now - self._codes_at > self._codes_ttl:
-            try:
-                adata = self._ensure_adata()
+            from app.ashare.qdb_client import snapshots_all
 
-                def _fetch() -> list[dict[str, Any]]:
-                    df = adata.stock.info.all_code()
-                    return self._normalize_codes(_df_records(df))
-
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    fut = pool.submit(_fetch)
-                    try:
-                        norm = fut.result(timeout=_CODES_FETCH_TIMEOUT_SEC)
-                        self._codes = norm
-                        self._codes_at = now
-                        source = "adata.stock.info.all_code"
-                        logger.info("ashare codes refreshed: %s", len(norm))
-                    except FuturesTimeout:
-                        logger.warning(
-                            "ashare all_code timeout %ss; using seed",
-                            _CODES_FETCH_TIMEOUT_SEC,
-                        )
-                        if self._codes is None:
-                            self._codes = list(_SEED_CODES)
-                            self._codes_at = now
-                        source = "seed_timeout"
-            except Exception as e:
-                logger.exception("ashare all_code failed: %s", e)
-                if self._codes is None:
-                    self._codes = list(_SEED_CODES)
-                    self._codes_at = now
-                source = "seed_error"
+            by_code = {row["stock_code"]: dict(row) for row in _SEED_CODES}
+            for row in snapshots_all().get("data") or []:
+                code = str(row.get("stock_code") or "").zfill(6)
+                if not code or code == "000000":
+                    continue
+                exchange = "SH" if str(row.get("exchange") or "").startswith("SS") or code.startswith(("5", "6", "9")) else "SZ"
+                if str(row.get("exchange") or "") == "SZSE":
+                    exchange = "SZ"
+                elif str(row.get("exchange") or "") == "SSE":
+                    exchange = "SH"
+                by_code[code] = {
+                    "stock_code": code,
+                    "short_name": row.get("short_name") or by_code.get(code, {}).get("short_name", ""),
+                    "exchange": exchange,
+                    "symbol": f"{code}.{exchange}",
+                }
+            self._codes = list(by_code.values())
+            self._codes_at = now
 
         rows = self._codes or list(_SEED_CODES)
         if q:
@@ -156,7 +146,9 @@ class AshareService:
         return norm
 
     def quotes(self, codes: list[str]) -> dict[str, Any]:
-        adata = self._ensure_adata()
+        """实时报价只读 qdb。采集由 collector 写入。"""
+        from app.ashare.qdb_client import snapshots
+
         clean = []
         for c in codes:
             c = "".join(ch for ch in str(c).strip() if ch.isdigit())
@@ -166,7 +158,7 @@ class AshareService:
                 clean.append(c.zfill(6))
         clean = list(dict.fromkeys(clean))[:80]
         if not clean:
-            return {"data": [], "source": "adata.stock.market.list_market_current"}
+            return {"data": [], "source": "qdb"}
 
         now = time.monotonic()
         cached: list[dict[str, Any]] = []
@@ -179,28 +171,15 @@ class AshareService:
                 missing.append(code)
 
         if missing:
-            df = adata.stock.market.list_market_current(code_list=missing)
-            for r in _df_records(df):
-                code = str(r.get("stock_code") or "").zfill(6)
-                row = {
-                    "stock_code": code,
-                    "short_name": r.get("short_name") or "",
-                    "price": r.get("price"),
-                    "change": r.get("change"),
-                    "change_pct": r.get("change_pct"),
-                    "volume": r.get("volume"),
-                    "amount": r.get("amount"),
-                }
+            fetched = snapshots(missing)
+            for row in fetched.get("data") or []:
+                code = str(row.get("stock_code") or "").zfill(6)
                 self._quote_cache[code] = (now, row)
                 cached.append(row)
 
-        # 保持请求顺序
         by = {r["stock_code"]: r for r in cached}
         ordered = [by[c] for c in clean if c in by]
-        return {
-            "data": ordered,
-            "source": "adata.stock.market.list_market_current",
-        }
+        return {"data": ordered, "source": "qdb"}
 
     def klines(
         self,
@@ -224,50 +203,8 @@ class AshareService:
         if view not in ("history", "realtime", "merged"):
             view = "merged"
 
-        raw_source = "adata.stock.market.get_market"
-        rows: list[dict[str, Any]] = []
-
-        # 1) 优先 adata（东方财富）；容器内东财常 502/超时，限时后回退
-        try:
-            adata = self._ensure_adata()
-            kt = KTYPE_MAP.get(k_type, 1)
-            kwargs: dict[str, Any] = {
-                "stock_code": code,
-                "k_type": kt,
-                "adjust_type": adjust_type,
-                "start_date": start_date or "2018-01-01",
-            }
-            if end_date:
-                kwargs["end_date"] = end_date
-
-            def _fetch_adata() -> list[dict[str, Any]]:
-                return _df_records(adata.stock.market.get_market(**kwargs))
-
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(_fetch_adata)
-                try:
-                    rows = fut.result(timeout=6.0)
-                except FuturesTimeout:
-                    logger.warning("adata get_market timeout code=%s; fallback sina", code)
-                    rows = []
-        except Exception as e:
-            logger.warning("adata get_market failed code=%s: %s", code, e)
-            rows = []
-
-        # 2) 回退新浪公开 K 线
-        if not rows:
-            try:
-                rows = _klines_sina(code, k_type=k_type, limit=max(limit, 300))
-                raw_source = "sina.CN_MarketData.getKLineData"
-            except Exception as e:
-                logger.warning("sina kline failed code=%s: %s", code, e)
-                rows = []
-
-        if limit > 0 and len(rows) > limit:
-            rows = rows[-limit:]
-
-        candles = [_to_candle(r, bar_kind="history") for r in rows]
-        candles = [c for c in candles if c.get("time") is not None]
+        raw_source = "qdb"
+        candles = _candles_from_qdb(code, k_type, limit)
 
         session = _cn_session_status()
         today = session["trade_date"]
@@ -294,7 +231,7 @@ class AshareService:
                 and not any(str(c.get("trade_date") or "")[:10] == today for c in history)
             )
             if need_rt:
-                snap = _snapshot_sina(code)
+                snap = _snapshot_qdb(code)
                 if snap and snap.get("price") is not None:
                     bar = _realtime_bar_from_snap(snap, today, k_type=k_type)
                     realtime_block = {
@@ -302,7 +239,7 @@ class AshareService:
                         "quote": snap,
                         "session": session["status"],
                         "as_of": session["as_of"],
-                        "source": "sina.hq.sinajs.cn",
+                        "source": "qdb",
                         "kind": "wsq_snapshot",
                     }
         else:
@@ -375,39 +312,113 @@ class AshareService:
         return payload
 
     def five(self, stock_code: str) -> dict[str, Any]:
-        adata = self._ensure_adata()
+        from app.ashare.qdb_client import snapshots
+
         code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
-        df = adata.stock.market.get_market_five(stock_code=code)
         return {
             "stock_code": code,
-            "data": _df_records(df),
-            "source": "adata.stock.market.get_market_five",
+            "data": snapshots([code]).get("data") or [],
+            "source": "qdb",
         }
 
     def intraday(self, stock_code: str) -> dict[str, Any]:
-        adata = self._ensure_adata()
         code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
-        df = adata.stock.market.get_market_min(stock_code=code)
-        rows = _df_records(df)
-        candles = []
-        for r in rows:
-            ts_ms = _parse_ts_ms(str(r.get("trade_time") or ""))
-            candles.append(
-                {
-                    "time": ts_ms,
-                    "open": r.get("open"),
-                    "high": r.get("high"),
-                    "low": r.get("low"),
-                    "close": r.get("close"),
-                    "volume": r.get("volume"),
-                }
-            )
+        candles = _candles_from_qdb(code, "5m", 240)
         return {
             "stock_code": code,
-            "count": len(candles),
             "data": candles,
-            "source": "adata.stock.market.get_market_min",
+            "source": "qdb",
         }
+
+
+def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]]:
+    """K 线只从 qdb 读。周/月由日线归并，30 分由 15 分两两归并。"""
+    from datetime import datetime, timezone
+
+    from app.ashare.qdb_client import klines as qdb_klines
+    from app.ashare.qdb_client import qdb_symbol
+
+    period = {"1w": "1d", "1M": "1d", "30m": "15m", "60m": "1h", "1h": "1h"}.get(k_type, k_type)
+    if period not in ("1d", "5m", "15m", "1h"):
+        period = "1d"
+    candles: list[dict[str, Any]] = []
+    for row in qdb_klines(qdb_symbol(code), period):
+        ts = row.get("ts")
+        if ts is None:
+            continue
+        ms = int(ts) // 1_000_000
+        day = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        candles.append(
+            {
+                "time": ms,
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "volume": row.get("volume"),
+                "trade_date": day,
+                "bar_kind": "realtime" if int(row.get("state") or 1) == 0 else "history",
+            }
+        )
+    if k_type == "30m":
+        candles = _fold_pairs(candles)
+    elif k_type == "1w":
+        candles = _fold_dates(candles, 7)
+    elif k_type == "1M":
+        candles = _fold_month(candles)
+    if limit > 0:
+        candles = candles[-limit:]
+    return candles
+
+
+def _fold_pairs(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i in range(0, len(candles), 2):
+        chunk = candles[i : i + 2]
+        out.append(_merge_bars(chunk))
+    return out
+
+
+def _fold_dates(candles: list[dict[str, Any]], days: int) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    chunk: list[dict[str, Any]] = []
+    for bar in candles:
+        if chunk and len(chunk) >= days:
+            out.append(_merge_bars(chunk))
+            chunk = []
+        chunk.append(bar)
+    if chunk:
+        out.append(_merge_bars(chunk))
+    return out
+
+
+def _fold_month(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[list[dict[str, Any]]] = []
+    key = ""
+    for bar in candles:
+        month = str(bar.get("trade_date") or "")[:7]
+        if month != key:
+            groups.append([])
+            key = month
+        groups[-1].append(bar)
+    return [_merge_bars(g) for g in groups if g]
+
+
+def _merge_bars(chunk: list[dict[str, Any]]) -> dict[str, Any]:
+    first, last = chunk[0], chunk[-1]
+    highs = [float(b["high"]) for b in chunk if b.get("high") is not None]
+    lows = [float(b["low"]) for b in chunk if b.get("low") is not None]
+    volume = sum(float(b.get("volume") or 0) for b in chunk)
+    return {
+        "time": first.get("time"),
+        "open": first.get("open"),
+        "high": max(highs) if highs else first.get("high"),
+        "low": min(lows) if lows else first.get("low"),
+        "close": last.get("close"),
+        "volume": volume,
+        "trade_date": last.get("trade_date"),
+        "bar_kind": last.get("bar_kind"),
+    }
 
 
 def _num(v: Any) -> float | None:
@@ -485,42 +496,29 @@ def _cn_session_status() -> dict[str, Any]:
     }
 
 
-def _snapshot_sina(code: str) -> dict[str, Any] | None:
-    """新浪实时快照（类 Wind WSQ：开高低收量）。"""
-    import re
+def _snapshot_qdb(code: str) -> dict[str, Any] | None:
+    """盘中 bar 用的快照，只从 qdb 读。"""
+    from app.ashare.qdb_client import snapshots
 
-    import requests
-
-    symbol = _sina_symbol(code)
-    url = f"https://hq.sinajs.cn/list={symbol}"
-    r = requests.get(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 EquityLab-research/ashare",
-            "Referer": "https://finance.sina.com.cn",
-        },
-        timeout=10,
-    )
-    r.raise_for_status()
-    # var hq_str_sh600519="名,开,昨收,现,高,低,...";
-    m = re.search(r'="([^"]*)"', r.text)
-    if not m or not m.group(1):
+    body = snapshots([code])
+    rows = body.get("data") or []
+    if not rows:
         return None
-    parts = m.group(1).split(",")
-    if len(parts) < 10:
+    row = rows[0]
+    if row.get("price") is None:
         return None
     return {
-        "stock_code": code.zfill(6),
-        "short_name": parts[0],
-        "open": _num(parts[1]),
-        "pre_close": _num(parts[2]),
-        "price": _num(parts[3]),
-        "high": _num(parts[4]),
-        "low": _num(parts[5]),
-        "volume": _num(parts[8]),
-        "amount": _num(parts[9]),
-        "trade_date": parts[30] if len(parts) > 30 else None,
-        "trade_time": parts[31] if len(parts) > 31 else None,
+        "stock_code": str(row.get("stock_code") or code).zfill(6),
+        "short_name": row.get("short_name") or "",
+        "open": row.get("open"),
+        "pre_close": row.get("pre_close"),
+        "price": row.get("price"),
+        "high": row.get("high"),
+        "low": row.get("low"),
+        "volume": row.get("volume"),
+        "amount": row.get("amount"),
+        "trade_date": None,
+        "trade_time": None,
     }
 
 
