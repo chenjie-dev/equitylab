@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/", label: "Chat" },
   { href: "/markets", label: "Spot" },
+  { href: "/chat", label: "Chat" },
   { href: "/markets/stocks", label: "Stocks" },
   { href: "/markets/ashare", label: "A股" },
   { href: "/backtest", label: "Backtest" },
@@ -24,12 +24,9 @@ export function SiteHeader() {
         <nav className="site-nav" aria-label="主导航">
           {NAV.map((item) => {
             const active =
-              item.href === "/"
-                ? pathname === "/"
-                : item.href === "/markets"
-                  ? pathname === "/markets"
-                  : pathname === item.href ||
-                    pathname.startsWith(`${item.href}/`);
+              item.href === "/markets"
+                ? pathname === "/" || pathname === "/markets"
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

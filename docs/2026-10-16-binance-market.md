@@ -98,8 +98,10 @@ websocat 'ws://localhost:3002/binance/ws?streams=btcusdt@trade/btcusdt@ticker'
 
 ## 前端
 
+- 首页即现货加密：http://localhost:3001/ （转到 `/markets`）
 - 现货加密：http://localhost:3001/markets  
 - 代币化美股：http://localhost:3001/markets/stocks  
+- 研究对话：http://localhost:3001/chat  
 
 均经 BFF `/api/market/*` → 网关；只读行情，无下单。
 
