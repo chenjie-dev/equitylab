@@ -821,6 +821,45 @@ code {
   background: #161a1e;
 }
 
+.bn-chart-stage {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  width: 100%;
+  /* 保证 tip 叠在 LWC canvas (z-index:1) 之上 */
+  isolation: isolate;
+}
+
+.bn-chart-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10000;
+  min-width: 156px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #1e2329;
+  border: 1px solid #474d57;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--bn-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.bn-chart-tip b {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--bn-text);
+}
+
+.bn-chart-tip-time {
+  margin-bottom: 4px;
+  color: var(--bn-text-tertiary);
+  font-size: 11px;
+}
+
 .bn-ohlc-bar {
   display: flex;
   flex-wrap: wrap;
@@ -857,9 +896,10 @@ code {
 }
 
 .bn-chart-canvas {
-  flex: 1;
-  min-height: 420px;
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
 }
 
 .bn-right {

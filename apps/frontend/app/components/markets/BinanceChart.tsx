@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 币安风格主图：蜡烛 + 成交量 + MA(7/25/99) + 十字光标 OHLC。
+ * 币安风格主图：蜡烛 + 成交量 + MA(7/25/99)；OHLC 悬停在鼠标侧方浮层显示。
  */
 
 import {
@@ -10,6 +10,7 @@ import {
   useState,
   type MutableRefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   ColorType,
   CrosshairMode,
@@ -21,7 +22,6 @@ import {
   type HistogramData,
   type LineData,
   type UTCTimestamp,
-  type MouseEventParams,
 } from "lightweight-charts";
 import {
   formatLocalDateTime,
@@ -40,6 +40,13 @@ type OhlcInfo = {
   volume: number;
   change: number;
   up: boolean;
+};
+
+type HoverTip = {
+  ohlc: OhlcInfo;
+  /** 视口坐标，fixed 浮层贴鼠标侧方 */
+  clientX: number;
+  clientY: number;
 };
 
 function fmt(n: number, d = 2): string {
@@ -114,6 +121,25 @@ function infoFromKline(k: Kline): OhlcInfo {
   };
 }
 
+/** 十字光标时间 → 最近一根 K 线（允许 ±1s 误差） */
+function findKline(rows: Kline[], localSec: number): Kline | null {
+  if (!rows.length) return null;
+  const utcSec = localToUtc(localSec);
+  let best: Kline | null = null;
+  let bestDist = Infinity;
+  for (const k of rows) {
+    const t = Math.floor(Number(k[0]) / 1000);
+    const d = Math.abs(t - utcSec);
+    if (d < bestDist) {
+      bestDist = d;
+      best = k;
+    }
+    if (d === 0) break;
+  }
+  // 周期内任意位置悬停都应对上该根 K
+  return best;
+}
+
 type Props = {
   klines: Kline[];
   symbol: string;
@@ -121,6 +147,8 @@ type Props = {
 
 export function BinanceChart({ klines, symbol }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -128,7 +156,7 @@ export function BinanceChart({ klines, symbol }: Props) {
   const ma25Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ma99Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const klinesRef = useRef(klines) as MutableRefObject<Kline[]>;
-  const [ohlc, setOhlc] = useState<OhlcInfo | null>(null);
+  const [tip, setTip] = useState<HoverTip | null>(null);
 
   klinesRef.current = klines;
 
@@ -155,13 +183,13 @@ export function BinanceChart({ klines, symbol }: Props) {
           color: "#848e9c",
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#2b3139",
+          labelVisible: false,
         },
         horzLine: {
           color: "#848e9c",
           width: 1,
           style: LineStyle.Dashed,
-          labelBackgroundColor: "#2b3139",
+          labelVisible: false,
         },
       },
       rightPriceScale: {
@@ -185,6 +213,8 @@ export function BinanceChart({ klines, symbol }: Props) {
       borderVisible: false,
       wickUpColor: "#0ecb81",
       wickDownColor: "#f6465d",
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     const volume = chart.addHistogramSeries({
@@ -217,17 +247,41 @@ export function BinanceChart({ klines, symbol }: Props) {
       crosshairMarkerVisible: false,
     });
 
-    chart.subscribeCrosshairMove((param: MouseEventParams) => {
+    // 用 stage 原生 mousemove 定位侧方提示（不依赖 LWC point 边界）
+    const stage = stageRef.current;
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!stage) return;
       const rows = klinesRef.current;
-      if (!param.time || !rows.length) {
-        if (rows.length) setOhlc(infoFromKline(rows[rows.length - 1]));
+      if (!rows.length) {
+        setTip(null);
         return;
       }
-      // 轴上是 timeToLocal 后的秒，反查真实 UTC 秒再对原始 K 线
-      const utcSec = localToUtc(param.time as number);
-      const hit = rows.find((k) => Math.floor(Number(k[0]) / 1000) === utcSec);
-      if (hit) setOhlc(infoFromKline(hit));
-    });
+      const rect = stage.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+        setTip(null);
+        return;
+      }
+      const t = chart.timeScale().coordinateToTime(x);
+      if (t == null) {
+        setTip(null);
+        return;
+      }
+      const hit = findKline(rows, t as number);
+      if (!hit) {
+        setTip(null);
+        return;
+      }
+      setTip({
+        ohlc: infoFromKline(hit),
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+      });
+    };
+    const onMouseLeave = () => setTip(null);
+    stage?.addEventListener("mousemove", onMouseMove);
+    stage?.addEventListener("mouseleave", onMouseLeave);
 
     chartRef.current = chart;
     candleRef.current = candles;
@@ -237,6 +291,8 @@ export function BinanceChart({ klines, symbol }: Props) {
     ma99Ref.current = ma99;
 
     return () => {
+      stage?.removeEventListener("mousemove", onMouseMove);
+      stage?.removeEventListener("mouseleave", onMouseLeave);
       chart.remove();
       chartRef.current = null;
       candleRef.current = null;
@@ -255,50 +311,91 @@ export function BinanceChart({ klines, symbol }: Props) {
     ma25Ref.current?.setData(toMaLine(klines, 25));
     ma99Ref.current?.setData(toMaLine(klines, 99));
     chartRef.current?.timeScale().scrollToRealTime();
-    setOhlc(infoFromKline(klines[klines.length - 1]));
+    setTip(null);
   }, [klines]);
+
+  useEffect(() => {
+    if (!tip) return;
+    const tipEl = tipRef.current;
+    if (!tipEl) return;
+    const tw = tipEl.offsetWidth || 160;
+    const th = tipEl.offsetHeight || 150;
+    const gap = 18;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // 侧方：默认鼠标右侧，贴边翻左侧；垂直居中光标
+    let left = tip.clientX + gap;
+    if (left + tw > vw - 8) left = tip.clientX - gap - tw;
+    if (left < 8) left = 8;
+    let top = tip.clientY - th / 2;
+    if (top < 8) top = 8;
+    if (top + th > vh - 8) top = Math.max(8, vh - th - 8);
+    tipEl.style.left = `${left}px`;
+    tipEl.style.top = `${top}px`;
+  }, [tip]);
 
   const pair = symbol.endsWith("USDT")
     ? `${symbol.slice(0, -4)}/USDT`
     : symbol;
 
+  const tipNode =
+    tip && typeof document !== "undefined"
+      ? createPortal(
+          <div ref={tipRef} className="bn-chart-tip" aria-hidden>
+            <div className="bn-chart-tip-time">{tip.ohlc.time}</div>
+            <div>
+              O{" "}
+              <b className={tip.ohlc.up ? "up" : "down"}>
+                {fmt(tip.ohlc.open)}
+              </b>
+            </div>
+            <div>
+              H{" "}
+              <b className={tip.ohlc.up ? "up" : "down"}>
+                {fmt(tip.ohlc.high)}
+              </b>
+            </div>
+            <div>
+              L{" "}
+              <b className={tip.ohlc.up ? "up" : "down"}>
+                {fmt(tip.ohlc.low)}
+              </b>
+            </div>
+            <div>
+              C{" "}
+              <b className={tip.ohlc.up ? "up" : "down"}>
+                {fmt(tip.ohlc.close)}
+              </b>
+            </div>
+            <div className={tip.ohlc.up ? "up" : "down"}>
+              {tip.ohlc.up ? "+" : ""}
+              {fmt(tip.ohlc.change, 2)}%
+            </div>
+            <div>
+              Vol <b>{fmt(tip.ohlc.volume, 3)}</b>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div className="bn-chart-root">
       <div className="bn-ohlc-bar">
-        {ohlc ? (
-          <>
-            <span className="bn-ohlc-pair">{pair}</span>
-            <span className="bn-ohlc-time">{ohlc.time}</span>
-            <span>
-              O <b className={ohlc.up ? "up" : "down"}>{fmt(ohlc.open)}</b>
-            </span>
-            <span>
-              H <b className={ohlc.up ? "up" : "down"}>{fmt(ohlc.high)}</b>
-            </span>
-            <span>
-              L <b className={ohlc.up ? "up" : "down"}>{fmt(ohlc.low)}</b>
-            </span>
-            <span>
-              C <b className={ohlc.up ? "up" : "down"}>{fmt(ohlc.close)}</b>
-            </span>
-            <span className={ohlc.up ? "up" : "down"}>
-              {ohlc.up ? "+" : ""}
-              {fmt(ohlc.change, 2)}%
-            </span>
-            <span>
-              Vol <b>{fmt(ohlc.volume, 3)}</b>
-            </span>
-            <span className="bn-ma-legend">
-              <i style={{ color: "#f0b90b" }}>MA(7)</i>
-              <i style={{ color: "#d94cff" }}>MA(25)</i>
-              <i style={{ color: "#1e88e5" }}>MA(99)</i>
-            </span>
-          </>
-        ) : (
+        <span className="bn-ohlc-pair">{pair}</span>
+        <span className="bn-ma-legend">
+          <i style={{ color: "#f0b90b" }}>MA(7)</i>
+          <i style={{ color: "#d94cff" }}>MA(25)</i>
+          <i style={{ color: "#1e88e5" }}>MA(99)</i>
+        </span>
+        {!klines.length ? (
           <span className="mk-muted">Loading chart…</span>
-        )}
+        ) : null}
       </div>
-      <div ref={wrapRef} className="bn-chart-canvas" />
+      <div ref={stageRef} className="bn-chart-stage">
+        <div ref={wrapRef} className="bn-chart-canvas" />
+      </div>
+      {tipNode}
     </div>
   );
 }
