@@ -130,6 +130,7 @@ pub fn router(client: Arc<RwaClient>) -> Router {
     Router::new()
         .route("/", get(catalog))
         .route("/stocks", get(stocks))
+        .route("/board", get(board))
         .route("/market/status", get(market_status))
         .route("/asset/status", get(asset_status))
         .route("/meta", get(meta))
@@ -151,6 +152,7 @@ async fn catalog() -> Json<Value> {
         ],
         "endpoints": [
             "GET .../rwa/stocks?type=1&preferChainId=56",
+            "GET .../rwa/board",
             "GET .../rwa/market/status",
             "GET .../rwa/asset/status?chainId=&contractAddress=",
             "GET .../rwa/meta?chainId=&contractAddress=",
@@ -158,8 +160,16 @@ async fn catalog() -> Json<Value> {
             "GET .../rwa/klines?chainId=&contractAddress=&interval=&limit=",
             "GET .../rwa/quote?ticker=AAPL&preferChainId=56"
         ],
-        "note": "代币化美股 ≠ 纽交所原生 feed；仅公开只读行情"
+        "note": "代币化美股 ≠ 纽交所原生 feed；列表 board / K 线 rwa:kline:* 由 collector 全量持续写"
     }))
+}
+
+/// collector 聚合的全市场轻量报价（`rwa:board`），供列表一次读完。
+async fn board() -> Result<Json<Value>, (StatusCode, String)> {
+    let v = crate::qdb_read::doc("rwa:board").await.unwrap_or_else(|| {
+        json!({"updatedAt": 0, "count": 0, "data": {}})
+    });
+    Ok(Json(v))
 }
 
 #[derive(Deserialize)]
@@ -299,8 +309,26 @@ fn default_kline_limit() -> u32 {
 }
 
 async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
-    let ticker = ticker_for_contract(&q.chain_id, &q.contract_address).await.unwrap_or_default();
-    let infos = crate::qdb_read::rwa_klines(&ticker, &q.interval, q.limit.min(300) as usize).await;
+    let limit = q.limit.min(300) as usize;
+    let ticker = ticker_for_contract(&q.chain_id, &q.contract_address)
+        .await
+        .unwrap_or_default();
+    // collector 全市场写入的原始 K 线 doc；优先于成交折叠
+    if !ticker.is_empty() {
+        let key = format!("rwa:kline:{ticker}:{}", q.interval);
+        if let Some(doc) = crate::qdb_read::doc(&key).await {
+            if let Some(infos) = doc
+                .pointer("/data/klineInfos")
+                .and_then(|v| v.as_array())
+            {
+                let start = infos.len().saturating_sub(limit);
+                return Ok(Json(json!({
+                    "data": { "klineInfos": infos[start..].to_vec() }
+                })));
+            }
+        }
+    }
+    let infos = crate::qdb_read::rwa_klines(&ticker, &q.interval, limit).await;
     Ok(Json(json!({"data": {"klineInfos": infos}})))
 }
 
@@ -324,10 +352,61 @@ pub struct QuoteQuery {
 }
 
 /// 按底层美股 ticker 解析合约并返回 dynamic（含 token/stock 信息）。
+/// 优先 `rwa:quote:{TICKER}`；缺失时从 `rwa:stocks` + `rwa:dynamic` 拼装（collector 超时未写入时避免硬 404）。
 async fn quote_by_ticker(Query(q): Query<QuoteQuery>) -> Result<Json<Value>, (StatusCode, String)> {
     let ticker = q.ticker.trim().to_uppercase();
     if let Some(v) = crate::qdb_read::doc(&format!("rwa:quote:{ticker}")).await {
         return Ok(Json(v));
     }
-    Err((StatusCode::NOT_FOUND, format!("ticker not found: {ticker}")))
+    let token = token_from_stocks(&ticker, &q.prefer_chain_id)
+        .await
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("ticker not found: {ticker}")))?;
+    let chain = token
+        .get("chainId")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&q.prefer_chain_id)
+        .to_string();
+    let contract = token
+        .get("contractAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let dynamic = if !contract.is_empty() {
+        crate::qdb_read::doc(&format!("rwa:dynamic:{chain}:{contract}"))
+            .await
+            .and_then(|raw| raw.get("data").cloned())
+    } else {
+        None
+    };
+    Ok(Json(json!({
+        "ticker": ticker,
+        "token": token,
+        "chainId": chain,
+        "contractAddress": contract,
+        "dynamic": dynamic,
+    })))
+}
+
+async fn token_from_stocks(ticker: &str, prefer_chain: &str) -> Option<Value> {
+    let doc = crate::qdb_read::doc("rwa:stocks").await?;
+    let rows = doc.get("data")?.as_array()?;
+    let mut fallback: Option<Value> = None;
+    for row in rows {
+        let t = row
+            .get("ticker")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_uppercase();
+        if t != ticker {
+            continue;
+        }
+        let chain = row.get("chainId").and_then(|v| v.as_str()).unwrap_or("");
+        if chain == prefer_chain {
+            return Some(row.clone());
+        }
+        if fallback.is_none() {
+            fallback = Some(row.clone());
+        }
+    }
+    fallback
 }

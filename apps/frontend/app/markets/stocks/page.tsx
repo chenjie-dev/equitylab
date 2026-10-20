@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 币安 Ondo 代币化美股只读行情台：全量列表 + 搜索；报价按需刷新。
- * 数据：/api/market/binance/rwa/*（公开 bapi，非纽交所原生 feed）。
+ * 币安 Ondo 代币化美股只读行情台：全量列表 + 搜索。
+ * 列表价只读 collector 聚合的 `/rwa/board`；详情再读 `/rwa/quote`。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,7 +11,7 @@ import {
   type Kline,
 } from "../../components/markets/BinanceChart";
 
-/** 优先拉实时报价的热门标的（其余列表项点选后再取价） */
+/** 热门：列表置顶 */
 const PRIORITY = [
   "AAPL",
   "NVDA",
@@ -29,6 +29,14 @@ const PRIORITY = [
   "PLTR",
   "BABA",
 ] as const;
+
+type BoardRow = {
+  ticker?: string;
+  symbol?: string;
+  price?: string;
+  priceChange24h?: string;
+  priceChangePct24h?: string;
+};
 
 const INTERVALS = ["1m", "5m", "15m", "1h", "4h", "12h", "1d"] as const;
 type Interval = (typeof INTERVALS)[number];
@@ -103,23 +111,10 @@ function refPrice(tokenPrice?: string, multiplier?: string): number | null {
   return p / m;
 }
 
-async function fetchDynamic(token: StockToken): Promise<Dynamic | null> {
-  try {
-    const res = await fetch(
-      `/api/market/binance/rwa/dynamic?chainId=${token.chainId}&contractAddress=${token.contractAddress}`,
-    );
-    if (!res.ok) return null;
-    const body = (await res.json()) as { data?: Dynamic };
-    return body.data ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export default function TokenizedStocksPage() {
   const [query, setQuery] = useState("");
   const [universe, setUniverse] = useState<StockToken[]>([]);
-  /** ticker → dynamic 报价缓存 */
+  /** ticker → 列表轻量报价（来自 board） */
   const [quotes, setQuotes] = useState<Record<string, Dynamic>>({});
   const [selected, setSelected] = useState<string>("AAPL");
   const [interval, setIntervalTf] = useState<Interval>("1h");
@@ -146,73 +141,49 @@ export default function TokenizedStocksPage() {
     setMarket(body.data ?? null);
   }, []);
 
-  const mergeQuotes = useCallback((entries: { ticker: string; dyn: Dynamic | null }[]) => {
-    setQuotes((prev) => {
-      const next = { ...prev };
-      for (const { ticker, dyn } of entries) {
-        if (dyn) next[ticker] = dyn;
-      }
-      return next;
-    });
+  /** 一次读全市场列表价（collector 持续写入 rwa:board） */
+  const loadBoard = useCallback(async () => {
+    const res = await fetch(`/api/market/binance/rwa/board`);
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      data?: Record<string, BoardRow>;
+    };
+    const rows = body.data ?? {};
+    const next: Record<string, Dynamic> = {};
+    for (const [ticker, row] of Object.entries(rows)) {
+      next[ticker] = {
+        ticker,
+        symbol: row.symbol,
+        tokenInfo: {
+          price: row.price,
+          priceChange24h: row.priceChange24h,
+          priceChangePct24h: row.priceChangePct24h,
+        },
+      };
+    }
+    if (Object.keys(next).length) setQuotes(next);
   }, []);
-
-  /** 热门 + 当前选中 + 搜索命中前 40 条 */
-  const loadListQuotes = useCallback(
-    async (list: StockToken[], q: string, sel: string) => {
-      if (!list.length) return;
-      const byTicker = new Map(list.map((t) => [t.ticker, t]));
-      const want = new Set<string>();
-      for (const t of PRIORITY) {
-        if (byTicker.has(t)) want.add(t);
-      }
-      if (byTicker.has(sel)) want.add(sel);
-
-      const qq = q.trim().toUpperCase();
-      if (qq) {
-        const hits = list
-          .filter(
-            (t) =>
-              t.ticker.includes(qq) || t.symbol.toUpperCase().includes(qq),
-          )
-          .slice(0, 40);
-        for (const t of hits) want.add(t.ticker);
-      }
-
-      const tokens = [...want]
-        .map((t) => byTicker.get(t))
-        .filter(Boolean) as StockToken[];
-
-      // 分批，避免一次打爆上游
-      const batchSize = 8;
-      for (let i = 0; i < tokens.length; i += batchSize) {
-        const batch = tokens.slice(i, i + batchSize);
-        const results = await Promise.all(
-          batch.map(async (token) => ({
-            ticker: token.ticker,
-            dyn: await fetchDynamic(token),
-          })),
-        );
-        mergeQuotes(results);
-      }
-    },
-    [mergeQuotes],
-  );
 
   const loadDetail = useCallback(async (ticker: string) => {
     const res = await fetch(
       `/api/market/binance/rwa/quote?ticker=${encodeURIComponent(ticker)}&preferChainId=56`,
     );
-    if (!res.ok) throw new Error(`quote ${res.status}`);
+    if (!res.ok) {
+      // 采集未写入时可能短暂 404；保留列表，勿整页报死
+      setError(`quote ${res.status}（采集稍后会补 ${ticker}）`);
+      return null;
+    }
+    setError(null);
     const body = (await res.json()) as {
       token: StockToken;
-      dynamic: Dynamic;
+      dynamic: Dynamic | null;
       chainId: string;
       contractAddress: string;
     };
-    setTokenMeta(body.token);
+    if (body.token) setTokenMeta(body.token);
     setDetail(body.dynamic);
     if (body.dynamic) {
-      setQuotes((prev) => ({ ...prev, [ticker]: body.dynamic }));
+      setQuotes((prev) => ({ ...prev, [ticker]: body.dynamic as Dynamic }));
     }
     return body;
   }, []);
@@ -240,42 +211,6 @@ export default function TokenizedStocksPage() {
     [],
   );
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        await Promise.all([loadUniverse(), loadMarket()]);
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-  }, [loadUniverse, loadMarket]);
-
-  useEffect(() => {
-    if (!universe.length) return;
-    void loadListQuotes(universe, query, selected);
-    const id = setInterval(() => setTick((n) => n + 1), 20_000);
-    return () => clearInterval(id);
-  }, [universe, query, selected, loadListQuotes]);
-
-  useEffect(() => {
-    if (tick === 0) return;
-    void loadListQuotes(universe, query, selected);
-    void loadMarket();
-  }, [tick, universe, query, selected, loadListQuotes, loadMarket]);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const q = await loadDetail(selected);
-        await loadKlines(q.chainId, q.contractAddress, interval);
-        setError(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-  }, [selected, interval, loadDetail, loadKlines]);
-
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     // 热门置顶，其余按 ticker 字母序（universe 已排序）
@@ -299,6 +234,45 @@ export default function TokenizedStocksPage() {
     });
     return list;
   }, [universe, query]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        await Promise.all([loadUniverse(), loadMarket(), loadBoard()]);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [loadUniverse, loadMarket, loadBoard]);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (tick === 0) return;
+    void loadBoard();
+    void loadMarket();
+    // 采集仍在补 K 线时，定时重拉当前标的，避免一次空结果就一直空白
+    if (tokenMeta?.chainId && tokenMeta.contractAddress) {
+      void loadKlines(tokenMeta.chainId, tokenMeta.contractAddress, interval);
+    }
+  }, [tick, loadBoard, loadMarket, loadKlines, tokenMeta, interval]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const q = await loadDetail(selected);
+        if (!q) return;
+        await loadKlines(q.chainId, q.contractAddress, interval);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  }, [selected, interval, loadDetail, loadKlines]);
 
   const ti = detail?.tokenInfo;
   const si = detail?.stockInfo;

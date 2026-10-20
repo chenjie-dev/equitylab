@@ -36,6 +36,14 @@ def main() -> None:
         markets.start_binance_ws()
     except Exception as exc:
         print(f"binance ws start failed: {exc}", flush=True)
+    try:
+        markets.start_rwa_feed()
+    except Exception as exc:
+        print(f"rwa feed start failed: {exc}", flush=True)
+    try:
+        markets.start_rwa_kline_feed()
+    except Exception as exc:
+        print(f"rwa kline feed start failed: {exc}", flush=True)
 
     threading.Thread(
         target=_backfill_worker,
@@ -96,7 +104,7 @@ def _backfill_worker(codes: list[str], markets: object) -> None:
 
 
 def _slow_worker(markets: object) -> None:
-    """盘口/成交 docs + RWA：独立节奏，不阻塞 quotes。"""
+    """盘口/成交 docs：独立节奏，不阻塞 quotes（RWA 另有 collector-rwa 线程）。"""
     cycle = 0
     while True:
         t0 = time.monotonic()
