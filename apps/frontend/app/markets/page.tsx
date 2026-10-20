@@ -11,6 +11,8 @@ import {
   type Kline,
 } from "../components/markets/BinanceChart";
 import { DepthChart } from "../components/markets/DepthChart";
+import { useQdbSnapshot } from "../components/markets/useQdbSnapshot";
+import { formatLocalTime } from "../../lib/time";
 
 const WATCHLIST = [
   "BTCUSDT",
@@ -138,10 +140,42 @@ export default function MarketsPage() {
     setList(rows);
   }, []);
 
+  // REST 列表只补涨跌/量；lastPrice 以 WS 为准，避免 20s 轮询盖掉实时价
   useEffect(() => {
     const cur = list.find((t) => t.symbol === symbol);
-    if (cur) setTicker(cur);
+    if (!cur) return;
+    setTicker((prev) => {
+      if (prev && prev.symbol === symbol) {
+        return {
+          ...cur,
+          lastPrice: prev.lastPrice || cur.lastPrice,
+        };
+      }
+      return cur;
+    });
   }, [list, symbol]);
+
+  // 当前标的：qdb snapshots 订阅覆盖 last；24hr 涨跌仍来自 REST ticker docs
+  useQdbSnapshot(symbol ? `BINANCE:${symbol}` : null, (row) => {
+    const last = String(row.last);
+    setTicker((prev) =>
+      prev && prev.symbol === symbol
+        ? { ...prev, lastPrice: last }
+        : {
+            symbol,
+            lastPrice: last,
+            priceChange: "0",
+            priceChangePercent: "0",
+            highPrice: last,
+            lowPrice: last,
+            volume: "0",
+            quoteVolume: "0",
+          },
+    );
+    setList((prev) =>
+      prev.map((t) => (t.symbol === symbol ? { ...t, lastPrice: last } : t)),
+    );
+  });
 
   const loadBook = useCallback(async (sym: string) => {
     try {
@@ -172,17 +206,18 @@ export default function MarketsPage() {
     return () => clearInterval(id);
   }, [loadList]);
 
+  // 盘口/成交跟 docs（collector 约 1s/标的轮询）；K 线更慢
   useEffect(() => {
     void loadBook(symbol);
     void loadKlines(symbol, interval);
-    const id = setInterval(() => setTick((n) => n + 1), 5000);
+    const id = setInterval(() => setTick((n) => n + 1), 2_000);
     return () => clearInterval(id);
   }, [symbol, interval, loadBook, loadKlines]);
 
   useEffect(() => {
     if (tick === 0) return;
     void loadBook(symbol);
-    if (tick % 10 === 0) void loadKlines(symbol, interval);
+    if (tick % 15 === 0) void loadKlines(symbol, interval);
   }, [tick, symbol, interval, loadBook, loadKlines]);
 
   const change = Number(ticker?.priceChangePercent ?? 0);
@@ -483,7 +518,7 @@ export default function MarketsPage() {
                         </span>
                         <span>{fmt(t.qty, 5)}</span>
                         <span className="bn-label">
-                          {new Date(t.time).toLocaleTimeString()}
+                          {formatLocalTime(t.time)}
                         </span>
                       </div>
                     );

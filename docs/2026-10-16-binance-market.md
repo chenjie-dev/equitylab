@@ -12,8 +12,10 @@
 
 EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 写入 qdb，market-data 只读 qdb。本仓落点见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**改读写前先核对同级 `../qdb/docs/manual/` 最新手册**，保持用法不滞后。
 
-- 采集回源：`https://data-api.binance.vision`（`BINANCE_REST_URL`，仅 collector）
-- 公开流：`wss://data-stream.binance.vision`（`BINANCE_WS_URL`，WebSocket 仍是直连代理，不进 qdb）
+- 采集回源（仅 collector）：
+  - REST：`BINANCE_REST_URL`（默认 `api.binance.com`，回落 `data-api`）用于 backfill / WS 断流兜底
+  - **WS → qdb**：`BINANCE_WS_URL` combined stream（`bookTicker`/`trade`/`depth20@100ms`/`ticker`）写 `POST /v1/quotes` 与 docs
+- 调试用直连代理：market-data `WS .../binance/ws`（不经 qdb；正式 UI 订 `/qdb/ws`）
 - 读：`QDB_URL`（默认 `http://qdb:9090`）。ticker / depth / trades 来自 `GET /v1/docs`，K 线来自 `GET /v1/klines`（`BINANCE:{SYMBOL}`）
 
 不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。qdb 原生周期为 `1m/5m/15m/1h/4h/1d`；`3m/30m/2h/6h/12h/3d/1w/1M` 由读路径折叠。
@@ -64,8 +66,10 @@ exchanges/                 ← 多交易所 seam（登记 /exchanges）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `BINANCE_REST_URL` | `https://data-api.binance.vision` | REST 基址 |
-| `BINANCE_WS_URL` | `wss://data-stream.binance.vision` | WS 基址 |
+| `BINANCE_REST_URL` | `https://api.binance.com` | REST 基址（仅 collector） |
+| `BINANCE_REST_FALLBACK` | `https://data-api.binance.vision` | 主站 SSL/网络失败时回落 |
+| `BINANCE_WS_URL` | `wss://data-stream.binance.vision` | collector 订流写 qdb；亦为 market-data 直连代理基址 |
+| `BINANCE_WS_FALLBACK` | `wss://stream.binance.com:9443` | collector WS 主站失败时回落 |
 | `BINANCE_RWA_BASE_URL` | `https://www.binance.com` | Ondo RWA 公开 bapi 基址 |
 | `MARKET_PROVIDER` | `mock` | 设为 `binance` 时统一 Quote/Bars 走币安 |
 

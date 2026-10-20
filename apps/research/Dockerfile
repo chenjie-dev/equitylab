@@ -1,8 +1,10 @@
-# multi-stage：依赖安装与运行分离；非 root
+# multi-stage；build context = 仓库根
 FROM python:3.12-slim AS build
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY packages/qdb-py /tmp/qdb-py
+COPY apps/research/requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install /tmp/qdb-py \
+    && pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 FROM python:3.12-slim AS runtime
 WORKDIR /app
@@ -10,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
 COPY --from=build /install /usr/local
-COPY main.py .
-COPY app ./app
+COPY apps/research/main.py .
+COPY apps/research/app ./app
 USER appuser
 EXPOSE 8002
 ENV PORT=8002

@@ -3,9 +3,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py markets.py ./
+# build context = 仓库根
+COPY packages/qdb-py /tmp/qdb-py
+COPY services/collector/requirements.txt .
+RUN pip install --no-cache-dir /tmp/qdb-py \
+    && pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /tmp/qdb-py
+COPY services/collector/main.py services/collector/markets.py services/collector/binance_ws.py ./
 USER appuser
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]

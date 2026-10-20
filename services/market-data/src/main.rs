@@ -10,12 +10,14 @@
 //! - `REDIS_URL`
 //! - `MARKET_PROVIDER`：`mock` | `binance` | `alphafeed`
 //! - `BINANCE_REST_URL` / `BINANCE_WS_URL`
+//! - `QDB_URL`：只读行情与 `/qdb/ws` 代理目标
 
 mod cache;
 mod exchanges;
-mod qdb_read;
 mod handlers;
 mod providers;
+mod qdb_read;
+mod qdb_ws;
 mod trace;
 
 use axum::{middleware::from_fn, routing::get, Router};
@@ -71,9 +73,14 @@ async fn main() {
         .route("/search", get(handlers::search))
         .with_state(state);
 
+    let qdb_ws_routes = Router::new()
+        .route("/qdb/ws", get(qdb_ws::ws_upgrade))
+        .route("/exchanges/qdb/ws", get(qdb_ws::ws_upgrade));
+
     let app = Router::new()
         .merge(unified)
         .merge(exchanges::mount_exchange_routes(&binance_mod))
+        .merge(qdb_ws_routes)
         .layer(from_fn(trace::trace_middleware))
         .layer(CorsLayer::permissive());
 

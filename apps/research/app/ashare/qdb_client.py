@@ -1,13 +1,12 @@
-"""只读客户端：实时行情从本机 qdb 拉，不回源公开接口。"""
+"""A 股读路径适配：协议走 equitylab_qdb；行映射留在本模块。"""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-import requests
+from equitylab_qdb import Client
 
-QDB_URL = os.environ.get("QDB_URL", "http://127.0.0.1:9090").rstrip("/")
+_client = Client(timeout=5.0)
 
 
 def qdb_symbol(code: str) -> str:
@@ -18,29 +17,18 @@ def qdb_symbol(code: str) -> str:
 
 
 def klines(symbol: str, period: str) -> list[dict[str, Any]]:
-    try:
-        r = requests.get(
-            f"{QDB_URL}/v1/klines",
-            params={"symbol": symbol, "period": period},
-            timeout=5,
-        )
-        if r.status_code == 404:
-            return []
-        r.raise_for_status()
-        body = r.json()
-    except Exception:
-        return []
-    return list(body.get("data") or [])
+    return _client.klines(symbol, period)
 
 
 def snapshots_all() -> dict[str, Any]:
-    try:
-        r = requests.get(f"{QDB_URL}/v1/snapshots", timeout=2.5)
-        r.raise_for_status()
-        body = r.json()
-    except Exception:
-        return {"data": [], "source": "qdb", "error": "qdb_unavailable"}
-    return {"data": [_quote_row(item) for item in body.get("data") or []], "source": "qdb"}
+    body = _client.snapshots_body()
+    if body.get("error"):
+        return body
+    return {
+        "data": [_quote_row(item) for item in body.get("data") or []],
+        "source": "qdb",
+        "scale": body.get("scale", 10000),
+    }
 
 
 def _quote_row(item: dict[str, Any]) -> dict[str, Any]:
@@ -73,15 +61,8 @@ def snapshots(codes: list[str]) -> dict[str, Any]:
     symbols = [qdb_symbol(c) for c in codes if c]
     if not symbols:
         return {"data": [], "source": "qdb"}
-    try:
-        r = requests.get(
-            f"{QDB_URL}/v1/snapshots",
-            params={"symbols": ",".join(symbols)},
-            timeout=2.5,
-        )
-        r.raise_for_status()
-        body = r.json()
-    except Exception:
+    body = _client.snapshots_body(symbols)
+    if body.get("error"):
         return {"data": [], "source": "qdb", "error": "qdb_unavailable"}
     rows = [_quote_row(item) for item in body.get("data") or []]
     return {"data": rows, "source": "qdb", "scale": body.get("scale", 10000)}

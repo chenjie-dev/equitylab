@@ -10,6 +10,13 @@ import {
   BinanceChart,
   type Kline,
 } from "../../components/markets/BinanceChart";
+import { useQdbSnapshot } from "../../components/markets/useQdbSnapshot";
+
+function ashareQdbSymbol(code: string): string {
+  const c = code.replace(/\D/g, "").slice(-6).padStart(6, "0");
+  const ex = c.startsWith("5") || c.startsWith("6") || c.startsWith("9") ? "SSE" : "SZSE";
+  return `${ex}:${c}`;
+}
 
 const PRIORITY = [
   "600519",
@@ -214,7 +221,8 @@ export default function AsharePage() {
       for (const c of filtered.slice(0, 40)) want.add(c.stock_code);
     }
     void loadQuotes([...want]);
-    const id = setInterval(() => setTick((n) => n + 1), 15_000);
+    // 列表 REST 降频；当前标的 last 由 qdb WS 覆盖
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, [codes, selected, query, filtered, loadQuotes]);
 
@@ -226,6 +234,25 @@ export default function AsharePage() {
     }
     void loadQuotes([...want]);
   }, [tick, selected, query, filtered, loadQuotes]);
+
+  useQdbSnapshot(selected ? ashareQdbSymbol(selected) : null, (row) => {
+    const price = row.last;
+    setQuotes((prev) => {
+      const cur = prev[selected];
+      return {
+        ...prev,
+        [selected]: {
+          stock_code: selected,
+          short_name: cur?.short_name ?? "",
+          price,
+          change: cur?.change,
+          change_pct: cur?.change_pct,
+          volume: cur?.volume,
+          amount: cur?.amount,
+        },
+      };
+    });
+  });
 
   useEffect(() => {
     void (async () => {

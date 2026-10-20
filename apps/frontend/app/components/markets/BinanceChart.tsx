@@ -23,6 +23,11 @@ import {
   type UTCTimestamp,
   type MouseEventParams,
 } from "lightweight-charts";
+import {
+  formatLocalDateTime,
+  localToUtc,
+  timeToLocal,
+} from "../../../lib/time";
 
 export type Kline = [number, string, string, string, string, string, ...unknown[]];
 
@@ -44,15 +49,14 @@ function fmt(n: number, d = 2): string {
   return n.toPrecision(4);
 }
 
-function fmtTime(sec: number): string {
-  const d = new Date(sec * 1000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+/** K 线 openTime 为 UTC ms → 图表本地时区秒 */
+function barLocalSec(k: Kline): number {
+  return timeToLocal(Math.floor(Number(k[0]) / 1000));
 }
 
 function toCandle(k: Kline): CandlestickData {
   return {
-    time: Math.floor(Number(k[0]) / 1000) as UTCTimestamp,
+    time: barLocalSec(k) as UTCTimestamp,
     open: Number(k[1]),
     high: Number(k[2]),
     low: Number(k[3]),
@@ -63,7 +67,7 @@ function toCandle(k: Kline): CandlestickData {
 function toVolume(k: Kline): HistogramData {
   const up = Number(k[4]) >= Number(k[1]);
   return {
-    time: Math.floor(Number(k[0]) / 1000) as UTCTimestamp,
+    time: barLocalSec(k) as UTCTimestamp,
     value: Number(k[5]),
     color: up ? "rgba(14, 203, 129, 0.45)" : "rgba(246, 70, 93, 0.45)",
   };
@@ -88,7 +92,7 @@ function toMaLine(klines: Kline[], period: number): LineData[] {
     const v = vals[i];
     if (v == null) continue;
     rows.push({
-      time: Math.floor(Number(klines[i][0]) / 1000) as UTCTimestamp,
+      time: barLocalSec(klines[i]) as UTCTimestamp,
       value: v,
     });
   }
@@ -99,7 +103,7 @@ function infoFromKline(k: Kline): OhlcInfo {
   const o = Number(k[1]);
   const c = Number(k[4]);
   return {
-    time: fmtTime(Math.floor(Number(k[0]) / 1000)),
+    time: formatLocalDateTime(Number(k[0])),
     open: o,
     high: Number(k[2]),
     low: Number(k[3]),
@@ -219,8 +223,9 @@ export function BinanceChart({ klines, symbol }: Props) {
         if (rows.length) setOhlc(infoFromKline(rows[rows.length - 1]));
         return;
       }
-      const t = param.time as number;
-      const hit = rows.find((k) => Math.floor(Number(k[0]) / 1000) === t);
+      // 轴上是 timeToLocal 后的秒，反查真实 UTC 秒再对原始 K 线
+      const utcSec = localToUtc(param.time as number);
+      const hit = rows.find((k) => Math.floor(Number(k[0]) / 1000) === utcSec);
       if (hit) setOhlc(infoFromKline(hit));
     });
 

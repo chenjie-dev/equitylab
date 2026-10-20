@@ -1,30 +1,20 @@
-//! 行情只读 qdb。采集在 collector，这里不回源。
+//! 行情只读 qdb（经 equitylab-qdb）。币安/RWA K 线折叠属本服务 adapter。
 
+use equitylab_qdb::Client;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
-fn base() -> String {
-    std::env::var("QDB_URL").unwrap_or_else(|_| "http://qdb:9090".into())
+fn client() -> &'static Client {
+    static C: OnceLock<Client> = OnceLock::new();
+    C.get_or_init(Client::from_env)
 }
 
 pub async fn doc(key: &str) -> Option<Value> {
-    let url = format!("{}/v1/docs?key={}", base(), urlencoding(key));
-    let resp = reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(3)).send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    resp.json().await.ok()
+    client().get_doc(key).await
 }
 
 pub async fn klines(symbol: &str, period: &str) -> Vec<Value> {
-    let url = format!("{}/v1/klines?symbol={symbol}&period={period}", base());
-    let Ok(resp) = reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(5)).send().await else {
-        return Vec::new();
-    };
-    if !resp.status().is_success() {
-        return Vec::new();
-    }
-    let body: Value = resp.json().await.unwrap_or(json!({}));
-    body.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default()
+    client().klines(symbol, period).await
 }
 
 /// 把 qdb K 线折成币安数组：`[openTime, open, high, low, close, volume]`。
@@ -91,9 +81,18 @@ fn fold(rows: &[Value], group: usize) -> Vec<Value> {
 fn merge(chunk: &[&Value]) -> Option<Value> {
     let first = chunk.first()?;
     let last = chunk.last()?;
-    let high = chunk.iter().filter_map(|r| r.get("high").and_then(num)).fold(f64::MIN, f64::max);
-    let low = chunk.iter().filter_map(|r| r.get("low").and_then(num)).fold(f64::MAX, f64::min);
-    let volume: f64 = chunk.iter().filter_map(|r| r.get("volume").and_then(num)).sum();
+    let high = chunk
+        .iter()
+        .filter_map(|r| r.get("high").and_then(num))
+        .fold(f64::MIN, f64::max);
+    let low = chunk
+        .iter()
+        .filter_map(|r| r.get("low").and_then(num))
+        .fold(f64::MAX, f64::min);
+    let volume: f64 = chunk
+        .iter()
+        .filter_map(|r| r.get("volume").and_then(num))
+        .sum();
     Some(json!({
         "ts": first.get("ts"),
         "open": first.get("open"),
@@ -126,17 +125,6 @@ fn json_num(v: &Value) -> String {
 }
 
 fn num(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-}
-
-fn urlencoding(key: &str) -> String {
-    let mut out = String::new();
-    for b in key.bytes() {
-        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b':' {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
 }

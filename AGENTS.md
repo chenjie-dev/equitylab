@@ -16,7 +16,7 @@ Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python
 行情：collector 唯一回源 → qdb；Research / Market-Data 只读
 ```
 
-目录约定：`apps/*` 应用、`services/*` 边车（含 `collector`）、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
+目录约定：`apps/*` 应用、`services/*` 边车（含 `collector`）、`packages/qdb-{py,ts,rs}` qdb 客户端、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
 
 ## 研发布流水线（最小 Agent 团队）
 
@@ -63,7 +63,7 @@ YYYY-MM-DD-<标题>.md
 | 改架构 / Agent / RAG / 行情分层 | [`docs/2026-10-15-architecture.md`](docs/2026-10-15-architecture.md) |
 | 改 HTTP 契约或联调路径 | [`docs/2026-10-15-api.md`](docs/2026-10-15-api.md) |
 | Compose / 端口 / 环境变量 / 排障 | [`docs/2026-10-15-containers.md`](docs/2026-10-15-containers.md) |
-| 改 qdb 读写 / collector / 行情符号 | 先读同级 **`../qdb/docs/manual/index.md`**，再看 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) |
+| 改 qdb 读写 / collector / 行情符号 | 先读同级 **`../qdb/docs/manual/index.md`**，再看 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 与 [`docs/2026-10-20-qdb-client-design.md`](docs/2026-10-20-qdb-client-design.md)；协议改动优先落 `packages/qdb-*` |
 | 日志 / TraceId / Loki Grafana | [`docs/2026-10-16-observability.md`](docs/2026-10-16-observability.md) |
 | 版本与「明确不做」 | [`docs/2026-10-15-tech-stack.md`](docs/2026-10-15-tech-stack.md) |
 | 文档与注释规范 | [`docs/2026-10-15-engineering.md`](docs/2026-10-15-engineering.md) |

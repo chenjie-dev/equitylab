@@ -71,15 +71,21 @@ services:
   # 唯一回源进程：公开行情写入 qdb，其它服务只读 qdb
   collector:
     build:
-      context: ./services/collector
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/collector/Dockerfile
     image: equitylab-collector:local
     container_name: equitylab-collector
     restart: unless-stopped
     environment:
       QDB_URL: http://qdb:9090
       COLLECTOR_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300}
-      COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-1000}
+      COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
+      # 公开行情回源（仅 collector）；api.binance.com 默认，data-api 作 fallback
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
+      BINANCE_REST_FALLBACK: ${BINANCE_REST_FALLBACK:-https://data-api.binance.vision}
+      BINANCE_WS_URL: ${BINANCE_WS_URL:-wss://data-stream.binance.vision}
+      BINANCE_WS_FALLBACK: ${BINANCE_WS_FALLBACK:-wss://stream.binance.com:9443}
+      BINANCE_RWA_BASE_URL: ${BINANCE_RWA_BASE_URL:-https://www.binance.com}
     depends_on:
       qdb:
         condition: service_healthy
@@ -89,8 +95,8 @@ services:
   # 行情：Provider + Redis 短缓存；也可经网关 /api/market/* 访问
   market-data:
     build:
-      context: ./services/market-data
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/market-data/Dockerfile
     image: equitylab-market-data:local
     container_name: equitylab-market-data
     restart: unless-stopped
@@ -101,7 +107,8 @@ services:
       MARKET_PROVIDER: ${MARKET_PROVIDER:-mock}
       ALPHAFEED_API_KEY: ${ALPHAFEED_API_KEY:-}
       ALPHAFEED_BASE_URL: ${ALPHAFEED_BASE_URL:-https://api.alphafeed.org/v1}
-      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://data-api.binance.vision}
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
+      BINANCE_REST_FALLBACK: ${BINANCE_REST_FALLBACK:-https://data-api.binance.vision}
       BINANCE_WS_URL: ${BINANCE_WS_URL:-wss://data-stream.binance.vision}
       BINANCE_RWA_BASE_URL: ${BINANCE_RWA_BASE_URL:-https://www.binance.com}
       QDB_URL: ${QDB_URL:-http://qdb:9090}
@@ -119,8 +126,8 @@ services:
   # Python 研究层：RAG / 因子 / 回测（内部 8002，经网关 /api/research/*）
   research:
     build:
-      context: ./apps/research
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/research/Dockerfile
     image: equitylab-research:local
     container_name: equitylab-research
     restart: unless-stopped
@@ -186,8 +193,8 @@ services:
   # Next.js 前端：浏览器走同源 /api/chat；容器内 BFF 经 Docker DNS 访问网关
   frontend:
     build:
-      context: ./apps/frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/frontend/Dockerfile
     image: equitylab-frontend:local
     container_name: equitylab-frontend
     restart: unless-stopped

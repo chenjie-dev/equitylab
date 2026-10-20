@@ -38,7 +38,11 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector |
 | `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
 | `QDB_FEED_CODES` / `COLLECTOR_CODES` | 茅台等 | A 股采集列表 |
-| `BINANCE_REST_URL` / `BINANCE_WS_URL` | data-api / data-stream | collector 回源与公开流代理基址 |
+| `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股报价热路径间隔；币安实时走 WS→qdb |
+| 客户端包 | `packages/qdb-{py,ts,rs}` | Compose 构建 context 为仓库根以 `COPY packages/` |
+| `NEXT_PUBLIC_MARKET_WS_URL` | `ws://localhost:3002` | 前端订 qdb（经 `/qdb/ws`） |
+| `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `api.binance.com` / `data-api` | **仅** collector；backfill / WS 断流兜底 |
+| `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |

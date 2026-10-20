@@ -3,58 +3,117 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
 import requests
+from equitylab_qdb import Client, scale as qdb_scale
+from equitylab_qdb import PRICE_SCALE as SCALE
 
-QDB = os.environ.get("QDB_URL", "http://qdb:9090").rstrip("/")
 CODES = os.environ.get(
     "COLLECTOR_CODES",
     "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300",
 )
-INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "1000")) / 1000
-SCALE = 10_000
+INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "500")) / 1000
 UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.cn"}
+# 进程级 qdb 客户端（读写）；写纪律：仅本进程回源
+qdb = Client(timeout=30.0)
 
 
 def main() -> None:
     codes = [c.strip() for c in CODES.split(",") if c.strip()]
     wait_qdb()
-    print(f"collector backfill {len(codes)} symbols", flush=True)
+    # 币安：WS 推送写 qdb；A 股仍 REST 热路径；盘口/RWA/回填后台。
+    print(
+        f"collector cadence interval_ms={int(INTERVAL * 1000)} "
+        f"ashare={len(codes)} (binance=ws→qdb; ashare=rest hot-path)",
+        flush=True,
+    )
+    import markets
+
+    try:
+        markets.start_binance_ws()
+    except Exception as exc:
+        print(f"binance ws start failed: {exc}", flush=True)
+
+    threading.Thread(
+        target=_backfill_worker,
+        args=(codes, markets),
+        name="collector-backfill",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_slow_worker,
+        args=(markets,),
+        name="collector-slow",
+        daemon=True,
+    ).start()
+
+    last_vol: dict[str, int] = {}
+    cycle = 0
+    while True:
+        t0 = time.monotonic()
+        try:
+            poll_quotes(codes, last_vol)
+        except Exception as exc:
+            print(f"ashare poll failed: {exc}", flush=True)
+        # WS 健康时 noop；断流才 REST 兜底
+        try:
+            markets.poll_quotes_hot()
+        except Exception as exc:
+            print(f"binance rest fallback failed: {exc}", flush=True)
+        if cycle % 60 == 0:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            ws_ok = False
+            try:
+                ws_ok = markets.binance_ws_healthy()
+            except Exception:
+                pass
+            print(
+                f"collector tick cycle={cycle} ashare_ms={elapsed_ms} "
+                f"binance_ws={'up' if ws_ok else 'down'}",
+                flush=True,
+            )
+        cycle += 1
+        remain = INTERVAL - (time.monotonic() - t0)
+        if remain > 0:
+            time.sleep(remain)
+
+
+def _backfill_worker(codes: list[str], markets: object) -> None:
+    print(f"collector backfill {len(codes)} symbols (background)", flush=True)
     for code in codes:
         try:
             backfill(code)
         except Exception as exc:
             print(f"backfill {code} failed: {exc}", flush=True)
-    import markets
-
     try:
-        markets.backfill_markets()
+        markets.backfill_markets()  # type: ignore[attr-defined]
     except Exception as exc:
         print(f"market backfill failed: {exc}", flush=True)
-    last_vol: dict[str, int] = {}
+    print("collector backfill done", flush=True)
+
+
+def _slow_worker(markets: object) -> None:
+    """盘口/成交 docs + RWA：独立节奏，不阻塞 quotes。"""
     cycle = 0
     while True:
+        t0 = time.monotonic()
         try:
-            poll_quotes(codes, last_vol)
-            markets.poll_markets(cycle)
+            markets.poll_slow(cycle)  # type: ignore[attr-defined]
         except Exception as exc:
-            print(f"poll failed: {exc}", flush=True)
+            print(f"slow poll failed: {exc}", flush=True)
         cycle += 1
-        time.sleep(INTERVAL)
+        # ~1s 一轮；每轮只刷 1～2 个 depth，避免打爆上游
+        remain = 1.0 - (time.monotonic() - t0)
+        if remain > 0:
+            time.sleep(remain)
 
 
 def wait_qdb() -> None:
-    for _ in range(60):
-        try:
-            r = requests.get(f"{QDB}/v1/snapshots", timeout=2)
-            if r.status_code == 200:
-                return
-        except requests.RequestException:
-            pass
-        time.sleep(1)
-    raise SystemExit("qdb not ready")
+    if not qdb.wait_ready(timeout=60.0):
+        raise SystemExit("qdb not ready")
 
 
 def backfill(code: str) -> None:
@@ -209,16 +268,12 @@ def parse_sina(body: str) -> list[dict]:
 
 
 def get_klines(symbol: str, period: str) -> list[dict]:
-    r = requests.get(f"{QDB}/v1/klines", params={"symbol": symbol, "period": period}, timeout=10)
-    if r.status_code == 404:
-        return []
-    r.raise_for_status()
-    return list(r.json().get("data") or [])
+    return qdb.klines(symbol, period)
 
 
 def post(path: str, body: dict) -> None:
-    r = requests.post(f"{QDB}{path}", json=body, timeout=120)
-    r.raise_for_status()
+    """兼容 markets / binance_ws：path 如 /v1/quotes。"""
+    qdb.post_json(path, body)
 
 
 def sina_symbol(code: str) -> str:
@@ -240,7 +295,7 @@ def bar_ts(day: str) -> int:
 
 
 def scale(value) -> int:
-    return int(round(float(value) * SCALE))
+    return qdb_scale(value)
 
 
 def num(value: str) -> float:

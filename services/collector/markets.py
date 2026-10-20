@@ -9,7 +9,11 @@ import requests
 
 from main import get_klines, ohlc_trades, post, scale
 
-BINANCE = os.environ.get("BINANCE_REST_URL", "https://data-api.binance.vision").rstrip("/")
+# api.binance.com 比 data-api.binance.vision 在部分网络更稳（后者易 SSL EOF）
+BINANCE = os.environ.get("BINANCE_REST_URL", "https://api.binance.com").rstrip("/")
+BINANCE_FALLBACK = os.environ.get(
+    "BINANCE_REST_FALLBACK", "https://data-api.binance.vision"
+).rstrip("/")
 RWA = os.environ.get("BINANCE_RWA_BASE_URL", "https://www.binance.com").rstrip("/")
 BINANCE_SYMBOLS = [
     s.strip().upper()
@@ -51,12 +55,47 @@ def backfill_markets() -> None:
             print(f"rwa backfill {ticker} failed: {exc}", flush=True)
 
 
-def poll_markets(cycle: int) -> None:
-    _poll_binance_tickers()
-    if cycle % 5 == 0:
-        for symbol in BINANCE_SYMBOLS:
+def start_binance_ws() -> None:
+    """启动币安 combined stream（报价/盘口/成交 docs）；失败时 REST 兜底。"""
+    from binance_ws import start_feed
+
+    start_feed(BINANCE_SYMBOLS, post=post, scale=scale, put_docs=_put_docs)
+
+
+def binance_ws_healthy() -> bool:
+    from binance_ws import feed_healthy
+
+    return feed_healthy()
+
+
+def poll_quotes_hot() -> None:
+    """热路径 REST 兜底：WS 健康时跳过，避免覆盖推送价。"""
+    if binance_ws_healthy():
+        return
+    try:
+        _poll_binance_tickers()
+    except Exception as exc:
+        print(f"binance tickers failed: {exc}", flush=True)
+
+
+def poll_slow(cycle: int) -> None:
+    """慢路径：WS 不健康时 REST 盘口；RWA 始终轮询。"""
+    if BINANCE_SYMBOLS and not binance_ws_healthy():
+        symbol = BINANCE_SYMBOLS[cycle % len(BINANCE_SYMBOLS)]
+        try:
             _poll_binance_book(symbol)
-    _poll_rwa(cycle)
+        except Exception as exc:
+            print(f"binance book {symbol} failed: {exc}", flush=True)
+    try:
+        _poll_rwa(cycle)
+    except Exception as exc:
+        print(f"rwa poll failed: {exc}", flush=True)
+
+
+def poll_markets(cycle: int) -> None:
+    """兼容旧调用：热+慢同线程（优先用 poll_quotes_hot / poll_slow）。"""
+    poll_quotes_hot()
+    poll_slow(cycle)
 
 
 def _backfill_binance(symbol: str) -> None:
@@ -93,18 +132,48 @@ def _backfill_binance(symbol: str) -> None:
         print(f"backfill {qsym} trades={len(trades)}", flush=True)
 
 
+def _binance_get(path: str, params: dict | None = None, timeout: int = 8) -> Any:
+    """主站失败立刻换 fallback；短 timeout 避免 SSL 卡死整轮采集。"""
+    bases = [BINANCE]
+    if BINANCE_FALLBACK and BINANCE_FALLBACK != BINANCE:
+        bases.append(BINANCE_FALLBACK)
+    last_err: Exception | None = None
+    for base in bases:
+        try:
+            r = requests.get(
+                f"{base}{path}",
+                params=params or {},
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            last_err = exc
+            continue
+    assert last_err is not None
+    raise last_err
+
+
 def _poll_binance_tickers() -> None:
     import json
 
-    r = requests.get(
-        f"{BINANCE}/api/v3/ticker/24hr",
-        params={"symbols": json.dumps(BINANCE_SYMBOLS, separators=(",", ":"))},
-        timeout=15,
-    )
-    r.raise_for_status()
-    rows = r.json()
-    if isinstance(rows, dict):
-        rows = [rows]
+    rows: list[Any] = []
+    try:
+        data = _binance_get(
+            "/api/v3/ticker/24hr",
+            {"symbols": json.dumps(BINANCE_SYMBOLS, separators=(",", ":"))},
+            timeout=5,
+        )
+        rows = [data] if isinstance(data, dict) else list(data or [])
+    except Exception as batch_exc:
+        print(f"binance batch ticker failed ({batch_exc}); per-symbol", flush=True)
+        for symbol in BINANCE_SYMBOLS:
+            try:
+                one = _binance_get("/api/v3/ticker/24hr", {"symbol": symbol}, timeout=4)
+                if isinstance(one, dict):
+                    rows.append(one)
+            except Exception as exc:
+                print(f"binance ticker {symbol} failed: {exc}", flush=True)
     docs = []
     quotes = []
     now_ns = int(__import__("time").time() * 1_000_000_000)
@@ -130,20 +199,19 @@ def _poll_binance_tickers() -> None:
                 "amount": float(row.get("quoteVolume") or 0),
             }
         )
-    _put_docs(docs)
+    # 先写 quotes 推订阅，再落 ticker docs（列表 REST）
     if quotes:
         post("/v1/quotes", {"items": quotes})
+    _put_docs(docs)
 
 
 def _poll_binance_book(symbol: str) -> None:
-    depth = requests.get(f"{BINANCE}/api/v3/depth", params={"symbol": symbol, "limit": 50}, timeout=10)
-    depth.raise_for_status()
-    trades = requests.get(f"{BINANCE}/api/v3/trades", params={"symbol": symbol, "limit": 50}, timeout=10)
-    trades.raise_for_status()
+    depth = _binance_get("/api/v3/depth", {"symbol": symbol, "limit": 50}, timeout=5)
+    trades = _binance_get("/api/v3/trades", {"symbol": symbol, "limit": 50}, timeout=5)
     _put_docs(
         [
-            {"key": f"binance:depth:{symbol}", "value": depth.json()},
-            {"key": f"binance:trades:{symbol}", "value": trades.json()},
+            {"key": f"binance:depth:{symbol}", "value": depth},
+            {"key": f"binance:trades:{symbol}", "value": trades},
         ]
     )
 
@@ -268,13 +336,11 @@ def _cached_tokens() -> list[dict]:
 
 
 def _binance_klines(symbol: str, interval: str, limit: int) -> list[list]:
-    r = requests.get(
-        f"{BINANCE}/api/v3/klines",
-        params={"symbol": symbol, "interval": interval, "limit": limit},
+    data = _binance_get(
+        "/api/v3/klines",
+        {"symbol": symbol, "interval": interval, "limit": limit},
         timeout=20,
     )
-    r.raise_for_status()
-    data = r.json()
     return data if isinstance(data, list) else []
 
 
