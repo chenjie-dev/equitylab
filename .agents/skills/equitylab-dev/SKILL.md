@@ -18,7 +18,8 @@ description: >-
    - 行为 / Agent / 工具 → `docs/2026-10-15-architecture.md`（或索引中的最新架构文）  
    - HTTP 路径 / 请求体 → `docs/2026-10-15-api.md`  
    - 端口 / Compose / env → `docs/2026-10-15-containers.md`  
-   - 行情 / qdb → **先**同级 `../qdb/docs/manual/index.md`，再 `docs/2026-10-20-qdb-行情库.md`  
+   - 行情 / qdb → **先**同级 `../qdb/docs/manual/index.md`，再 `docs/2026-10-20-qdb-行情库.md` 与 `docs/2026-10-20-qdb-client-design.md`；业务访问 qdb **只经** `packages/qdb-*`  
+
 3. 确认改动落在哪一层，**只改该层及必要契约**：
 
 | 改动意图 | 目录 |
@@ -28,8 +29,9 @@ description: >-
 | RAG / 因子 / 回测 | `apps/research` |
 | 限流、反代、鉴权 | `services/gateway` |
 | Quote/Bars、Provider、缓存 | `services/market-data`（币安/RWA 读 qdb） |
-| 采集写入 qdb | `services/collector` |
-| 行情库用法 | **权威**：`../qdb/docs/manual/*`；本仓落点：`docs/2026-10-20-qdb-行情库.md`（过时则对齐 qdb 后更新） |
+| 采集写入 qdb | `services/collector`（经 `equitylab_qdb`，禁止业务直连 `/v1/*`） |
+| qdb 客户端 | `packages/qdb-{py,ts,rs}` — 新用法先扩包 |
+| 行情库用法 | **权威**：`../qdb/docs/manual/*`；本仓落点：`docs/2026-10-20-qdb-行情库.md` + client-design |
 | 表结构引导 | `infra/postgres/init.sql`（已有卷不会自动重跑） |
 
 ## 实现规则
@@ -40,7 +42,8 @@ description: >-
 - **缓存与限流**：报价写缓存默认 TTL 3s；网关限流按 IP 滑动窗口——改默认值时更新 `.env.example` 与 `docs/2026-10-15-containers.md`。  
 - **前缀代理**：网关对 `/api/market`、`/api/research` 剥前缀；`/api/chat` 保留完整路径。改路径时两端一起改并更新 `docs/2026-10-15-api.md`。  
 - **docs 命名**：`docs/` 下新建文档必须 `YYYY-MM-DD-<标题>.md`（创建日）；见根目录 `AGENTS.md`。  
-- **qdb 最新优先**：动 collector / `qdb_read` / ashare 读路径前，对照 `../qdb/docs/manual/server.md` 与 `limits.md`；发现契约变更则改代码并同步本仓 qdb 文档，禁止沿用过时路径。
+- **qdb 最新优先**：动 collector / `qdb_read` / ashare 读路径前，对照 `../qdb/docs/manual/server.md` 与 `limits.md`；发现契约变更则改代码并同步本仓 qdb 文档，禁止沿用过时路径。  
+- **qdb 只经客户端**：业务层禁止直连 `QDB_URL`；读写一律 `packages/qdb-*`（见 `AGENTS.md` 硬性约束 §8）。
 
 ## 验证（completion：至少一条相关冒烟变绿）
 

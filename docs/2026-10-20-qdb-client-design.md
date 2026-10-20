@@ -6,6 +6,13 @@
 
 把散落在 collector / market-data / research / frontend 的 qdb HTTP·WS 调用收成 **三套独立包**（Python / TypeScript / Rust），同一契约、读写齐全，方便以后复用与对齐手册变更。
 
+## 硬性约定（后续一律遵守）
+
+- **以后增加任何 qdb 用法**（新交易所、新页面、新 sidecar、脚本）**都必须走这些 client**。  
+- **业务代码禁止直连** qdb：不得在业务层手写 `QDB_URL` + `/v1/quotes|trades|docs|snapshots|klines|ws`。  
+- 缺方法 / 缺语言绑定：先改 `packages/qdb-*`，再改调用方。  
+- 写路径调用纪律不变：只有 collector（及其明确授权的采集进程）调用写 API；读路径只用读表面。
+
 ## Goals
 
 - 读：`GET /v1/snapshots`、`/v1/klines`、`/v1/docs`；`GET /v1/ws`（SELECT … SUBSCRIBE）
