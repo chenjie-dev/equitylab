@@ -13,8 +13,10 @@
 | 编排层 | TypeScript + Express（LangGraph 预留） | Node **20+**（镜像 alpine） | Agent 路由、工具调用 |
 | 研究层 | Python + FastAPI | Python **3.12** | RAG/因子/回测（确定性计算） |
 | 网关 | Rust + Axum | 镜像 `rust:1-bookworm` / Axum **0.8** | 鉴权、限流、反代 |
-| 行情 | Rust + Axum | 同上 | Quote/Bars、缓存、Provider |
-| 存储 | PostgreSQL / Redis / Qdrant | PG **16** / Redis **7** / Qdrant **1.13** | 结构化数据、缓存、向量 |
+| 行情 | Rust + Axum | 同上 | Quote/Bars、读 qdb、Provider |
+| 采集 | Python | 3.12 | `services/collector` → qdb |
+| 行情库 | qdb（同级仓） | 见 `../qdb` | Compose 构建；`QDB_FEED=0` |
+| 存储 | PostgreSQL / Redis / Qdrant / qdb | PG **16** / Redis **7** / Qdrant **1.13** | 结构化、缓存、向量、行情 |
 
 前端 UI 规划：Tailwind + shadcn/ui、Zustand、ECharts / Lightweight Charts、Vercel AI SDK（流式）；MVP 为精简对话壳。
 

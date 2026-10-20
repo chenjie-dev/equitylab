@@ -7,8 +7,8 @@
 
 ```text
 前端 (Next.js/TS) → Rust 网关 → TS 编排层 → Python 研究层 → 外部模型 API
-                         ↘ Rust 行情服务
-存储：PostgreSQL + Redis + Qdrant
+                         ↘ Rust 行情服务（只读 qdb）
+采集：collector → qdb；存储：PostgreSQL + Redis + Qdrant + qdb
 ```
 
 | 层级 | 目录 | 技术 |
@@ -18,8 +18,9 @@
 | 研究层 | `apps/research` | Python 3.12 + FastAPI + Qdrant 探测 |
 | MCP | `apps/mcp-server` | TypeScript + MCP SDK（stdio） |
 | 网关 | `services/gateway` | Rust + Axum |
-| 行情 | `services/market-data` | Rust + Axum |
-| 存储 | Compose 服务 | PostgreSQL / Redis / Qdrant |
+| 行情 | `services/market-data` | Rust + Axum（币安 / RWA 读 qdb） |
+| 采集 | `services/collector` | Python（唯一回源 → qdb） |
+| 存储 | Compose 服务 | PostgreSQL / Redis / Qdrant / qdb |
 
 ## 快速启动
 
@@ -40,6 +41,7 @@ docker compose up -d --build
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:16379`（容器内仍为 6379） |
 | Qdrant | http://localhost:6333 |
+| qdb | http://localhost:9090（`GET /v1/snapshots`） |
 
 冒烟：
 
@@ -59,6 +61,7 @@ curl -s -X POST http://localhost:3000/api/chat \
 | [架构与 Agent](docs/2026-10-15-architecture.md) | 链路、工具、RAG、模型路由 |
 | [API 参考](docs/2026-10-15-api.md) | HTTP 契约与示例 |
 | [容器组与端口](docs/2026-10-15-containers.md) | Compose、环境变量、排障 |
+| [qdb 行情库](docs/2026-10-20-qdb-行情库.md) | 本仓落点；最新契约见同级 `../qdb/docs/manual/` |
 | [工程约定](docs/2026-10-15-engineering.md) | **文档与代码注释规范** |
 | [立项改造说明](docs/2026-10-15-migration.md) | 去 Java 记录 |
 | [Agent Skills 目录](docs/2026-10-15-agent-skills-catalog.md) | 栈相关高热 skills 推荐 |
@@ -72,7 +75,7 @@ curl -s -X POST http://localhost:3000/api/chat \
 
 1. 私有研报本地向量化（Qdrant），不外泄原文到不可信渠道。  
 2. 因子/回测在 Python 确定性引擎执行，模型只做规划与解释。  
-3. 实时行情经 Redis 缓存 + 限流；盘中推送独立于 MCP。  
+3. 行情经 collector → qdb；业务层只读；Redis 边路缓存 + 网关限流；盘中 WS 不进 MCP。  
 4. 多模型路由按任务复杂度控成本（见 `docs/2026-10-15-architecture.md`）。
 
 ## MVP 已落地 / 后续

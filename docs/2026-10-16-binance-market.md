@@ -10,7 +10,7 @@
 | 仅市场数据 URL（REST / WS，免 Key） | https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/market_data_only |
 | 现货 REST / 市场流（完整规范） | 从文档中心进入 **Spot → REST API / WebSocket Streams** |
 
-EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 写入 qdb，market-data 只读 qdb。
+EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 写入 qdb，market-data 只读 qdb。本仓落点见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**改读写前先核对同级 `../qdb/docs/manual/` 最新手册**，保持用法不滞后。
 
 - 采集回源：`https://data-api.binance.vision`（`BINANCE_REST_URL`，仅 collector）
 - 公开流：`wss://data-stream.binance.vision`（`BINANCE_WS_URL`，WebSocket 仍是直连代理，不进 qdb）

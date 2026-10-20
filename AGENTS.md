@@ -12,10 +12,11 @@ EquityLab 是面向量化研究的 **多语言 AI Agent 平台**（非 Java 单�
 ```text
 Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python)
                               ↘ Market-Data (Rust)
-存储：PostgreSQL + Redis + Qdrant；模型走外部 API（无本地 vLLM）
+存储：PostgreSQL + Redis + Qdrant + qdb；模型走外部 API（无本地 vLLM）
+行情：collector 唯一回源 → qdb；Research / Market-Data 只读
 ```
 
-目录约定：`apps/*` 应用、`services/*` 边车、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
+目录约定：`apps/*` 应用、`services/*` 边车（含 `collector`）、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
 
 ## 研发布流水线（最小 Agent 团队）
 
@@ -62,6 +63,7 @@ YYYY-MM-DD-<标题>.md
 | 改架构 / Agent / RAG / 行情分层 | [`docs/2026-10-15-architecture.md`](docs/2026-10-15-architecture.md) |
 | 改 HTTP 契约或联调路径 | [`docs/2026-10-15-api.md`](docs/2026-10-15-api.md) |
 | Compose / 端口 / 环境变量 / 排障 | [`docs/2026-10-15-containers.md`](docs/2026-10-15-containers.md) |
+| 改 qdb 读写 / collector / 行情符号 | 先读同级 **`../qdb/docs/manual/index.md`**，再看 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) |
 | 日志 / TraceId / Loki Grafana | [`docs/2026-10-16-observability.md`](docs/2026-10-16-observability.md) |
 | 版本与「明确不做」 | [`docs/2026-10-15-tech-stack.md`](docs/2026-10-15-tech-stack.md) |
 | 文档与注释规范 | [`docs/2026-10-15-engineering.md`](docs/2026-10-15-engineering.md) |
@@ -76,7 +78,9 @@ YYYY-MM-DD-<标题>.md
 4. **因子 / 回测**在研究层确定性引擎执行；模型只做规划与解释。不要把 IC/回测指标假装成已接 alphalens 的真实结果——stub 须标明 `demo` / MVP。  
 5. **工具循环**：编排层最多 5 轮、单工具超时 ≤30s（立项约定）。  
 6. **报价缓存** TTL≈3s；盘中 WebSocket 推送不进 MCP（后续独立进程）。  
-7. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。
+7. **行情只经 qdb**：`services/collector` 唯一回源；Research / Market-Data 读路径不直连公开上游。Compose 内 `QDB_FEED=0`。  
+8. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。  
+9. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。
 
 ## 本地运行（环境即真相）
 

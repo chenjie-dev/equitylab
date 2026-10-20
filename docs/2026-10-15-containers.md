@@ -22,7 +22,7 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 
 卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
 
-qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口。`collector` 是唯一回源方：A 股、币安现货、Ondo 代币化美股写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data 只读 `http://qdb:9090`。
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`）。`collector` 是唯一回源方：A 股、币安现货、Ondo 代币化美股写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data 只读 `http://qdb:9090`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 
@@ -35,7 +35,9 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口。`collector` 
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
-| `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | 研究层与 market-data 读行情 |
+| `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector |
+| `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
+| `QDB_FEED_CODES` / `COLLECTOR_CODES` | 茅台等 | A 股采集列表 |
 | `BINANCE_REST_URL` / `BINANCE_WS_URL` | data-api / data-stream | collector 回源与公开流代理基址 |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
@@ -51,10 +53,11 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口。`collector` 
 cp .env.example .env
 docker compose up -d --build
 docker compose ps
-docker compose logs -f gateway orchestrator research market-data
+docker compose logs -f gateway orchestrator research market-data collector qdb
 
 curl http://localhost:3000/health
-curl http://localhost:3002/quotes/600519.SH
+curl -s 'http://localhost:9090/v1/snapshots?symbols=SSE:600519' | head -c 200
+curl -s 'http://localhost:3000/api/market/binance/ticker/24hr?symbol=BTCUSDT' | head -c 200
 curl -X POST http://localhost:3000/api/chat \
   -H 'content-type: application/json' \
   -d '{"message":"茅台现在多少钱？"}'
@@ -74,6 +77,8 @@ docker compose down
 | `network … active endpoints` | 旧容器（如历史 `equitylab-api`）占网 | `docker rm -f <容器>` 后重试 |
 | market-data 日志 Redis warn | 启动瞬间 Redis 未就绪或 URL 错 | 检查 `REDIS_URL=redis://redis:6379`；无缓存仍可返回报价 |
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
+| 行情空 / 只有几根 K 线 | collector 未写或 late-tick | `logs collector`；见 [qdb 排障](./2026-10-20-qdb-行情库.md) |
+| collector 解析不了 `qdb` | 容器网络陈旧 | `docker compose up -d --force-recreate collector` |
 
 ## Schema 初始化
 

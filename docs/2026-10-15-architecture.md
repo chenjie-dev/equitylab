@@ -10,7 +10,7 @@ EquityLab 面向量化研究与投资分析：用自然语言完成研报问答�
 |---|---|
 | 私有研报不外泄 | 向量化进 Qdrant；外呼模型只传必要上下文（后续加固） |
 | 因子/回测依赖 Python | `apps/research` 确定性引擎；模型只做规划与解释 |
-| 高频行情 | Market-Data + Redis TTL≈3s + 网关限流 |
+| 高频行情 | collector → qdb；Market-Data / Research 只读；网关限流；Redis TTL≈3s 作边路缓存 |
 | 成本控制 | 多模型路由（规划）；无 Key 时仍可跑工具链 |
 
 **明确不做**：本地 vLLM；真实券商下单；Java 业务单体。
@@ -29,8 +29,9 @@ Gateway (Rust / Axum)  ──鉴权·限流·反代（MVP：限流+反代）
         │
         └──────────────► Market-Data / Research（路径前缀代理）
 
-存储：PostgreSQL（会话/审计/K线） + Redis（报价缓存） + Qdrant（研报向量，RAG 后续）
+存储：PostgreSQL（会话/审计） + Redis（报价边路缓存） + Qdrant（研报向量） + qdb（行情库）
 模型：外部 API（OpenAI / Claude / DeepSeek / Azure / 火山），无本地推理层
+采集：`services/collector` 唯一回源 → qdb；详见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)
 ```
 
 ### 典型请求链路
@@ -50,8 +51,9 @@ Gateway (Rust / Axum)  ──鉴权·限流·反代（MVP：限流+反代）
 | 编排层 | `apps/orchestrator` | TypeScript + Express | Agent 粗路由、工具注册、超时与轮次控制 |
 | 研究层 | `apps/research` | Python 3.12 + FastAPI | RAG / 因子 / 回测（当前 stub） |
 | 网关 | `services/gateway` | Rust + Axum | 统一入口、限流、反代 |
-| 行情 | `services/market-data` | Rust + Axum | Quote/Bars、Provider、缓存 |
-| 存储 | Compose | PG / Redis / Qdrant | 结构化数据、缓存、向量 |
+| 行情 | `services/market-data` | Rust + Axum | Quote/Bars、币安/RWA 只读 qdb、边路缓存 |
+| 采集 | `services/collector` | Python | 公开源写入 qdb（唯一回源） |
+| 存储 | Compose | PG / Redis / Qdrant / qdb | 结构化、缓存、向量、行情库 |
 
 ## 4. Agent 与 Function Call
 
@@ -92,11 +94,12 @@ MVP：`POST /rag/search` 返回演示切片，尚未接 Embedding / Qdrant。
 
 | 类型 | 协议 | 说明 |
 |---|---|---|
-| 实时快照 | REST + Redis | MCP/FC 可调；TTL 3s |
-| 历史 K 线 | REST → PG | 表 `klines` 已建；异步落库后续 |
-| 盘中推送 | WebSocket | 独立进程，不进 MCP（后续） |
+| 写入 | collector → qdb HTTP | `POST /v1/quotes` · `/trades` · `/docs`；Compose 内 `QDB_FEED=0` |
+| 实时快照 | GET qdb `/v1/snapshots` 或 `/v1/docs` | A 股 / 币安 ticker；Redis TTL≈3s 仍可做边路 |
+| 历史 K 线 | GET qdb `/v1/klines` | 符号 `SSE:` / `SZSE:` / `BINANCE:` / `ONDO:`；读路径可折叠周期 |
+| 盘中推送 | WebSocket | 币安公开流仍直连 market-data，不进 qdb / MCP |
 
-Provider Adapter：`MarketDataProvider` trait；`mock` / `binance` / `alphafeed`。多交易所代码在 `exchanges/`（币安深模块：`/exchanges/binance`，兼容 `/binance`）；TickFlow / OKX / 熔断后续。
+Provider Adapter：`MarketDataProvider` trait；`mock` / `binance` / `alphafeed`。`MARKET_PROVIDER=binance` 时统一 `/quotes` `/bars` 也读 qdb。A 股见 Research `/ashare`。总览：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。
 
 ## 7. 多模型路由（规划）
 
@@ -116,5 +119,6 @@ Provider Adapter：`MarketDataProvider` trait；`mock` / `binance` / `alphafeed`
 
 - [API 参考](./2026-10-15-api.md)  
 - [容器与端口](./2026-10-15-containers.md)  
+- [qdb 行情库](./2026-10-20-qdb-行情库.md)  
 - [技术栈版本](./2026-10-15-tech-stack.md)  
 - [工程注释约定](./2026-10-15-engineering.md)
