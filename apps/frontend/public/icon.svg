@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="EquityLab">
+  <!-- ???????? EL??? + ??? -->
+  <rect width="64" height="64" rx="8" fill="#181a20"/>
+  <g fill="#f0b90b">
+    <path d="M11 15h23v5.4H17.6v5.8H31v5.2H17.6v6H34V45H11z"/>
+    <path d="M38 15h6.6v24.6H55V45H38z"/>
+  </g>
+</svg>

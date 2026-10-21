@@ -18,7 +18,7 @@ export function SiteHeader() {
     <header className="site-header">
       <div className="site-header-inner">
         <Link href="/" className="brand">
-          <span className="brand-mark" aria-hidden />
+          <img className="brand-mark" src="/icon.svg" alt="" width={22} height={22} />
           <span className="brand-name">EquityLab</span>
         </Link>
         <nav className="site-nav" aria-label="主导航">
