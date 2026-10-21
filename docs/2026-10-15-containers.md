@@ -61,6 +61,8 @@ docker compose logs -f gateway orchestrator research market-data collector qdb
 
 curl http://localhost:3000/health
 curl -s 'http://localhost:9090/v1/snapshots?symbols=SSE:600519' | head -c 200
+# SQL 客户端：见 docs/2026-10-21-qdb-容器内查询.md
+# docker compose exec -it qdb qdb-client /var/lib/qdb
 curl -s 'http://localhost:3000/api/market/binance/ticker/24hr?symbol=BTCUSDT' | head -c 200
 curl -X POST http://localhost:3000/api/chat \
   -H 'content-type: application/json' \
