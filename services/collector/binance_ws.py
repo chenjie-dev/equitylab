@@ -57,6 +57,8 @@ class BinanceWsFeed:
                 "ticker_dirty": False,
                 "trades": deque(maxlen=50),
                 "trades_dirty": False,
+                # 待写入 /v1/trades，驱动 qdb klines（docs 里的 trades 不够）
+                "qdb_trades": [],
             }
             for s in self.symbols
         }
@@ -212,6 +214,18 @@ class BinanceWsFeed:
                 }
             )
             st["trades_dirty"] = True
+            if price > 0 and ts_ms > 0:
+                # 币安 qty 常 <1；至少记 1，避免 volume=0 被上游丢掉
+                vol_i = max(1, int(round(qty * 1e8)))
+                st["qdb_trades"].append(
+                    {
+                        "exchange": "BINANCE",
+                        "code": symbol,
+                        "ts_ns": ts_ms * 1_000_000,
+                        "price": self._scale(price),
+                        "volume": vol_i,
+                    }
+                )
 
     def _on_ticker(self, data: dict) -> None:
         symbol = str(data.get("s") or "").upper()
@@ -283,9 +297,13 @@ class BinanceWsFeed:
 
     def _flush_quotes(self) -> None:
         items: list[dict] = []
+        trade_items: list[dict] = []
         now_ns = int(time.time() * 1_000_000_000)
         with self._lock:
             for symbol, st in self._state.items():
+                if st["qdb_trades"]:
+                    trade_items.extend(st["qdb_trades"])
+                    st["qdb_trades"] = []
                 if not st["quote_dirty"]:
                     continue
                 last = float(st["last"] or 0)
@@ -310,6 +328,14 @@ class BinanceWsFeed:
                         "amount": st["amount"],
                     }
                 )
+        if trade_items:
+            # 限长，避免断线重连后积压打爆 qdb
+            if len(trade_items) > 500:
+                trade_items = trade_items[-500:]
+            try:
+                self._post("/v1/trades", {"items": trade_items})
+            except Exception as exc:
+                print(f"binance ws trade flush failed: {exc}", flush=True)
         if items:
             try:
                 self._post("/v1/quotes", {"items": items})

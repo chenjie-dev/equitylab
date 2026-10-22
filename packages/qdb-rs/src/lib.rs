@@ -97,11 +97,12 @@ impl Client {
     }
 
     pub async fn klines(&self, symbol: &str, period: &str) -> Vec<Value> {
+        // 写入高峰时 qdb 全量 klines 可能 >5s；超时吞错会让图表面空/假旧
         let Ok(resp) = self
             .http
             .get(format!("{}/v1/klines", self.base))
             .query(&[("symbol", symbol), ("period", period)])
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
         else {

@@ -37,6 +37,10 @@ def main() -> None:
     except Exception as exc:
         print(f"binance ws start failed: {exc}", flush=True)
     try:
+        markets.start_binance_kline_feed()
+    except Exception as exc:
+        print(f"binance kline feed start failed: {exc}", flush=True)
+    try:
         markets.start_rwa_feed()
     except Exception as exc:
         print(f"rwa feed start failed: {exc}", flush=True)

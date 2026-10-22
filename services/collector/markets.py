@@ -51,12 +51,25 @@ RWA_KLINE_INTERVALS = [
     ).split(",")
     if s.strip()
 ]
+# 现货 K 线：WS 不订 kline；须 REST 持续补齐（读路径 map 到这些 period）
+BINANCE_KLINE_INTERVALS = [
+    s.strip()
+    for s in os.environ.get(
+        "BINANCE_KLINE_INTERVALS", "1m,5m,15m,1h,4h,1d"
+    ).split(",")
+    if s.strip()
+]
+# 持续刷新只拉最近若干根，避免打爆 qdb（全量靠启动 backfill）
+BINANCE_KLINE_LIMIT = max(5, int(os.environ.get("BINANCE_KLINE_LIMIT", "30")))
+BINANCE_KLINE_REFRESH = max(2, int(os.environ.get("BINANCE_KLINE_REFRESH", "8")))
+BINANCE_KLINE_PAUSE = float(os.environ.get("BINANCE_KLINE_PAUSE_SEC", "1.0"))
 _BOARD: dict[str, dict[str, Any]] = {}
 _BOARD_LOCK = threading.Lock()
 _rwa_cursor = 0
 _last_catalog_at = 0.0
 _rwa_kline_cursor = 0
 _rwa_kline_interval_i = 0
+_binance_kline_i = 0
 
 
 def backfill_markets() -> None:
@@ -95,6 +108,15 @@ def start_rwa_kline_feed() -> None:
     threading.Thread(target=_rwa_kline_worker, name="collector-rwa-kline", daemon=True).start()
 
 
+def start_binance_kline_feed() -> None:
+    """独立线程：现货 REST K 线持续写入 qdb（补 WS 不推 kline 的缺口）。"""
+    if not BINANCE_SYMBOLS or not BINANCE_KLINE_INTERVALS:
+        return
+    threading.Thread(
+        target=_binance_kline_worker, name="collector-binance-kline", daemon=True
+    ).start()
+
+
 def binance_ws_healthy() -> bool:
     from binance_ws import feed_healthy
 
@@ -128,37 +150,95 @@ def poll_markets(cycle: int) -> None:
 
 
 def _backfill_binance(symbol: str) -> None:
+    """首次回填各原生周期；之后由 start_binance_kline_feed 持续刷新。"""
     qsym = f"BINANCE:{symbol}"
-    have_15 = {int(row["ts"]) for row in get_klines(qsym, "15m")}
-    have_1d = {int(row["ts"]) for row in get_klines(qsym, "1d")}
-    minute = _binance_klines(symbol, "15m", 500)
-    daily = _binance_klines(symbol, "1d", 300)
-    covered = {int(row[0]) // 86_400_000 for row in minute}
-    events: list[tuple[int, list]] = []
-    for row in daily:
-        ts = int(row[0]) * 1_000_000
-        if int(row[0]) // 86_400_000 in covered or ts in have_1d:
+    total = 0
+    for interval in BINANCE_KLINE_INTERVALS:
+        limit = 500 if interval in ("1m", "5m", "15m") else 300
+        n = _store_binance_klines(symbol, interval, limit=limit, only_missing=True)
+        total += n
+    if total:
+        print(f"backfill {qsym} trades={total}", flush=True)
+
+
+def _binance_kline_worker() -> None:
+    global _binance_kline_i
+    n_sym = len(BINANCE_SYMBOLS)
+    n_iv = len(BINANCE_KLINE_INTERVALS)
+    print(
+        f"binance kline feed symbols={n_sym} intervals={BINANCE_KLINE_INTERVALS} "
+        f"limit={BINANCE_KLINE_LIMIT}",
+        flush=True,
+    )
+    while True:
+        if not n_sym or not n_iv:
+            time.sleep(5.0)
             continue
-        events.append((ts, row))
-    for row in minute:
+        symbol = BINANCE_SYMBOLS[_binance_kline_i % n_sym]
+        interval = BINANCE_KLINE_INTERVALS[(_binance_kline_i // n_sym) % n_iv]
+        _binance_kline_i += 1
+        try:
+            n = _store_binance_klines(
+                symbol,
+                interval,
+                limit=BINANCE_KLINE_LIMIT,
+                only_missing=False,
+                keep_last=BINANCE_KLINE_REFRESH,
+            )
+            if n and _binance_kline_i % 32 == 0:
+                print(
+                    f"binance kline refresh {symbol}:{interval} trades={n}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"binance kline {symbol}:{interval} failed: {exc}", flush=True)
+        time.sleep(BINANCE_KLINE_PAUSE)
+
+
+def _store_binance_klines(
+    symbol: str,
+    interval: str,
+    *,
+    limit: int,
+    only_missing: bool,
+    keep_last: int | None = None,
+) -> int:
+    """把 REST K 线写成 qdb trades（驱动 klines 聚合）。"""
+    qsym = f"BINANCE:{symbol}"
+    rows = _binance_klines(symbol, interval, limit)
+    if not rows:
+        return 0
+    if keep_last is not None and keep_last > 0:
+        rows = rows[-keep_last:]
+    have: set[int] = set()
+    if only_missing:
+        have = {int(row["ts"]) for row in get_klines(qsym, interval)}
+    trades: list[dict] = []
+    for row in rows:
         ts = int(row[0]) * 1_000_000
-        if ts in have_15:
+        if only_missing and ts in have:
             continue
-        events.append((ts, row))
-    events.sort(key=lambda item: item[0])
-    trades = []
-    for ts, row in events:
         trades.extend(
             ohlc_trades(
                 "BINANCE",
                 symbol,
                 ts,
-                {"open": row[1], "high": row[2], "low": row[3], "close": row[4], "volume": row[5]},
+                {
+                    "open": row[1],
+                    "high": row[2],
+                    "low": row[3],
+                    "close": row[4],
+                    "volume": row[5],
+                },
             )
         )
-    if trades:
-        post("/v1/trades", {"items": trades})
-        print(f"backfill {qsym} trades={len(trades)}", flush=True)
+    if not trades:
+        return 0
+    # 分批，避免单请求过大
+    batch = 800
+    for i in range(0, len(trades), batch):
+        post("/v1/trades", {"items": trades[i : i + batch]})
+    return len(trades)
 
 
 def _binance_get(path: str, params: dict | None = None, timeout: int = 8) -> Any:
