@@ -23,6 +23,47 @@ DOC_FLUSH_MS = float(os.environ.get("BINANCE_WS_DOC_FLUSH_MS", "200"))
 STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "8"))
 
 
+def _env_flag(name: str, default: str = "1") -> bool:
+    return os.environ.get(name, default).strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+# 1=写入 /v1/trades|/v1/quotes；0=只写 docs（避免引擎锁饿死 /v1/klines）
+WRITE_QDB_TRADES = _env_flag("BINANCE_WS_WRITE_TRADES", "1")
+WRITE_QDB_QUOTES = _env_flag("BINANCE_WS_WRITE_QUOTES", "1")
+
+
+def _http_proxy_kwargs() -> dict[str, Any]:
+    """websocket-client 不读环境代理；优先 COLLECTOR_HTTPS_PROXY（宿主机出网旁路）。"""
+    raw = (
+        os.environ.get("COLLECTOR_HTTPS_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or ""
+    ).strip()
+    if not raw:
+        return {}
+    # http://host:port 或 host:port
+    s = raw.split("://", 1)[-1]
+    if "@" in s:
+        s = s.rsplit("@", 1)[-1]
+    host, _, port_s = s.partition(":")
+    port_s = port_s.split("/", 1)[0]
+    if not host or not port_s.isdigit():
+        return {}
+    return {
+        "http_proxy_host": host,
+        "http_proxy_port": int(port_s),
+        "proxy_type": "http",
+    }
+
+
 class BinanceWsFeed:
     """combined stream: bookTicker + trade + depth20@100ms + ticker → quotes/docs。"""
 
@@ -127,7 +168,12 @@ class BinanceWsFeed:
                     connected = True
                     backoff = 1.0
                     # ping 由库处理；Binance 约 3min 发 ping
-                    app.run_forever(ping_interval=60, ping_timeout=20)
+                    # Docker Desktop 出网 TLS 异常时走宿主机 CONNECT 代理（见 HTTPS_PROXY）
+                    app.run_forever(
+                        ping_interval=60,
+                        ping_timeout=20,
+                        **_http_proxy_kwargs(),
+                    )
                 except Exception as exc:
                     print(f"binance ws {base} failed: {exc}", flush=True)
                 if self._stop.is_set():
@@ -214,7 +260,7 @@ class BinanceWsFeed:
                 }
             )
             st["trades_dirty"] = True
-            if price > 0 and ts_ms > 0:
+            if WRITE_QDB_TRADES and price > 0 and ts_ms > 0:
                 # 币安 qty 常 <1；至少记 1，避免 volume=0 被上游丢掉
                 vol_i = max(1, int(round(qty * 1e8)))
                 st["qdb_trades"].append(
@@ -272,11 +318,14 @@ class BinanceWsFeed:
         st = self._state.get(symbol)
         if not st:
             return
+        # depth20 流已限档；再裁一次防止异常大包进 docs
+        bids = (data.get("bids") or [])[:20]
+        asks = (data.get("asks") or [])[:20]
         with self._lock:
             st["depth"] = {
                 "lastUpdateId": data.get("lastUpdateId"),
-                "bids": data.get("bids") or [],
-                "asks": data.get("asks") or [],
+                "bids": bids,
+                "asks": asks,
             }
             st["depth_dirty"] = True
 
@@ -328,7 +377,7 @@ class BinanceWsFeed:
                         "amount": st["amount"],
                     }
                 )
-        if trade_items:
+        if trade_items and WRITE_QDB_TRADES:
             # 限长，避免断线重连后积压打爆 qdb
             if len(trade_items) > 500:
                 trade_items = trade_items[-500:]
@@ -336,7 +385,7 @@ class BinanceWsFeed:
                 self._post("/v1/trades", {"items": trade_items})
             except Exception as exc:
                 print(f"binance ws trade flush failed: {exc}", flush=True)
-        if items:
+        if WRITE_QDB_QUOTES and items:
             try:
                 self._post("/v1/quotes", {"items": items})
             except Exception as exc:

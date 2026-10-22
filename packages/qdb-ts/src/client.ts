@@ -86,8 +86,11 @@ export class Client {
   async klines(
     symbol: string,
     period: string,
+    opts?: { limit?: number; endTimeMs?: number },
   ): Promise<Record<string, unknown>[]> {
     const q = new URLSearchParams({ symbol, period });
+    if (opts?.limit != null) q.set("limit", String(opts.limit));
+    if (opts?.endTimeMs != null) q.set("endTime", String(opts.endTimeMs));
     const r = await fetch(`${this.baseUrl}/v1/klines?${q}`, {
       signal: AbortSignal.timeout(this.timeoutMs),
     });

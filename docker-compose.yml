@@ -80,12 +80,34 @@ services:
       QDB_URL: http://qdb:9090
       COLLECTOR_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300}
       COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
+      COLLECTOR_SKIP_ASHARE: ${COLLECTOR_SKIP_ASHARE:-0}
       # 公开行情回源（仅 collector）；api.binance.com 默认，data-api 作 fallback
-      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
-      BINANCE_REST_FALLBACK: ${BINANCE_REST_FALLBACK:-https://data-api.binance.vision}
+      # 国内/部分 Docker Desktop 网络：api.binance.com 常超时，默认走 vision
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://data-api.binance.vision}
+      BINANCE_REST_FALLBACK: ${BINANCE_REST_FALLBACK:-https://api.binance.com}
       BINANCE_WS_URL: ${BINANCE_WS_URL:-wss://data-stream.binance.vision}
       BINANCE_WS_FALLBACK: ${BINANCE_WS_FALLBACK:-wss://stream.binance.com:9443}
       BINANCE_RWA_BASE_URL: ${BINANCE_RWA_BASE_URL:-https://www.binance.com}
+      # 仅币安/RWA 使用（markets._upstream_proxies）；勿写成全局 HTTP_PROXY
+      COLLECTOR_HTTPS_PROXY: ${COLLECTOR_HTTPS_PROXY:-}
+      COLLECTOR_RWA_PROXY: ${COLLECTOR_RWA_PROXY:-}
+
+      RWA_WORKERS: ${RWA_WORKERS:-24}
+      RWA_CHUNK: ${RWA_CHUNK:-48}
+      RWA_KLINE_CHUNK: ${RWA_KLINE_CHUNK:-24}
+      RWA_KLINE_WORKERS: ${RWA_KLINE_WORKERS:-16}
+      # 过密 REST K 线回填会占住 qdb 引擎锁；可按需加大间隔或只留 1m
+      BINANCE_KLINE_INTERVALS: ${BINANCE_KLINE_INTERVALS:-1m,5m,15m,1h,4h,1d}
+      BINANCE_KLINE_PAUSE_SEC: ${BINANCE_KLINE_PAUSE_SEC:-1.0}
+      BINANCE_KLINE_LIMIT: ${BINANCE_KLINE_LIMIT:-180}
+      RWA_KLINE_LIMIT: ${RWA_KLINE_LIMIT:-200}
+      BINANCE_KLINE_REFRESH: ${BINANCE_KLINE_REFRESH:-8}
+      BINANCE_KLINE_BACKFILL: ${BINANCE_KLINE_BACKFILL:-0}
+      BINANCE_KLINE_WRITE_TRADES: ${BINANCE_KLINE_WRITE_TRADES:-0}
+      BINANCE_WS_WRITE_TRADES: ${BINANCE_WS_WRITE_TRADES:-1}
+      BINANCE_WS_WRITE_QUOTES: ${BINANCE_WS_WRITE_QUOTES:-1}
+      BINANCE_WS_QUOTE_FLUSH_MS: ${BINANCE_WS_QUOTE_FLUSH_MS:-50}
+      BINANCE_WS_DOC_FLUSH_MS: ${BINANCE_WS_DOC_FLUSH_MS:-200}
     depends_on:
       qdb:
         condition: service_healthy

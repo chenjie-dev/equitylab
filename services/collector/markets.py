@@ -12,12 +12,38 @@ import requests
 
 from main import get_klines, ohlc_trades, post, scale
 
-# api.binance.com 比 data-api.binance.vision 在部分网络更稳（后者易 SSL EOF）
-BINANCE = os.environ.get("BINANCE_REST_URL", "https://api.binance.com").rstrip("/")
+# 默认 vision：部分网络 api.binance.com 超时；Docker Desktop 直连 TLS 失败时用 COLLECTOR_HTTPS_PROXY
+BINANCE = os.environ.get("BINANCE_REST_URL", "https://data-api.binance.vision").rstrip("/")
 BINANCE_FALLBACK = os.environ.get(
-    "BINANCE_REST_FALLBACK", "https://data-api.binance.vision"
+    "BINANCE_REST_FALLBACK", "https://api.binance.com"
 ).rstrip("/")
 RWA = os.environ.get("BINANCE_RWA_BASE_URL", "https://www.binance.com").rstrip("/")
+
+
+def _proxy_from_env(*names: str) -> dict[str, str] | None:
+    """宿主机 CONNECT 代理；勿设全局 HTTP_PROXY（会拖死新浪 A 股）。"""
+    for name in names:
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            return {"http": raw, "https": raw}
+    return None
+
+
+def _upstream_proxies() -> dict[str, str] | None:
+    """现货 REST（vision / api.binance）。"""
+    return _proxy_from_env(
+        "COLLECTOR_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"
+    )
+
+
+def _rwa_proxies() -> dict[str, str] | None:
+    """RWA 走 www.binance.com；可与现货代理分离（如 Clash 7897 vs host-connect 18080）。"""
+    return _proxy_from_env(
+        "COLLECTOR_RWA_PROXY",
+        "COLLECTOR_HTTPS_PROXY",
+        "HTTPS_PROXY",
+        "https_proxy",
+    )
 BINANCE_SYMBOLS = [
     s.strip().upper()
     for s in os.environ.get(
@@ -38,11 +64,11 @@ _RWA_LIST = "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/stoc
 _RWA_STATUS = "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/market/status/ai"
 _RWA_DYNAMIC = "/bapi/defi/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai"
 _RWA_KLINE = "/bapi/defi/v1/public/wallet-direct/buw/wallet/dex/market/token/kline/ai"
-# 全市场并行扫盘；前端只读聚合 doc `rwa:board`
-RWA_WORKERS = max(4, int(os.environ.get("RWA_WORKERS", "24")))
+# 全市场并行扫盘；前端只读聚合 doc `rwa:board`。设 0 可停（www.binance.com 不可达时）
+RWA_WORKERS = max(0, int(os.environ.get("RWA_WORKERS", "24")))
 RWA_CHUNK = max(8, int(os.environ.get("RWA_CHUNK", "48")))
 # K 线：全市场持续写 `rwa:kline:{TICKER}:{interval}`，读路径优先此 doc
-RWA_KLINE_WORKERS = max(4, int(os.environ.get("RWA_KLINE_WORKERS", "16")))
+RWA_KLINE_WORKERS = max(0, int(os.environ.get("RWA_KLINE_WORKERS", "16")))
 RWA_KLINE_CHUNK = max(4, int(os.environ.get("RWA_KLINE_CHUNK", "24")))
 RWA_KLINE_INTERVALS = [
     s.strip()
@@ -52,17 +78,25 @@ RWA_KLINE_INTERVALS = [
     if s.strip()
 ]
 # 现货 K 线：WS 不订 kline；须 REST 持续补齐（读路径 map 到这些 period）
-BINANCE_KLINE_INTERVALS = [
-    s.strip()
-    for s in os.environ.get(
-        "BINANCE_KLINE_INTERVALS", "1m,5m,15m,1h,4h,1d"
-    ).split(",")
-    if s.strip()
-]
-# 持续刷新只拉最近若干根，避免打爆 qdb（全量靠启动 backfill）
-BINANCE_KLINE_LIMIT = max(5, int(os.environ.get("BINANCE_KLINE_LIMIT", "30")))
+_kline_iv_raw = os.environ.get("BINANCE_KLINE_INTERVALS", "1m,5m,15m,1h,4h,1d").strip()
+BINANCE_KLINE_INTERVALS = (
+    []
+    if _kline_iv_raw.lower() in ("", "0", "off", "none", "-")
+    else [s.strip() for s in _kline_iv_raw.split(",") if s.strip()]
+)
+# docs / REST 只保留最近 N 根（硬顶），覆盖写入，禁止无限堆积
+_BINANCE_KLINE_LIMIT_MAX = 500
+BINANCE_KLINE_LIMIT = min(
+    _BINANCE_KLINE_LIMIT_MAX,
+    max(5, int(os.environ.get("BINANCE_KLINE_LIMIT", "180"))),
+)
 BINANCE_KLINE_REFRESH = max(2, int(os.environ.get("BINANCE_KLINE_REFRESH", "8")))
 BINANCE_KLINE_PAUSE = float(os.environ.get("BINANCE_KLINE_PAUSE_SEC", "1.0"))
+_RWA_KLINE_LIMIT_MAX = 300
+RWA_KLINE_DOC_LIMIT = min(
+    _RWA_KLINE_LIMIT_MAX,
+    max(5, int(os.environ.get("RWA_KLINE_LIMIT", "200"))),
+)
 _BOARD: dict[str, dict[str, Any]] = {}
 _BOARD_LOCK = threading.Lock()
 _rwa_cursor = 0
@@ -73,11 +107,31 @@ _binance_kline_i = 0
 
 
 def backfill_markets() -> None:
-    for symbol in BINANCE_SYMBOLS:
-        try:
-            _backfill_binance(symbol)
-        except Exception as exc:
-            print(f"binance backfill {symbol} failed: {exc}", flush=True)
+    # 启动全量回填会长时间占住 qdb engine（apply_trades+fsync），饿死 /v1/klines。
+    # 持续刷新走 start_binance_kline_feed；缺历史时再显式开 BINANCE_KLINE_BACKFILL=1。
+    do_backfill = os.environ.get("BINANCE_KLINE_BACKFILL", "0").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+        "",
+    )
+    if not BINANCE_KLINE_INTERVALS:
+        print("binance kline backfill skipped (BINANCE_KLINE_INTERVALS=off)", flush=True)
+    elif not do_backfill:
+        print(
+            "binance kline backfill skipped (BINANCE_KLINE_BACKFILL=0; feed still runs)",
+            flush=True,
+        )
+    else:
+        for symbol in BINANCE_SYMBOLS:
+            try:
+                _backfill_binance(symbol)
+            except Exception as exc:
+                print(f"binance backfill {symbol} failed: {exc}", flush=True)
+    if RWA_WORKERS <= 0 and RWA_KLINE_WORKERS <= 0:
+        print("rwa backfill skipped (RWA workers=0)", flush=True)
+        return
     tokens = _rwa_tokens()
     _put_docs([{"key": "rwa:stocks", "value": {"code": "000000", "success": True, "count": len(tokens), "data": tokens}}])
     # 热门先种 1h K 线；全市场由 start_rwa_kline_feed 持续补齐
@@ -203,18 +257,36 @@ def _store_binance_klines(
     only_missing: bool,
     keep_last: int | None = None,
 ) -> int:
-    """把 REST K 线写成 qdb trades（驱动 klines 聚合）。"""
+    """REST K 线 → docs（读路径主源）；可选再写 trades 喂引擎聚合。
+
+    qdb 对早于当前桶的成交只进 ticks 不进 K 线（late-tick），水位已被 live
+    推到「现在」后无法靠回补 trades 填历史。图表历史一律读 `binance:kline:*` docs。
+    """
     qsym = f"BINANCE:{symbol}"
-    rows = _binance_klines(symbol, interval, limit)
+    retain = min(limit, BINANCE_KLINE_LIMIT, _BINANCE_KLINE_LIMIT_MAX)
+    rows = _binance_klines(symbol, interval, retain)
     if not rows:
         return 0
+    # 只留最近 retain 根并整 key 覆盖；不与旧 doc 合并，避免无限增长
+    rows = rows[-retain:]
+    _put_docs([{"key": f"binance:kline:{symbol}:{interval}", "value": {"data": rows}}])
+    write_trades = os.environ.get("BINANCE_KLINE_WRITE_TRADES", "0").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+        "",
+    )
+    if not write_trades:
+        return len(rows)
+    trade_rows = rows
     if keep_last is not None and keep_last > 0:
-        rows = rows[-keep_last:]
+        trade_rows = rows[-keep_last:]
     have: set[int] = set()
     if only_missing:
         have = {int(row["ts"]) for row in get_klines(qsym, interval)}
     trades: list[dict] = []
-    for row in rows:
+    for row in trade_rows:
         ts = int(row[0]) * 1_000_000
         if only_missing and ts in have:
             continue
@@ -233,11 +305,14 @@ def _store_binance_klines(
             )
         )
     if not trades:
-        return 0
-    # 分批，避免单请求过大
-    batch = 800
+        return len(rows)
+    # 小批次 + 间隙，避免 apply_trades+fsync 长时间占住 engine 饿死 /v1/klines
+    batch = 64
+    pause = float(os.environ.get("BINANCE_KLINE_WRITE_PAUSE_SEC", "0.15"))
     for i in range(0, len(trades), batch):
         post("/v1/trades", {"items": trades[i : i + batch]})
+        if pause > 0 and i + batch < len(trades):
+            time.sleep(pause)
     return len(trades)
 
 
@@ -253,6 +328,7 @@ def _binance_get(path: str, params: dict | None = None, timeout: int = 8) -> Any
                 f"{base}{path}",
                 params=params or {},
                 timeout=timeout,
+                proxies=_upstream_proxies(),
             )
             r.raise_for_status()
             return r.json()
@@ -308,15 +384,29 @@ def _poll_binance_tickers() -> None:
                 "amount": float(row.get("quoteVolume") or 0),
             }
         )
-    # 先写 quotes 推订阅，再落 ticker docs（列表 REST）
-    if quotes:
+    # REST 兜底：默认写 quotes；BINANCE_WS_WRITE_QUOTES=0 时只落 docs，避免饿死 /v1/klines
+    write_quotes = os.environ.get("BINANCE_WS_WRITE_QUOTES", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    if write_quotes and quotes:
         post("/v1/quotes", {"items": quotes})
     _put_docs(docs)
 
 
 def _poll_binance_book(symbol: str) -> None:
-    depth = _binance_get("/api/v3/depth", {"symbol": symbol, "limit": 50}, timeout=5)
+    depth = _binance_get("/api/v3/depth", {"symbol": symbol, "limit": 20}, timeout=5)
     trades = _binance_get("/api/v3/trades", {"symbol": symbol, "limit": 50}, timeout=5)
+    if isinstance(depth, dict):
+        depth = {
+            **depth,
+            "bids": (depth.get("bids") or [])[:20],
+            "asks": (depth.get("asks") or [])[:20],
+        }
+    if isinstance(trades, list) and len(trades) > 50:
+        trades = trades[-50:]
     _put_docs(
         [
             {"key": f"binance:depth:{symbol}", "value": depth},
@@ -325,11 +415,54 @@ def _poll_binance_book(symbol: str) -> None:
     )
 
 
+def _rwa_priority_tokens(tokens: list[dict]) -> list[dict]:
+    """热门 ticker 优先写 board/quote，避免全市场扫完才有 AAPL。"""
+    want = {t.upper() for t in RWA_TICKERS}
+    if not want:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for tok in tokens:
+        ticker = str(tok.get("ticker") or "").upper()
+        if ticker not in want or ticker in seen:
+            continue
+        if str(tok.get("chainId") or "") not in ("", "56"):
+            continue
+        out.append(tok)
+        seen.add(ticker)
+    return out
+
+
+def _rwa_store_chunk(chunk: list[dict]) -> tuple[int, int]:
+    ok = 0
+    fail = 0
+    if not chunk:
+        return ok, fail
+    with ThreadPoolExecutor(max_workers=min(RWA_WORKERS, len(chunk))) as pool:
+        futs = {
+            pool.submit(_store_dynamic, tok): str(tok.get("ticker") or "").upper()
+            for tok in chunk
+        }
+        for fut in as_completed(futs):
+            ticker = futs[fut]
+            try:
+                fut.result()
+                ok += 1
+            except Exception as exc:
+                fail += 1
+                print(f"rwa dynamic {ticker} failed: {exc}", flush=True)
+    return ok, fail
+
+
 def _rwa_worker() -> None:
     global _rwa_cursor, _last_catalog_at
+    if RWA_WORKERS <= 0:
+        print("rwa feed disabled (RWA_WORKERS=0)", flush=True)
+        return
     print(f"rwa feed start workers={RWA_WORKERS} chunk={RWA_CHUNK}", flush=True)
     _hydrate_board()
     passes = 0
+    priority_done = False
     while True:
         t0 = time.monotonic()
         try:
@@ -337,30 +470,28 @@ def _rwa_worker() -> None:
             if now - _last_catalog_at > 60.0:
                 _refresh_rwa_catalog()
                 _last_catalog_at = now
+                priority_done = False
             tokens = _ensure_tokens()
             if not tokens:
                 time.sleep(2.0)
+                continue
+            if not priority_done:
+                hot = _rwa_priority_tokens(tokens)
+                ok, fail = _rwa_store_chunk(hot)
+                _flush_board()
+                print(
+                    f"rwa priority tickers={len(hot)} ok={ok} fail={fail} "
+                    f"ms={int((time.monotonic() - t0) * 1000)}",
+                    flush=True,
+                )
+                priority_done = True
                 continue
             n = len(tokens)
             start = _rwa_cursor
             chunk = [tokens[(start + i) % n] for i in range(min(RWA_CHUNK, n))]
             _rwa_cursor = (start + len(chunk)) % n
             full_pass = len(chunk) >= n or (start + len(chunk)) >= n
-            ok = 0
-            fail = 0
-            with ThreadPoolExecutor(max_workers=min(RWA_WORKERS, len(chunk))) as pool:
-                futs = {
-                    pool.submit(_store_dynamic, tok): str(tok.get("ticker") or "").upper()
-                    for tok in chunk
-                }
-                for fut in as_completed(futs):
-                    ticker = futs[fut]
-                    try:
-                        fut.result()
-                        ok += 1
-                    except Exception as exc:
-                        fail += 1
-                        print(f"rwa dynamic {ticker} failed: {exc}", flush=True)
+            ok, fail = _rwa_store_chunk(chunk)
             _flush_board()
             if full_pass:
                 passes += 1
@@ -379,7 +510,9 @@ def _rwa_worker() -> None:
 
 def _refresh_rwa_catalog() -> None:
     try:
-        status = requests.get(f"{RWA}{_RWA_STATUS}", timeout=30).json()
+        status = requests.get(
+            f"{RWA}{_RWA_STATUS}", timeout=30, proxies=_rwa_proxies()
+        ).json()
         _put_docs([{"key": "rwa:status", "value": status}])
         tokens = _rwa_tokens()
         _put_docs(
@@ -456,7 +589,12 @@ def _rwa_get(path: str, params: dict | None = None, timeout: int = 12) -> Any:
     last_err: Exception | None = None
     for _ in range(2):
         try:
-            r = requests.get(f"{RWA}{path}", params=params or {}, timeout=timeout)
+            r = requests.get(
+                f"{RWA}{path}",
+                params=params or {},
+                timeout=timeout,
+                proxies=_rwa_proxies(),
+            )
             r.raise_for_status()
             return r.json()
         except Exception as exc:
@@ -516,6 +654,9 @@ def _store_dynamic(token: dict) -> None:
 
 def _rwa_kline_worker() -> None:
     global _rwa_kline_cursor, _rwa_kline_interval_i
+    if RWA_KLINE_WORKERS <= 0:
+        print("rwa kline feed disabled (RWA_KLINE_WORKERS=0)", flush=True)
+        return
     intervals = RWA_KLINE_INTERVALS or ["1h"]
     print(
         f"rwa kline feed start workers={RWA_KLINE_WORKERS} chunk={RWA_KLINE_CHUNK} "
@@ -552,9 +693,9 @@ def _rwa_kline_worker() -> None:
             fail = 0
             with ThreadPoolExecutor(max_workers=min(RWA_KLINE_WORKERS, len(chunk))) as pool:
                 futs = {
-                    pool.submit(_store_rwa_klines, tok, interval, 200, write_trades): str(
-                        tok.get("ticker") or ""
-                    ).upper()
+                    pool.submit(
+                        _store_rwa_klines, tok, interval, RWA_KLINE_DOC_LIMIT, write_trades
+                    ): str(tok.get("ticker") or "").upper()
                     for tok in chunk
                 }
                 for fut in as_completed(futs):
@@ -586,22 +727,32 @@ def _store_rwa_klines(
     contract = str(token.get("contractAddress") or "")
     if not ticker or not contract:
         return
+    retain = min(limit, RWA_KLINE_DOC_LIMIT, _RWA_KLINE_LIMIT_MAX)
     raw = _rwa_get(
         _RWA_KLINE,
         {
             "chainId": chain,
             "contractAddress": contract,
             "interval": interval,
-            "limit": limit,
+            "limit": retain,
         },
         timeout=20,
     )
+    # 裁掉超额 K 线后再落 docs（覆盖写）
+    if isinstance(raw, dict):
+        data = raw.get("data")
+        if isinstance(data, dict):
+            infos = data.get("klineInfos")
+            if isinstance(infos, list) and len(infos) > retain:
+                data = {**data, "klineInfos": infos[-retain:]}
+                raw = {**raw, "data": data}
     _put_docs([{"key": f"rwa:kline:{ticker}:{interval}", "value": raw}])
     if not write_trades:
         return
     infos = ((raw.get("data") or {}).get("klineInfos") or []) if isinstance(raw, dict) else []
     if not infos:
         return
+    infos = infos[-retain:]
     qsym = f"ONDO:{ticker}"
     have = {int(row["ts"]) for row in get_klines(qsym, "1h")}
     trades = []
@@ -629,7 +780,12 @@ def _store_rwa_klines(
 
 
 def _rwa_tokens() -> list[dict]:
-    raw = requests.get(f"{RWA}{_RWA_LIST}", params={"type": "1"}, timeout=60).json()
+    raw = requests.get(
+        f"{RWA}{_RWA_LIST}",
+        params={"type": "1"},
+        timeout=60,
+        proxies=_rwa_proxies(),
+    ).json()
     rows = raw.get("data") if isinstance(raw, dict) else []
     best: dict[str, dict] = {}
     for row in rows or []:

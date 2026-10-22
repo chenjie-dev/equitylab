@@ -143,9 +143,21 @@ function findKline(rows: Kline[], localSec: number): Kline | null {
 type Props = {
   klines: Kline[];
   symbol: string;
+  /** 换标的/周期时变化，触发贴右；同 key 下左滑补历史不打断视口 */
+  seriesKey?: string;
+  /** 拖到左缘时请求更早窗口（主流台「滚动加载历史」） */
+  onNeedHistory?: () => void;
+  /** 首屏/切票拉取中；与空 klines 区分，避免永远停在 Loading */
+  loading?: boolean;
 };
 
-export function BinanceChart({ klines, symbol }: Props) {
+export function BinanceChart({
+  klines,
+  symbol,
+  seriesKey,
+  onNeedHistory,
+  loading = false,
+}: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const tipRef = useRef<HTMLDivElement>(null);
@@ -156,9 +168,14 @@ export function BinanceChart({ klines, symbol }: Props) {
   const ma25Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const ma99Ref = useRef<ISeriesApi<"Line"> | null>(null);
   const klinesRef = useRef(klines) as MutableRefObject<Kline[]>;
+  const prevKeyRef = useRef<string | undefined>(undefined);
+  const prevFirstTsRef = useRef<number | null>(null);
+  const historyBusyRef = useRef(false);
+  const onNeedHistoryRef = useRef(onNeedHistory);
   const [tip, setTip] = useState<HoverTip | null>(null);
 
   klinesRef.current = klines;
+  onNeedHistoryRef.current = onNeedHistory;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -290,7 +307,24 @@ export function BinanceChart({ klines, symbol }: Props) {
     ma25Ref.current = ma25;
     ma99Ref.current = ma99;
 
+    // 左缘接近逻辑原点时补历史；数据过少时不触发（切票首屏会误触）
+    const onRange = () => {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range || historyBusyRef.current) return;
+      if (range.from > 8) return;
+      if (klinesRef.current.length < 40) return;
+      const cb = onNeedHistoryRef.current;
+      if (!cb) return;
+      historyBusyRef.current = true;
+      cb();
+      window.setTimeout(() => {
+        historyBusyRef.current = false;
+      }, 1200);
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       stage?.removeEventListener("mousemove", onMouseMove);
       stage?.removeEventListener("mouseleave", onMouseLeave);
       chart.remove();
@@ -304,15 +338,53 @@ export function BinanceChart({ klines, symbol }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!candleRef.current || !volumeRef.current || !klines.length) return;
+    if (!candleRef.current || !volumeRef.current) return;
+    if (!klines.length) {
+      candleRef.current.setData([]);
+      volumeRef.current.setData([]);
+      ma7Ref.current?.setData([]);
+      ma25Ref.current?.setData([]);
+      ma99Ref.current?.setData([]);
+      prevFirstTsRef.current = null;
+      setTip(null);
+      return;
+    }
+    const key = seriesKey ?? symbol;
+    const keyChanged = prevKeyRef.current !== key;
+    const firstTs = Number(klines[0][0]);
+    const prevFirst = prevFirstTsRef.current;
+    const prepended =
+      !keyChanged &&
+      prevFirst != null &&
+      firstTs < prevFirst &&
+      klines.length > 0;
+
+    const range = prepended
+      ? chartRef.current?.timeScale().getVisibleLogicalRange()
+      : null;
+    const added =
+      prepended && prevFirst != null
+        ? klines.findIndex((k) => Number(k[0]) === prevFirst)
+        : 0;
+
     candleRef.current.setData(klines.map(toCandle));
     volumeRef.current.setData(klines.map(toVolume));
     ma7Ref.current?.setData(toMaLine(klines, 7));
     ma25Ref.current?.setData(toMaLine(klines, 25));
     ma99Ref.current?.setData(toMaLine(klines, 99));
-    chartRef.current?.timeScale().scrollToRealTime();
+
+    if (keyChanged) {
+      chartRef.current?.timeScale().scrollToRealTime();
+      prevKeyRef.current = key;
+    } else if (prepended && range && added > 0) {
+      chartRef.current?.timeScale().setVisibleLogicalRange({
+        from: range.from + added,
+        to: range.to + added,
+      });
+    }
+    prevFirstTsRef.current = firstTs;
     setTip(null);
-  }, [klines]);
+  }, [klines, seriesKey, symbol]);
 
   useEffect(() => {
     if (!tip) return;
@@ -389,7 +461,9 @@ export function BinanceChart({ klines, symbol }: Props) {
           <i style={{ color: "#1e88e5" }}>MA(99)</i>
         </span>
         {!klines.length ? (
-          <span className="mk-muted">Loading chart…</span>
+          <span className="mk-muted">
+            {loading ? "Loading chart…" : "No chart data"}
+          </span>
         ) : null}
       </div>
       <div ref={stageRef} className="bn-chart-stage">

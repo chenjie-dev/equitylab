@@ -73,11 +73,24 @@ class Client:
         except Exception:
             return {"data": [], "source": "qdb", "error": "qdb_unavailable"}
 
-    def klines(self, symbol: str, period: str) -> list[dict[str, Any]]:
+    def klines(
+        self,
+        symbol: str,
+        period: str,
+        *,
+        limit: int | None = None,
+        end_time_ms: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """窗口读；`limit`/`end_time_ms` 对应 qdb `GET /v1/klines`。"""
         try:
+            params: dict[str, Any] = {"symbol": symbol, "period": period}
+            if limit is not None:
+                params["limit"] = int(limit)
+            if end_time_ms is not None:
+                params["endTime"] = int(end_time_ms)
             r = self._session.get(
                 f"{self.base_url}/v1/klines",
-                params={"symbol": symbol, "period": period},
+                params=params,
                 timeout=self.timeout,
             )
             if r.status_code == 404:

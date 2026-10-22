@@ -41,8 +41,9 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股报价热路径间隔；币安实时走 WS→qdb |
 | 客户端包 | `packages/qdb-{py,ts,rs}` | Compose 构建 context 为仓库根以 `COPY packages/` |
 | `NEXT_PUBLIC_MARKET_WS_URL` | `ws://localhost:3002` | 前端订 qdb（经 `/qdb/ws`） |
-| `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `api.binance.com` / `data-api` | **仅** collector；backfill / WS 断流兜底 |
+| `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
+| `COLLECTOR_HTTP(S)_PROXY` | 空 / `host.docker.internal:18080` | 容器 TLS 异常时走宿主机 CONNECT 代理 |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |
@@ -83,7 +84,12 @@ docker compose down
 | `network … active endpoints` | 旧容器（如历史 `equitylab-api`）占网 | `docker rm -f <容器>` 后重试 |
 | market-data 日志 Redis warn | 启动瞬间 Redis 未就绪或 URL 错 | 检查 `REDIS_URL=redis://redis:6379`；无缓存仍可返回报价 |
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
-| 行情空 / 只有几根 K 线 | collector 未写或 late-tick | `logs collector`；见 [qdb 排障](./2026-10-20-qdb-行情库.md) |
+| 行情空 / 只有几根 K 线 | collector 未写 docs，或引擎 late-tick | Spot 看 `binance:kline:*`；`logs collector`；见 [qdb 排障](./2026-10-20-qdb-行情库.md) |
+| `/v1/klines` 超时、图表 Loading | ashare/全量 backfill/`WRITE_*=1` 占住引擎锁 | `.env`：`COLLECTOR_SKIP_ASHARE=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_QUOTES=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；先 `stop collector` 再 `restart qdb` |
+| Stocks 页「暂无标的」/ quote 503 | `www.binance.com` 超时或 `RWA_WORKERS=0` | 宿主机 Clash 等代理测通 bapi 后设 `COLLECTOR_RWA_PROXY=http://host.docker.internal:7897`、`RWA_WORKERS=4`，recreate collector；现货仍可用 `COLLECTOR_HTTPS_PROXY=…:18080` |
+| collector 日志 `SSL: WRONG_VERSION_NUMBER` | Docker VM 出网 TLS 被劫持；宿主机直连正常 | ① 宿主机 `python3 scripts/host-connect-proxy.py 18080`（守护进程）② `.env` 设 `COLLECTOR_HTTPS_PROXY=http://host.docker.internal:18080` ③ `docker compose up -d --force-recreate collector`；勿设全局 `HTTP_PROXY`（会拖死 A 股） |
+| `www.binance.com` EOF / Stocks 空 | 本机到币安主站不通 | `.env` 设 `RWA_WORKERS=0` `RWA_KLINE_WORKERS=0` 先保现货；RWA 恢复后再打开 |
+| `/v1/klines` 一直挂起 | 引擎锁死（旧进程） | `docker compose restart qdb`（必要时先 `stop collector`） |
 | collector 解析不了 `qdb` | 容器网络陈旧 | `docker compose up -d --force-recreate collector` |
 
 ## Schema 初始化

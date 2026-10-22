@@ -299,6 +299,8 @@ pub struct KlinesQuery {
     pub interval: String,
     #[serde(default = "default_kline_limit")]
     pub limit: u32,
+    #[serde(default, rename = "endTime")]
+    pub end_time: Option<u64>,
 }
 
 fn default_interval() -> String {
@@ -321,14 +323,31 @@ async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode
                 .pointer("/data/klineInfos")
                 .and_then(|v| v.as_array())
             {
-                let start = infos.len().saturating_sub(limit);
+                let mut rows: Vec<Value> = infos
+                    .iter()
+                    .filter(|row| {
+                        let Some(end) = q.end_time else {
+                            return true;
+                        };
+                        let ot = row.get(0).and_then(|v| {
+                            v.as_u64()
+                                .or_else(|| v.as_i64().map(|n| n as u64))
+                                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                        });
+                        ot.map(|t| t <= end).unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect();
+                let start = rows.len().saturating_sub(limit);
+                rows = rows.split_off(start);
                 return Ok(Json(json!({
-                    "data": { "klineInfos": infos[start..].to_vec() }
+                    "data": { "klineInfos": rows }
                 })));
             }
         }
     }
-    let infos = crate::qdb_read::rwa_klines(&ticker, &q.interval, limit).await;
+    let infos =
+        crate::qdb_read::rwa_klines(&ticker, &q.interval, limit, q.end_time).await;
     Ok(Json(json!({"data": {"klineInfos": infos}})))
 }
 
@@ -355,8 +374,24 @@ pub struct QuoteQuery {
 /// 优先 `rwa:quote:{TICKER}`；缺失时从 `rwa:stocks` + `rwa:dynamic` 拼装（collector 超时未写入时避免硬 404）。
 async fn quote_by_ticker(Query(q): Query<QuoteQuery>) -> Result<Json<Value>, (StatusCode, String)> {
     let ticker = q.ticker.trim().to_uppercase();
+    if ticker.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "ticker required".into()));
+    }
     if let Some(v) = crate::qdb_read::doc(&format!("rwa:quote:{ticker}")).await {
         return Ok(Json(v));
+    }
+    let stocks = crate::qdb_read::doc("rwa:stocks").await;
+    let catalog_empty = stocks
+        .as_ref()
+        .and_then(|d| d.get("data"))
+        .and_then(|d| d.as_array())
+        .map(|a| a.is_empty())
+        .unwrap_or(true);
+    if catalog_empty {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "rwa catalog empty (www.binance.com unreachable or RWA_WORKERS=0)".into(),
+        ));
     }
     let token = token_from_stocks(&ticker, &q.prefer_chain_id)
         .await

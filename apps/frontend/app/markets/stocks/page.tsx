@@ -5,11 +5,21 @@
  * 列表价只读 collector 聚合的 `/rwa/board`；详情再读 `/rwa/quote`。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BinanceChart,
   type Kline,
 } from "../../components/markets/BinanceChart";
+
+const KLINE_PAGE = 200;
+/** 与 collector RWA docs 硬顶对齐，超出丢最旧 */
+const KLINE_MAX_BARS = 300;
+const KLINE_TAIL = 8;
+
+function retainKlines(rows: Kline[]): Kline[] {
+  if (rows.length <= KLINE_MAX_BARS) return rows;
+  return rows.slice(rows.length - KLINE_MAX_BARS);
+}
 
 /** 热门：列表置顶 */
 const PRIORITY = [
@@ -116,14 +126,17 @@ export default function TokenizedStocksPage() {
   const [universe, setUniverse] = useState<StockToken[]>([]);
   /** ticker → 列表轻量报价（来自 board） */
   const [quotes, setQuotes] = useState<Record<string, Dynamic>>({});
-  const [selected, setSelected] = useState<string>("AAPL");
+  const [selected, setSelected] = useState<string>("");
   const [interval, setIntervalTf] = useState<Interval>("1h");
   const [klines, setKlines] = useState<Kline[]>([]);
   const [market, setMarket] = useState<MarketStatus | null>(null);
   const [detail, setDetail] = useState<Dynamic | null>(null);
   const [tokenMeta, setTokenMeta] = useState<StockToken | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [feedEmpty, setFeedEmpty] = useState(false);
   const [tick, setTick] = useState(0);
+  const [historyDone, setHistoryDone] = useState(false);
+  const historyLoadingRef = useRef(false);
 
   const loadUniverse = useCallback(async () => {
     const res = await fetch(
@@ -131,7 +144,17 @@ export default function TokenizedStocksPage() {
     );
     if (!res.ok) throw new Error(`stocks ${res.status}`);
     const body = (await res.json()) as { data?: StockToken[] };
-    setUniverse(body.data ?? []);
+    const rows = body.data ?? [];
+    setUniverse(rows);
+    setFeedEmpty(rows.length === 0);
+    setSelected((prev) => {
+      if (rows.length === 0) return "";
+      if (prev && rows.some((t) => t.ticker === prev)) return prev;
+      for (const p of PRIORITY) {
+        if (rows.some((t) => t.ticker === p)) return p;
+      }
+      return rows[0]?.ticker ?? "";
+    });
   }, []);
 
   const loadMarket = useCallback(async () => {
@@ -165,12 +188,17 @@ export default function TokenizedStocksPage() {
   }, []);
 
   const loadDetail = useCallback(async (ticker: string) => {
+    if (!ticker) return null;
     const res = await fetch(
       `/api/market/binance/rwa/quote?ticker=${encodeURIComponent(ticker)}&preferChainId=56`,
     );
     if (!res.ok) {
-      // 采集未写入时可能短暂 404；保留列表，勿整页报死
-      setError(`quote ${res.status}（采集稍后会补 ${ticker}）`);
+      // 503=catalog 空；404=有列表但该 ticker 尚未扫到
+      setError(
+        res.status === 503 || feedEmpty
+          ? "代币化美股暂无数据：www.binance.com 不可达或 RWA 采集未启用（RWA_WORKERS=0）"
+          : `${ticker} 报价尚未写入，等待采集扫到该标的`,
+      );
       return null;
     }
     setError(null);
@@ -186,30 +214,109 @@ export default function TokenizedStocksPage() {
       setQuotes((prev) => ({ ...prev, [ticker]: body.dynamic as Dynamic }));
     }
     return body;
-  }, []);
+  }, [feedEmpty]);
 
-  const loadKlines = useCallback(
-    async (chainId: string, contract: string, tf: Interval) => {
-      const res = await fetch(
-        `/api/market/binance/rwa/klines?chainId=${chainId}&contractAddress=${contract}&interval=${tf}&limit=200`,
-      );
-      if (!res.ok) return;
+  const mapInfos = (infos: unknown[][]): Kline[] =>
+    infos.map((row) => [
+      Number(row[0]),
+      String(row[1]),
+      String(row[2]),
+      String(row[3]),
+      String(row[4]),
+      String(row[5] ?? "0"),
+    ]);
+
+  const fetchRwaKlines = useCallback(
+    async (
+      chainId: string,
+      contract: string,
+      tf: Interval,
+      limit: number,
+      endTime?: number,
+    ) => {
+      const q = new URLSearchParams({
+        chainId,
+        contractAddress: contract,
+        interval: tf,
+        limit: String(limit),
+      });
+      if (endTime != null) q.set("endTime", String(endTime));
+      const res = await fetch(`/api/market/binance/rwa/klines?${q}`);
+      if (!res.ok) return [] as Kline[];
       const body = (await res.json()) as {
         data?: { klineInfos?: unknown[][] };
       };
-      const infos = body.data?.klineInfos ?? [];
-      const mapped: Kline[] = infos.map((row) => [
-        Number(row[0]),
-        String(row[1]),
-        String(row[2]),
-        String(row[3]),
-        String(row[4]),
-        String(row[5] ?? "0"),
-      ]);
-      setKlines(mapped);
+      return mapInfos(body.data?.klineInfos ?? []);
     },
     [],
   );
+
+  const loadKlines = useCallback(
+    async (chainId: string, contract: string, tf: Interval) => {
+      setHistoryDone(false);
+      const mapped = await fetchRwaKlines(chainId, contract, tf, KLINE_PAGE);
+      setKlines(retainKlines(mapped));
+      if (mapped.length < KLINE_PAGE) setHistoryDone(true);
+    },
+    [fetchRwaKlines],
+  );
+
+  const loadOlderKlines = useCallback(async () => {
+    if (historyDone || historyLoadingRef.current || !tokenMeta) return;
+    if (klines.length >= KLINE_MAX_BARS) {
+      setHistoryDone(true);
+      return;
+    }
+    const oldest = klines[0];
+    if (!oldest) return;
+    historyLoadingRef.current = true;
+    try {
+      const older = await fetchRwaKlines(
+        tokenMeta.chainId,
+        tokenMeta.contractAddress,
+        interval,
+        KLINE_PAGE,
+        Number(oldest[0]) - 1,
+      );
+      if (!older.length) {
+        setHistoryDone(true);
+        return;
+      }
+      setKlines((prev) => {
+        const seen = new Set(prev.map((k) => Number(k[0])));
+        const merged = retainKlines([
+          ...older.filter((k) => !seen.has(Number(k[0]))),
+          ...prev,
+        ]);
+        if (merged.length >= KLINE_MAX_BARS) setHistoryDone(true);
+        return merged;
+      });
+      if (older.length < KLINE_PAGE) setHistoryDone(true);
+    } finally {
+      historyLoadingRef.current = false;
+    }
+  }, [historyDone, tokenMeta, klines, interval, fetchRwaKlines]);
+
+  const refreshKlineTail = useCallback(async () => {
+    if (!tokenMeta) return;
+    const tail = await fetchRwaKlines(
+      tokenMeta.chainId,
+      tokenMeta.contractAddress,
+      interval,
+      KLINE_TAIL,
+    );
+    if (!tail.length) return;
+    setKlines((prev) => {
+      if (!prev.length) return retainKlines(tail);
+      const byTs = new Map(prev.map((k) => [Number(k[0]), k]));
+      for (const row of tail) byTs.set(Number(row[0]), row);
+      return retainKlines(
+        [...byTs.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, row]) => row),
+      );
+    });
+  }, [tokenMeta, interval, fetchRwaKlines]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
@@ -255,13 +362,17 @@ export default function TokenizedStocksPage() {
     if (tick === 0) return;
     void loadBoard();
     void loadMarket();
-    // 采集仍在补 K 线时，定时重拉当前标的，避免一次空结果就一直空白
-    if (tokenMeta?.chainId && tokenMeta.contractAddress) {
-      void loadKlines(tokenMeta.chainId, tokenMeta.contractAddress, interval);
-    }
-  }, [tick, loadBoard, loadMarket, loadKlines, tokenMeta, interval]);
+    // 盘中只刷尾部，不整表重载
+    void refreshKlineTail();
+  }, [tick, loadBoard, loadMarket, refreshKlineTail]);
 
   useEffect(() => {
+    if (!selected) {
+      setDetail(null);
+      setTokenMeta(null);
+      setKlines([]);
+      return;
+    }
     void (async () => {
       try {
         const q = await loadDetail(selected);
@@ -293,14 +404,17 @@ export default function TokenizedStocksPage() {
               value={selected}
               onChange={(e) => setSelected(e.target.value)}
               aria-label="Stock ticker"
+              disabled={!universe.length}
             >
-              {(universe.length ? universe : [{ ticker: selected } as StockToken]).map(
-                (t) => (
+              {!universe.length ? (
+                <option value="">暂无标的</option>
+              ) : (
+                universe.map((t) => (
                   <option key={t.ticker} value={t.ticker}>
                     {t.ticker}
                     {t.symbol ? ` · ${t.symbol}` : ""}
                   </option>
-                ),
+                ))
               )}
             </select>
             <span className="bn-pill">Ondo · Tokenized</span>
@@ -431,7 +545,12 @@ export default function TokenizedStocksPage() {
             </div>
             <span className="bn-label">Token K-Line · read-only</span>
           </div>
-          <BinanceChart klines={klines} symbol={`${selected}on`} />
+          <BinanceChart
+            klines={klines}
+            symbol={`${selected}on`}
+            seriesKey={`${selected}:${interval}`}
+            onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
+          />
         </section>
 
         <aside className="bn-right bn-right-quotes">

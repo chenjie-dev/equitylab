@@ -112,7 +112,7 @@ impl MarketDataProvider for Provider {
     ) -> Result<Vec<Bar>, ProviderError> {
         let sym = normalize_symbol(symbol);
         let interval = map_interval(period);
-        let rows = crate::qdb_read::binance_klines(&sym, &interval, count).await;
+        let rows = crate::qdb_read::binance_klines(&sym, &interval, count, None).await;
         Ok(rows
             .iter()
             .filter_map(|r| kline_to_bar(&sym, &interval, r))

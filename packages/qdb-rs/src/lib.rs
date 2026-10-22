@@ -96,16 +96,30 @@ impl Client {
             .unwrap_or_default())
     }
 
+    /// 窗口读 K 线。`limit` / `end_time_ms` 对齐 qdb `GET /v1/klines`（见手册）。
     pub async fn klines(&self, symbol: &str, period: &str) -> Vec<Value> {
-        // 写入高峰时 qdb 全量 klines 可能 >5s；超时吞错会让图表面空/假旧
-        let Ok(resp) = self
+        self.klines_window(symbol, period, None, None).await
+    }
+
+    pub async fn klines_window(
+        &self,
+        symbol: &str,
+        period: &str,
+        limit: Option<usize>,
+        end_time_ms: Option<u64>,
+    ) -> Vec<Value> {
+        let mut req = self
             .http
             .get(format!("{}/v1/klines", self.base))
             .query(&[("symbol", symbol), ("period", period)])
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-        else {
+            .timeout(std::time::Duration::from_secs(30));
+        if let Some(n) = limit {
+            req = req.query(&[("limit", n.to_string())]);
+        }
+        if let Some(end) = end_time_ms {
+            req = req.query(&[("endTime", end.to_string())]);
+        }
+        let Ok(resp) = req.send().await else {
             return Vec::new();
         };
         if !resp.status().is_success() {

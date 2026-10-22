@@ -5,7 +5,7 @@
  * 仅公开 REST，无下单 / 账户 / 挂单。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BinanceChart,
   type Kline,
@@ -50,6 +50,18 @@ const INTERVALS = [
   "1M",
 ] as const;
 type Interval = (typeof INTERVALS)[number];
+
+/** 首屏根数：偏小以加快切票首屏；左滑再补 */
+const KLINE_PAGE = 120;
+/** 浏览器侧最多保留根数（与 collector docs 硬顶一致），超出丢最旧 */
+const KLINE_MAX_BARS = 500;
+/** 盘中只刷最近几根，合并进已有序列 */
+const KLINE_TAIL = 5;
+
+function retainKlines(rows: Kline[]): Kline[] {
+  if (rows.length <= KLINE_MAX_BARS) return rows;
+  return rows.slice(rows.length - KLINE_MAX_BARS);
+}
 
 type Ticker = {
   symbol: string;
@@ -122,6 +134,11 @@ export default function MarketsPage() {
   const [tick, setTick] = useState(0);
   const [rightTab, setRightTab] = useState<RightTab>("book");
   const [bookLimit, setBookLimit] = useState(16);
+  const [historyDone, setHistoryDone] = useState(false);
+  const [klineLoading, setKlineLoading] = useState(false);
+  const historyLoadingRef = useRef(false);
+  const klineAbortRef = useRef<AbortController | null>(null);
+  const switchGenRef = useRef(0);
 
   const loadList = useCallback(async () => {
     const symbols = encodeURIComponent(JSON.stringify([...WATCHLIST]));
@@ -193,12 +210,109 @@ export default function MarketsPage() {
     }
   }, []);
 
-  const loadKlines = useCallback(async (sym: string, tf: Interval) => {
-    const kRes = await fetch(
-      `/api/market/binance/klines?symbol=${sym}&interval=${tf}&limit=500`,
-    );
-    if (kRes.ok) setKlines((await kRes.json()) as Kline[]);
-  }, []);
+  const fetchKlines = useCallback(
+    async (
+      sym: string,
+      tf: Interval,
+      limit: number,
+      endTime?: number,
+      signal?: AbortSignal,
+    ) => {
+      const q = new URLSearchParams({
+        symbol: sym,
+        interval: tf,
+        limit: String(limit),
+      });
+      if (endTime != null) q.set("endTime", String(endTime));
+      try {
+        const kRes = await fetch(`/api/market/binance/klines?${q}`, { signal });
+        if (!kRes.ok) return [] as Kline[];
+        const body = (await kRes.json()) as unknown;
+        return Array.isArray(body) ? (body as Kline[]) : [];
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        return [] as Kline[];
+      }
+    },
+    [],
+  );
+
+  /** 换标的/周期：立刻清空旧图 + 取消 inflight，只拉最近一页 */
+  const loadKlines = useCallback(
+    async (sym: string, tf: Interval) => {
+      klineAbortRef.current?.abort();
+      const ac = new AbortController();
+      klineAbortRef.current = ac;
+      const gen = ++switchGenRef.current;
+      setHistoryDone(false);
+      setKlineLoading(true);
+      setKlines([]);
+      try {
+        const rows = await fetchKlines(sym, tf, KLINE_PAGE, undefined, ac.signal);
+        if (gen !== switchGenRef.current) return;
+        setKlines(retainKlines(rows));
+        if (rows.length < KLINE_PAGE) setHistoryDone(true);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+      } finally {
+        if (gen === switchGenRef.current) setKlineLoading(false);
+      }
+    },
+    [fetchKlines],
+  );
+
+  /** 左滑：以当前最老一根为 endTime，向前再取一页并前置合并 */
+  const loadOlderKlines = useCallback(async () => {
+    if (historyDone || historyLoadingRef.current || klineLoading) return;
+    if (klines.length >= KLINE_MAX_BARS) {
+      setHistoryDone(true);
+      return;
+    }
+    if (klines.length < 40) return; // 首屏未稳，避免切票瞬间误触发翻页
+    const oldest = klines[0];
+    if (!oldest) return;
+    historyLoadingRef.current = true;
+    const gen = switchGenRef.current;
+    try {
+      const endTime = Number(oldest[0]) - 1;
+      const older = await fetchKlines(symbol, interval, KLINE_PAGE, endTime);
+      if (gen !== switchGenRef.current) return;
+      if (!older.length) {
+        setHistoryDone(true);
+        return;
+      }
+      setKlines((prev) => {
+        const seen = new Set(prev.map((k) => Number(k[0])));
+        const merged = retainKlines([
+          ...older.filter((k) => !seen.has(Number(k[0]))),
+          ...prev,
+        ]);
+        if (merged.length >= KLINE_MAX_BARS) setHistoryDone(true);
+        return merged;
+      });
+      if (older.length < KLINE_PAGE) setHistoryDone(true);
+    } finally {
+      historyLoadingRef.current = false;
+    }
+  }, [historyDone, klineLoading, klines, symbol, interval, fetchKlines]);
+
+  /** 盘中：只刷尾部几根，原地合并（不整表重载） */
+  const refreshKlineTail = useCallback(async () => {
+    if (klineLoading) return;
+    const gen = switchGenRef.current;
+    const tail = await fetchKlines(symbol, interval, KLINE_TAIL);
+    if (gen !== switchGenRef.current || !tail.length) return;
+    setKlines((prev) => {
+      if (!prev.length) return retainKlines(tail);
+      const byTs = new Map(prev.map((k) => [Number(k[0]), k]));
+      for (const row of tail) byTs.set(Number(row[0]), row);
+      return retainKlines(
+        [...byTs.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, row]) => row),
+      );
+    });
+  }, [symbol, interval, fetchKlines, klineLoading]);
 
   useEffect(() => {
     void loadList();
@@ -206,7 +320,7 @@ export default function MarketsPage() {
     return () => clearInterval(id);
   }, [loadList]);
 
-  // 盘口/成交跟 docs（collector 约 1s/标的轮询）；K 线更慢
+  // 盘口/成交跟 docs；K 线首屏窗口读
   useEffect(() => {
     void loadBook(symbol);
     void loadKlines(symbol, interval);
@@ -217,8 +331,8 @@ export default function MarketsPage() {
   useEffect(() => {
     if (tick === 0) return;
     void loadBook(symbol);
-    if (tick % 15 === 0) void loadKlines(symbol, interval);
-  }, [tick, symbol, interval, loadBook, loadKlines]);
+    if (tick % 15 === 0) void refreshKlineTail();
+  }, [tick, symbol, loadBook, refreshKlineTail]);
 
   const change = Number(ticker?.priceChangePercent ?? 0);
   const changeUp = change >= 0;
@@ -420,7 +534,13 @@ export default function MarketsPage() {
             </div>
             <span className="bn-label">Public · read-only</span>
           </div>
-          <BinanceChart klines={klines} symbol={symbol} />
+          <BinanceChart
+            klines={klines}
+            symbol={symbol}
+            seriesKey={`${symbol}:${interval}`}
+            loading={klineLoading}
+            onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
+          />
         </section>
 
         <aside className="bn-right bn-right-quotes">

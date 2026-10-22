@@ -21,13 +21,24 @@ UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.
 qdb = Client(timeout=30.0)
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def main() -> None:
     codes = [c.strip() for c in CODES.split(",") if c.strip()]
     wait_qdb()
+    skip_ashare = _env_flag("COLLECTOR_SKIP_ASHARE", "0")
     # 币安：WS 推送写 qdb；A 股仍 REST 热路径；盘口/RWA/回填后台。
     print(
         f"collector cadence interval_ms={int(INTERVAL * 1000)} "
-        f"ashare={len(codes)} (binance=ws→qdb; ashare=rest hot-path)",
+        f"ashare={'skip' if skip_ashare else len(codes)} "
+        f"(binance=ws→qdb; ashare={'off' if skip_ashare else 'rest hot-path'})",
         flush=True,
     )
     import markets
@@ -51,7 +62,7 @@ def main() -> None:
 
     threading.Thread(
         target=_backfill_worker,
-        args=(codes, markets),
+        args=([] if skip_ashare else codes, markets),
         name="collector-backfill",
         daemon=True,
     ).start()
@@ -66,10 +77,11 @@ def main() -> None:
     cycle = 0
     while True:
         t0 = time.monotonic()
-        try:
-            poll_quotes(codes, last_vol)
-        except Exception as exc:
-            print(f"ashare poll failed: {exc}", flush=True)
+        if not skip_ashare and codes:
+            try:
+                poll_quotes(codes, last_vol)
+            except Exception as exc:
+                print(f"ashare poll failed: {exc}", flush=True)
         # WS 健康时 noop；断流才 REST 兜底
         try:
             markets.poll_quotes_hot()
@@ -94,12 +106,15 @@ def main() -> None:
 
 
 def _backfill_worker(codes: list[str], markets: object) -> None:
-    print(f"collector backfill {len(codes)} symbols (background)", flush=True)
-    for code in codes:
-        try:
-            backfill(code)
-        except Exception as exc:
-            print(f"backfill {code} failed: {exc}", flush=True)
+    if codes:
+        print(f"collector backfill {len(codes)} ashare symbols (background)", flush=True)
+        for code in codes:
+            try:
+                backfill(code)
+            except Exception as exc:
+                print(f"backfill {code} failed: {exc}", flush=True)
+    else:
+        print("collector ashare backfill skipped (COLLECTOR_SKIP_ASHARE)", flush=True)
     try:
         markets.backfill_markets()  # type: ignore[attr-defined]
     except Exception as exc:

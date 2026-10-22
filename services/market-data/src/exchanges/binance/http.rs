@@ -90,13 +90,16 @@ pub struct KlinesQuery {
     pub interval: String,
     #[serde(default = "default_klines")]
     pub limit: usize,
+    /// 币安同名：只要 openTime ≤ endTime 的最后 limit 根（向前翻历史）
+    #[serde(default, rename = "endTime")]
+    pub end_time: Option<u64>,
 }
 
 fn default_interval() -> String {
     "1h".into()
 }
 fn default_klines() -> usize {
-    100
+    200
 }
 
 pub async fn ticker_price(
@@ -205,7 +208,9 @@ pub async fn trades(Query(q): Query<TradesQuery>) -> Result<Json<Value>, (Status
 
 pub async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
     let symbol = normalize_symbol(&q.symbol);
-    let rows = crate::qdb_read::binance_klines(&symbol, &q.interval, q.limit).await;
+    let limit = q.limit.clamp(1, 1500);
+    let rows =
+        crate::qdb_read::binance_klines(&symbol, &q.interval, limit, q.end_time).await;
     Ok(Json(Value::Array(rows)))
 }
 

@@ -1,4 +1,5 @@
 //! 行情只读 qdb（经 equitylab-qdb）。币安/RWA K 线折叠属本服务 adapter。
+//! K 线按窗口读（limit + endTime），对齐主流行情台：首屏少拉、左滑补历史。
 
 use equitylab_qdb::Client;
 use serde_json::{json, Value};
@@ -18,9 +19,45 @@ pub async fn klines(symbol: &str, period: &str) -> Vec<Value> {
 }
 
 /// 把 qdb K 线折成币安数组：`[openTime, open, high, low, close, volume]`。
-pub async fn binance_klines(symbol: &str, interval: &str, limit: usize) -> Vec<Value> {
+///
+/// 优先读 collector 写入的 `binance:kline:{symbol}:{interval}` docs（可含历史）；
+/// 引擎聚合 K 线受 late-tick 限制，水位推进后无法靠回补 trades 填满首屏。
+///
+/// - `limit`：目标根数（折叠后）
+/// - `end_time_ms`：只要开盘时间 ≤ 该毫秒的桶（向前翻页时传「当前最老一根 - 1」）
+pub async fn binance_klines(
+    symbol: &str,
+    interval: &str,
+    limit: usize,
+    end_time_ms: Option<u64>,
+) -> Vec<Value> {
+    // 与 collector docs 保留上限对齐，禁止一次拉爆内存
+    let limit = limit.clamp(1, 500);
+    let key = format!("binance:kline:{symbol}:{interval}");
+    if let Some(doc) = doc(&key).await {
+        if let Some(rows) = doc_kline_rows(&doc) {
+            let filtered: Vec<Value> = rows
+                .into_iter()
+                .filter(|row| match end_time_ms {
+                    None => true,
+                    Some(end) => row_open_time_ms(row).map(|t| t <= end).unwrap_or(false),
+                })
+                .collect();
+            let start = filtered.len().saturating_sub(limit);
+            return filtered[start..].to_vec();
+        }
+    }
     let (period, group) = map_interval(interval);
-    let rows = klines(&format!("BINANCE:{symbol}"), period).await;
+    // 折叠会吞掉 group 根原生桶，多取一点原生行
+    let raw_limit = limit.saturating_mul(group).saturating_add(group).min(5_000);
+    let rows = client()
+        .klines_window(
+            &format!("BINANCE:{symbol}"),
+            period,
+            Some(raw_limit),
+            end_time_ms,
+        )
+        .await;
     let folded = fold(&rows, group);
     let start = folded.len().saturating_sub(limit);
     folded[start..]
@@ -29,9 +66,37 @@ pub async fn binance_klines(symbol: &str, interval: &str, limit: usize) -> Vec<V
         .collect()
 }
 
-pub async fn rwa_klines(ticker: &str, interval: &str, limit: usize) -> Vec<Value> {
+fn doc_kline_rows(doc: &Value) -> Option<Vec<Value>> {
+    if let Some(arr) = doc.as_array() {
+        return Some(arr.clone());
+    }
+    doc.get("data").and_then(|v| v.as_array()).map(|a| a.clone())
+}
+
+fn row_open_time_ms(row: &Value) -> Option<u64> {
+    let cell = row.get(0)?;
+    cell.as_u64()
+        .or_else(|| cell.as_i64().map(|n| n as u64))
+        .or_else(|| cell.as_str().and_then(|s| s.parse().ok()))
+}
+
+pub async fn rwa_klines(
+    ticker: &str,
+    interval: &str,
+    limit: usize,
+    end_time_ms: Option<u64>,
+) -> Vec<Value> {
     let (period, group) = map_interval(interval);
-    let rows = klines(&format!("ONDO:{ticker}"), period).await;
+    let limit = limit.clamp(1, 300);
+    let raw_limit = limit.saturating_mul(group).saturating_add(group).min(5_000);
+    let rows = client()
+        .klines_window(
+            &format!("ONDO:{ticker}"),
+            period,
+            Some(raw_limit),
+            end_time_ms,
+        )
+        .await;
     let folded = fold(&rows, group);
     let start = folded.len().saturating_sub(limit);
     folded[start..].iter().filter_map(to_binance_row).collect()
