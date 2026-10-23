@@ -985,6 +985,74 @@ code {
   font-size: 11px;
 }
 
+.bn-ind-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.bn-ind-group-label {
+  margin-left: 6px;
+  margin-right: 2px;
+  font-size: 11px;
+  color: var(--bn-text-tertiary);
+}
+
+.bn-ind-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--bn-border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--bn-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bn-ind-chip:hover {
+  color: var(--bn-text);
+  border-color: var(--bn-text-tertiary);
+}
+
+.bn-ind-chip.on {
+  color: var(--bn-yellow, #f0b90b);
+  border-color: var(--bn-yellow, #f0b90b);
+  background: rgba(240, 185, 11, 0.08);
+}
+
+.bn-chart-root.has-macd .bn-chart-stage {
+  min-height: 320px;
+}
+
+.bn-macd-pane {
+  display: flex;
+  flex-direction: column;
+  height: 140px;
+  border-top: 1px solid var(--bn-border);
+  background: #161a1e;
+}
+
+.bn-macd-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 10px 0;
+  font-size: 11px;
+  color: var(--bn-text-tertiary);
+}
+
+.bn-macd-label i {
+  font-style: normal;
+}
+
+.bn-macd-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .bn-ohlc-bar {
   display: flex;
   flex-wrap: wrap;
