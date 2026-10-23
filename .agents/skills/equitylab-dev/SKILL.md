@@ -37,6 +37,7 @@ description: >-
 ## 实现规则
 
 - **深模块**：行情只经 `MarketDataProvider`；新数据源加 Provider，不改 handler 业务分支堆叠（见 skill `codebase-design`）。  
+- **读路径零外呼**：除 `services/collector` 外，禁止直查公开行情上游（币安 REST/WS、新浪、RWA bapi、AlphaFeed 等）；一律经 `packages/qdb-*` 读 qdb，或经 market-data 已 qdb 化的 REST / `/qdb/ws`（见根目录 `AGENTS.md` §7）。缺数据空/503，**禁止**在读 handler 里回源。实现时不要复活 `/v3` 透传、`/binance/ws` 上游代理、或 research 里的 sina/adata 直拉。  
 - **工具三要素**：`name` + `description` + Zod/schema + `run`；编排层不得绕过注册表直打下游（调试除外）。  
 - **Stub 诚实**：演示 IC/回测/RAG 必须带 `demo` / mode=stub 或等价标注；禁止写成已生产可用。  
 - **缓存与限流**：报价写缓存默认 TTL 3s；网关限流按 IP 滑动窗口——改默认值时更新 `.env.example` 与 `docs/2026-10-15-containers.md`。  

@@ -18,22 +18,18 @@ fn map_err(e: ProviderError) -> (StatusCode, String) {
     }
 }
 
-pub async fn ping(State(client): State<Arc<Client>>) -> Result<Json<Value>, (StatusCode, String)> {
-    let v = client
-        .get_v3("ping", &HashMap::new())
-        .await
-        .map_err(map_err)?;
-    Ok(Json(v))
+pub async fn ping() -> Json<Value> {
+    // 不回源币安；存活由本服务 + qdb 读路径保证
+    Json(json!({}))
 }
 
-pub async fn server_time(
-    State(client): State<Arc<Client>>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let v = client
-        .get_v3("time", &HashMap::new())
-        .await
-        .map_err(map_err)?;
-    Ok(Json(v))
+pub async fn server_time() -> Json<Value> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Json(json!({ "serverTime": ms, "source": "local" }))
 }
 
 pub async fn exchange_info(
@@ -44,21 +40,15 @@ pub async fn exchange_info(
 }
 
 pub async fn proxy_v3(
-    State(client): State<Arc<Client>>,
     Path(path): Path<String>,
-    Query(query): Query<HashMap<String, String>>,
+    Query(_query): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let lower = path.to_lowercase();
-    for deny in ["order", "account", "sapi", "wapi", "userdata", "margin", "listenkey"] {
-        if lower.contains(deny) {
-            return Err((
-                StatusCode::FORBIDDEN,
-                format!("refusing non-public path segment: {deny}"),
-            ));
-        }
-    }
-    let v = client.get_v3(&path, &query).await.map_err(map_err)?;
-    Ok(Json(v))
+    Err((
+        StatusCode::FORBIDDEN,
+        format!(
+            "qdb-only: refusing upstream proxy /v3/{path}; use typed endpoints that read qdb"
+        ),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -236,8 +226,8 @@ pub async fn catalog() -> Json<Value> {
             "GET .../v3/{*path}"
         ],
         "websocket": [
-            "WS .../ws?streams=btcusdt@trade/btcusdt@ticker",
-            "WS .../ws?stream=btcusdt@kline_1m"
+            "WS /qdb/ws — SELECT … SUBSCRIBE（唯一订阅读）",
+            "WS .../ws — refused (qdb-only; no upstream Binance proxy)"
         ],
         "unified": [
             "GET /quotes/{symbol} when MARKET_PROVIDER=binance",
@@ -246,12 +236,13 @@ pub async fn catalog() -> Json<Value> {
         ],
         "rwa": [
             "GET .../rwa/stocks",
+            "GET .../rwa/board?tickers=",
             "GET .../rwa/market/status",
             "GET .../rwa/dynamic?chainId=&contractAddress=",
             "GET .../rwa/klines?chainId=&contractAddress=&interval=",
             "GET .../rwa/quote?ticker=AAPL"
         ],
         "symbol": "BTCUSDT (also btc/usdt); RWA ticker e.g. AAPL",
-        "note": "WebSocket 请直连 market-data 端口（网关 HTTP 反代不升级 WS）；RWA 为 Ondo 代币化美股公开行情"
+        "note": "读路径只读 qdb；/v3/{*} 与 /ws 上游代理已拒绝；订阅读用 /qdb/ws"
     }))
 }

@@ -11,6 +11,12 @@ from typing import Any
 import requests
 
 from main import get_klines, ohlc_trades, post, scale
+from retention import (
+    cutoff_ns,
+    filter_binance_kline_rows,
+    start_docs_gc,
+    trim_rwa_kline_doc,
+)
 
 # 默认 vision：部分网络 api.binance.com 超时；Docker Desktop 直连 TLS 失败时用 COLLECTOR_HTTPS_PROXY
 BINANCE = os.environ.get("BINANCE_REST_URL", "https://data-api.binance.vision").rstrip("/")
@@ -267,8 +273,10 @@ def _store_binance_klines(
     rows = _binance_klines(symbol, interval, retain)
     if not rows:
         return 0
-    # 只留最近 retain 根并整 key 覆盖；不与旧 doc 合并，避免无限增长
-    rows = rows[-retain:]
+    # 根数硬顶 + 15 天时间窗；整 key 覆盖，不与旧 doc 合并
+    rows = filter_binance_kline_rows(rows[-retain:])
+    if not rows:
+        return 0
     _put_docs([{"key": f"binance:kline:{symbol}:{interval}", "value": {"data": rows}}])
     write_trades = os.environ.get("BINANCE_KLINE_WRITE_TRADES", "0").strip().lower() not in (
         "0",
@@ -285,9 +293,12 @@ def _store_binance_klines(
     have: set[int] = set()
     if only_missing:
         have = {int(row["ts"]) for row in get_klines(qsym, interval)}
+    cut = cutoff_ns()
     trades: list[dict] = []
     for row in trade_rows:
         ts = int(row[0]) * 1_000_000
+        if ts < cut:
+            continue
         if only_missing and ts in have:
             continue
         trades.extend(
@@ -738,14 +749,17 @@ def _store_rwa_klines(
         },
         timeout=20,
     )
-    # 裁掉超额 K 线后再落 docs（覆盖写）
+    # 根数硬顶 + 15 天时间窗后再落 docs（覆盖写）
     if isinstance(raw, dict):
         data = raw.get("data")
         if isinstance(data, dict):
             infos = data.get("klineInfos")
-            if isinstance(infos, list) and len(infos) > retain:
-                data = {**data, "klineInfos": infos[-retain:]}
+            if isinstance(infos, list):
+                if len(infos) > retain:
+                    infos = infos[-retain:]
+                data = {**data, "klineInfos": infos}
                 raw = {**raw, "data": data}
+        raw = trim_rwa_kline_doc(raw)
     _put_docs([{"key": f"rwa:kline:{ticker}:{interval}", "value": raw}])
     if not write_trades:
         return
@@ -755,10 +769,11 @@ def _store_rwa_klines(
     infos = infos[-retain:]
     qsym = f"ONDO:{ticker}"
     have = {int(row["ts"]) for row in get_klines(qsym, "1h")}
+    cut = cutoff_ns()
     trades = []
     for row in infos:
         ts = int(row[0]) * 1_000_000
-        if ts in have:
+        if ts < cut or ts in have:
             continue
         trades.extend(
             ohlc_trades(
@@ -852,6 +867,24 @@ def _binance_klines(symbol: str, interval: str, limit: int) -> list[list]:
 def _put_docs(items: list[dict]) -> None:
     if items:
         post("/v1/docs", {"items": items})
+
+
+def start_retention_gc() -> None:
+    """定时清理 docs 中超龄 K 线（默认 15 天）。"""
+
+    def get_doc(key: str) -> Any | None:
+        from main import qdb
+
+        return qdb.get_doc(key)
+
+    start_docs_gc(
+        get_doc=get_doc,
+        put_docs=_put_docs,
+        binance_symbols=list(BINANCE_SYMBOLS),
+        binance_intervals=list(BINANCE_KLINE_INTERVALS),
+        rwa_tickers=list(RWA_TICKERS),
+        rwa_intervals=list(RWA_KLINE_INTERVALS),
+    )
 
 
 _TOKEN_CACHE: list[dict[str, Any]] = []

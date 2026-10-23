@@ -23,7 +23,8 @@ import { DepthChart } from "../components/markets/DepthChart";
 import { HOT_SYMBOLS } from "../components/markets/HotTickerStrip";
 import { useListKeyboard } from "../components/markets/useListKeyboard";
 import { flashClass, usePriceFlash } from "../components/markets/usePriceFlash";
-import { useQdbSnapshot } from "../components/markets/useQdbSnapshot";
+import { useQdbKlines } from "../components/markets/useQdbKlines";
+import { useQdbSnapshots } from "../components/markets/useQdbSnapshots";
 import { useVisibilityPolling } from "../components/markets/useVisibilityPolling";
 import { formatLocalTime } from "../../lib/time";
 
@@ -181,10 +182,16 @@ function MarketsPageInner() {
   const historyLoadingRef = useRef(false);
   const klineAbortRef = useRef<AbortController | null>(null);
   const switchGenRef = useRef(0);
-  // 盘口 REST 5s；价走 WS。不可见停表
+  // 盘口/24h 字段读 qdb docs（经 market-data）；最新价走 snapshots 订阅。不可见停表
   const bookTick = useVisibilityPolling(5_000);
   const listTick = useVisibilityPolling(30_000);
+  /** 折叠周期或引擎无 trade 时 docs 尾刷；原生周期优先 klines SUBSCRIBE */
   const klineTick = useVisibilityPolling(30_000);
+
+  const snapSymbols = useMemo(
+    () => WATCHLIST.map((s) => `BINANCE:${s}`),
+    [],
+  );
 
   const loadList = useCallback(async () => {
     const symbols = encodeURIComponent(JSON.stringify([...WATCHLIST]));
@@ -200,10 +207,17 @@ function MarketsPageInner() {
         (order.get(a.symbol as (typeof WATCHLIST)[number]) ?? 99) -
         (order.get(b.symbol as (typeof WATCHLIST)[number]) ?? 99),
     );
-    setList(rows);
+    // 保留订阅覆盖的 lastPrice，避免 docs 轮询盖掉推送价
+    setList((prev) => {
+      const live = new Map(prev.map((t) => [t.symbol, t.lastPrice]));
+      return rows.map((t) => ({
+        ...t,
+        lastPrice: live.get(t.symbol) || t.lastPrice,
+      }));
+    });
   }, []);
 
-  // REST 列表只补涨跌/量；lastPrice 以 WS 为准，避免 20s 轮询盖掉实时价
+  // docs 列表只补涨跌/量；last 以 snapshots 为准
   useEffect(() => {
     const cur = list.find((t) => t.symbol === symbol);
     if (!cur) return;
@@ -218,10 +232,18 @@ function MarketsPageInner() {
     });
   }, [list, symbol]);
 
-  // Wind：推送覆盖最新 / 买一卖一；24h 涨跌仍来自 REST ticker docs
-  useQdbSnapshot(symbol ? `BINANCE:${symbol}` : null, (row) => {
+  // collector → quotes → snapshots SUBSCRIBE（全 watchlist）
+  useQdbSnapshots(snapSymbols, (row) => {
+    const code = row.symbol.includes(":")
+      ? row.symbol.split(":").slice(1).join(":")
+      : row.symbol;
+    if (!isWatchSymbol(code)) return;
     const last = String(row.last);
     startTransition(() => {
+      setList((prev) =>
+        prev.map((t) => (t.symbol === code ? { ...t, lastPrice: last } : t)),
+      );
+      if (code !== symbol) return;
       if (row.bid != null && row.bid > 0) setBid(row.bid);
       if (row.ask != null && row.ask > 0) setAsk(row.ask);
       setTicker((prev) =>
@@ -238,11 +260,31 @@ function MarketsPageInner() {
               quoteVolume: "0",
             },
       );
-      setList((prev) =>
-        prev.map((t) => (t.symbol === symbol ? { ...t, lastPrice: last } : t)),
-      );
     });
   });
+
+  // 原生周期：引擎 klines 订阅尾刷（依赖 BINANCE_WS_WRITE_TRADES）；历史仍 docs
+  useQdbKlines(
+    symbol ? `BINANCE:${symbol}` : null,
+    interval,
+    (bar) => {
+      startTransition(() => {
+        setKlines((prev) => {
+          if (!prev.length) return prev;
+          const last = prev[prev.length - 1];
+          const t = Number(bar[0]);
+          const lt = Number(last[0]);
+          if (t === lt) {
+            const next = prev.slice();
+            next[next.length - 1] = bar;
+            return next;
+          }
+          if (t > lt) return retainKlines([...prev, bar]);
+          return prev;
+        });
+      });
+    },
+  );
 
   const loadBook = useCallback(async (sym: string) => {
     try {

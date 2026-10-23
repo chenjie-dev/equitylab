@@ -1,6 +1,5 @@
-//! 币安 Web3 Ondo 代币化美股公开行情（免 Key）。
+//! 币安 Web3 Ondo 代币化美股：只读 qdb（collector 回源写入）。
 //!
-//! 上游文档：Binance Web3 tokenized securities（RWA）公开 bapi。
 //! 挂载：`/exchanges/binance/rwa/*` · `/binance/rwa/*`
 
 use axum::{
@@ -12,117 +11,15 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
-const UA: &str = "binance-web3/1.1 (Skill)";
-const DEFAULT_BASE: &str = "https://www.binance.com";
+/// 占位 state（handler 只读 qdb；保留 Arc 以便路由签名稳定）。
+#[derive(Clone, Default)]
+pub struct RwaClient;
 
-#[derive(Clone)]
-struct CacheEntry {
-    value: Value,
-    expires: Instant,
-}
-
-/// Ondo RWA HTTP 客户端（短 TTL 内存缓存）。
-#[derive(Clone)]
-pub struct RwaClient {
-    http: reqwest::Client,
-    base: String,
-    cache: Arc<Mutex<HashMap<String, CacheEntry>>>,
-}
-
-#[allow(dead_code)]
 impl RwaClient {
     pub fn from_env() -> Self {
-        Self {
-            http: reqwest::Client::builder()
-                .user_agent(UA)
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
-            base: std::env::var("BINANCE_RWA_BASE_URL")
-                .unwrap_or_else(|_| DEFAULT_BASE.into())
-                .trim_end_matches('/')
-                .to_string(),
-            cache: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn cache_get(&self, key: &str) -> Option<Value> {
-        let guard = self.cache.lock().ok()?;
-        let e = guard.get(key)?;
-        if e.expires > Instant::now() {
-            Some(e.value.clone())
-        } else {
-            None
-        }
-    }
-
-    fn cache_put(&self, key: String, value: Value, ttl: Duration) {
-        if let Ok(mut guard) = self.cache.lock() {
-            guard.insert(
-                key,
-                CacheEntry {
-                    value,
-                    expires: Instant::now() + ttl,
-                },
-            );
-            if guard.len() > 256 {
-                let now = Instant::now();
-                guard.retain(|_, e| e.expires > now);
-            }
-        }
-    }
-
-    async fn get_bapi(
-        &self,
-        path: &str,
-        query: &HashMap<String, String>,
-        ttl: Duration,
-    ) -> Result<Value, (StatusCode, String)> {
-        let mut pairs: Vec<_> = query.iter().collect();
-        pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let q = pairs
-            .into_iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
-        let key = format!("{path}?{q}");
-        if let Some(hit) = self.cache_get(&key) {
-            return Ok(hit);
-        }
-
-        let url = format!("{}{}", self.base, path);
-        let mut req = self.http.get(&url).header("Accept-Encoding", "identity");
-        if !query.is_empty() {
-            req = req.query(query);
-        }
-        let res = req
-            .send()
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("rwa connect: {e}")))?;
-        let status = res.status();
-        let body = res
-            .text()
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("rwa body: {e}")))?;
-        if !status.is_success() {
-            return Err((
-                StatusCode::BAD_GATEWAY,
-                format!(
-                    "rwa {status}: {}",
-                    body.chars().take(240).collect::<String>()
-                ),
-            ));
-        }
-        let value: Value = serde_json::from_str(&body).map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("rwa json: {e}"),
-            )
-        })?;
-        self.cache_put(key, value.clone(), ttl);
-        Ok(value)
+        Self
     }
 }
 
@@ -143,12 +40,12 @@ pub fn router(client: Arc<RwaClient>) -> Router {
 async fn catalog() -> Json<Value> {
     Json(json!({
         "id": "binance-rwa",
-        "name": "Binance Ondo Tokenized US Stocks (public)",
+        "name": "Binance Ondo Tokenized US Stocks (qdb-backed)",
         "auth": "none",
-        "upstream": "https://www.binance.com/bapi/defi/…/rwa/…",
+        "source": "qdb",
         "docs": [
-            "https://developers.binance.com/zh-CN/docs/introduction",
-            "docs/2026-10-16-binance-market.md#代币化美股-ondo-rwa"
+            "docs/2026-10-16-binance-market.md#代币化美股-ondo-rwa",
+            "docs/2026-10-20-qdb-行情库.md"
         ],
         "endpoints": [
             "GET .../rwa/stocks?type=1&preferChainId=56",
@@ -160,7 +57,7 @@ async fn catalog() -> Json<Value> {
             "GET .../rwa/klines?chainId=&contractAddress=&interval=&limit=",
             "GET .../rwa/quote?ticker=AAPL&preferChainId=56"
         ],
-        "note": "代币化美股 ≠ 纽交所原生 feed；列表 board / K 线 rwa:kline:* 由 collector 全量持续写"
+        "note": "代币化美股 ≠ 纽交所原生 feed；列表 board / K 线 rwa:kline:* 由 collector 全量持续写；读路径禁止 bapi"
     }))
 }
 
@@ -214,6 +111,7 @@ fn default_prefer_chain() -> String {
 }
 
 async fn stocks(Query(q): Query<StocksQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let _ = q.r#type;
     let raw = crate::qdb_read::doc("rwa:stocks").await.unwrap_or_else(|| {
         json!({"code": "000000", "success": true, "count": 0, "data": []})
     });
@@ -412,7 +310,7 @@ async fn quote_by_ticker(Query(q): Query<QuoteQuery>) -> Result<Json<Value>, (St
     if catalog_empty {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "rwa catalog empty (www.binance.com unreachable or RWA_WORKERS=0)".into(),
+            "rwa catalog empty in qdb (collector RWA_WORKERS=0 or upstream unreachable)".into(),
         ));
     }
     let token = token_from_stocks(&ticker, &q.prefer_chain_id)

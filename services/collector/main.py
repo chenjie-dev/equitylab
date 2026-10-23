@@ -59,6 +59,10 @@ def main() -> None:
         markets.start_rwa_kline_feed()
     except Exception as exc:
         print(f"rwa kline feed start failed: {exc}", flush=True)
+    try:
+        markets.start_retention_gc()
+    except Exception as exc:
+        print(f"retention gc start failed: {exc}", flush=True)
 
     threading.Thread(
         target=_backfill_worker,
@@ -144,6 +148,8 @@ def wait_qdb() -> None:
 
 
 def backfill(code: str) -> None:
+    from retention import cutoff_ns
+
     exchange, _ = split_symbol(code)
     symbol = f"{exchange}:{code.zfill(6)}"
     have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m")}
@@ -151,18 +157,19 @@ def backfill(code: str) -> None:
     minute = sina_klines(code, 5, 500)
     daily = sina_klines(code, 240, 300)
     covered = {bar["day"][:10] for bar in minute}
+    cut = cutoff_ns()
     events: list[tuple[int, dict, str]] = []
     for bar in daily:
         day = bar["day"][:10]
         if day in covered:
             continue
         ts = bar_ts(day)
-        if ts in have_1d:
+        if ts < cut or ts in have_1d:
             continue
         events.append((ts, bar, "1d"))
     for bar in minute:
         ts = bar_ts(bar["day"])
-        if ts in have_5m:
+        if ts < cut or ts in have_5m:
             continue
         events.append((ts, bar, "5m"))
     events.sort(key=lambda item: item[0])

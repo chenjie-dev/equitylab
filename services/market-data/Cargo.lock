@@ -293,7 +293,6 @@ dependencies = [
  "equitylab-qdb",
  "futures-util",
  "redis",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror",

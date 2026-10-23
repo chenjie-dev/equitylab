@@ -8,7 +8,7 @@
 //! # 环境变量
 //! - `PORT`（默认 3002）
 //! - `REDIS_URL`
-//! - `MARKET_PROVIDER`：`mock` | `binance` | `alphafeed`
+//! - `MARKET_PROVIDER`：`mock` | `binance`（读 qdb）；`alphafeed` 保留但拒绝外呼
 //! - `BINANCE_REST_URL` / `BINANCE_WS_URL`
 //! - `QDB_URL`：只读行情与 `/qdb/ws` 代理目标
 

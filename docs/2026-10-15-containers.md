@@ -22,7 +22,7 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 
 卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
 
-qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`）。`collector` 是唯一回源方：A 股、币安现货、Ondo 代币化美股写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data 只读 `http://qdb:9090`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。`collector` 是**唯一**可回源公开行情的服务：A 股、币安现货、Ondo 代币化美股经 `packages/qdb-rs` 写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data **读路径零外呼**，只读 `http://qdb:9090`（经客户端包）；前端订阅读经 market-data `/qdb/ws`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 
@@ -88,6 +88,7 @@ docker compose down
 | `/v1/klines` 超时、图表 Loading | ashare/全量 backfill/`WRITE_*=1` 占住引擎锁 | `.env`：`COLLECTOR_SKIP_ASHARE=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_QUOTES=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；先 `stop collector` 再 `restart qdb` |
 | Stocks 页「暂无标的」/ quote 503 | `www.binance.com` 超时或 `RWA_WORKERS=0` | 宿主机 Clash 等代理测通 bapi 后设 `COLLECTOR_RWA_PROXY=http://host.docker.internal:7897`、`RWA_WORKERS=4`，recreate collector；现货仍可用 `COLLECTOR_HTTPS_PROXY=…:18080` |
 | 行情台卡顿 / 请求过多 | 后台轮询过密、全量 board | 前端已：可见性停表、Stocks 虚拟列表、board `?tickers=` 热路径、K 线 `update` 尾刷；勿把盘口轮询压到 &lt;3s |
+| docs K 线越积越多 | 未开时间窗 | `QDB_RETENTION_DAYS=15`（默认）+ collector `qdb-retention-gc`；日志有 `retention gc`；引擎 WAL 仍无按日删除（见 qdb 行情库文档） |
 | collector 日志 `SSL: WRONG_VERSION_NUMBER` | Docker VM 出网 TLS 被劫持；宿主机直连正常 | ① 宿主机 `python3 scripts/host-connect-proxy.py 18080`（守护进程）② `.env` 设 `COLLECTOR_HTTPS_PROXY=http://host.docker.internal:18080` ③ `docker compose up -d --force-recreate collector`；勿设全局 `HTTP_PROXY`（会拖死 A 股） |
 | `www.binance.com` EOF / Stocks 空 | 本机到币安主站不通 | `.env` 设 `RWA_WORKERS=0` `RWA_KLINE_WORKERS=0` 先保现货；RWA 恢复后再打开 |
 | `/v1/klines` 一直挂起 | 引擎锁死（旧进程） | `docker compose restart qdb`（必要时先 `stop collector`） |

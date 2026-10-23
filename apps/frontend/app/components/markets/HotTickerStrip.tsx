@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * 币安式顶部热门行情条：固定一小撮交易对，24hr REST + 选中标的 qdb 推送覆盖最新价。
- * 仅在现货 `/markets` 挂载；切票写 `?symbol=`。
+ * 币安式顶部热门行情条：固定热门对。
+ * 24h% 读 qdb ticker docs（经 market-data）；最新价 snapshots SUBSCRIBE。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { flashClass, usePriceFlash } from "./usePriceFlash";
-import { useQdbSnapshot } from "./useQdbSnapshot";
+import { useQdbSnapshots } from "./useQdbSnapshots";
 import { useVisibilityPolling } from "./useVisibilityPolling";
 
 export const HOT_SYMBOLS = [
@@ -83,6 +83,11 @@ export function HotTickerStrip() {
   const [rows, setRows] = useState<HotRow[]>([]);
   const listTick = useVisibilityPolling(30_000);
 
+  const snapSymbols = useMemo(
+    () => (onSpot ? HOT_SYMBOLS.map((s) => `BINANCE:${s}`) : []),
+    [onSpot],
+  );
+
   const load = useCallback(async () => {
     const symbols = encodeURIComponent(JSON.stringify([...HOT_SYMBOLS]));
     const res = await fetch(
@@ -92,15 +97,20 @@ export function HotTickerStrip() {
     const all = (await res.json()) as HotRow[];
     if (!Array.isArray(all)) return;
     const order = new Map(HOT_SYMBOLS.map((s, i) => [s, i]));
-    setRows(
-      [...all]
+    setRows((prev) => {
+      const live = new Map(prev.map((t) => [t.symbol, t.lastPrice]));
+      return [...all]
         .filter((t) => order.has(t.symbol as (typeof HOT_SYMBOLS)[number]))
         .sort(
           (a, b) =>
             (order.get(a.symbol as (typeof HOT_SYMBOLS)[number]) ?? 99) -
             (order.get(b.symbol as (typeof HOT_SYMBOLS)[number]) ?? 99),
-        ),
-    );
+        )
+        .map((t) => ({
+          ...t,
+          lastPrice: live.get(t.symbol) || t.lastPrice,
+        }));
+    });
   }, []);
 
   useEffect(() => {
@@ -113,12 +123,13 @@ export function HotTickerStrip() {
     void load();
   }, [onSpot, listTick, load]);
 
-  useQdbSnapshot(onSpot ? `BINANCE:${selected}` : null, (row) => {
+  useQdbSnapshots(snapSymbols, (row) => {
+    const code = row.symbol.includes(":")
+      ? row.symbol.split(":").slice(1).join(":")
+      : row.symbol;
     const last = String(row.last);
     setRows((prev) =>
-      prev.map((t) =>
-        t.symbol === selected ? { ...t, lastPrice: last } : t,
-      ),
+      prev.map((t) => (t.symbol === code ? { ...t, lastPrice: last } : t)),
     );
   });
 
@@ -132,11 +143,14 @@ export function HotTickerStrip() {
 
   return (
     <div className="bn-hot-strip wind" aria-label="热门行情">
-      {(rows.length ? rows : HOT_SYMBOLS.map((symbol) => ({
-        symbol,
-        lastPrice: "",
-        priceChangePercent: "",
-      }))).map((row) => (
+      {(rows.length
+        ? rows
+        : HOT_SYMBOLS.map((symbol) => ({
+            symbol,
+            lastPrice: "",
+            priceChangePercent: "",
+          }))
+      ).map((row) => (
         <HotChip
           key={row.symbol}
           row={row}

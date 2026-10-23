@@ -78,7 +78,12 @@ YYYY-MM-DD-<标题>.md
 4. **因子 / 回测**在研究层确定性引擎执行；模型只做规划与解释。不要把 IC/回测指标假装成已接 alphalens 的真实结果——stub 须标明 `demo` / MVP。  
 5. **工具循环**：编排层最多 5 轮、单工具超时 ≤30s（立项约定）。  
 6. **报价缓存** TTL≈3s；盘中 WebSocket 推送不进 MCP（后续独立进程）。  
-7. **行情只经 qdb**：`services/collector` 唯一回源；Research / Market-Data 读路径不直连公开上游。Compose 内 `QDB_FEED=0`。  
+7. **行情只经 qdb（读路径零外呼）**：  
+   - **唯一回源**：只有 `services/collector`（及明确授权的采集进程）可访问币安 / 新浪 / RWA bapi 等公开上游，写入 qdb。  
+   - **所有读路径**（`apps/frontend`、`apps/research`、`apps/orchestrator`、`services/market-data`、`services/gateway` 业务转发）**零外部行情 HTTP/WS**：只读 qdb（经 `packages/qdb-*` 的 snapshots / klines / docs）或 market-data 已 qdb 化的 REST / `/qdb/ws`。缺数据 → 空/503，等 collector 补，**禁止回源**。  
+   - market-data **不得**再代理上游（如 `/binance/v3/{*}`、`/binance/ws`、RWA bapi）；此类路由应拒绝。  
+   - Compose 内 `QDB_FEED=0`（不用 qdb 内置采集）。  
+   - 前端展示派生（MA/BOLL/MACD 等）只基于已从 qdb 拿到的序列，不另拉上游。  
 8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读仍经 market-data `/qdb/ws` 代理，但订阅逻辑用 TS 客户端。详见 [`docs/2026-10-20-qdb-client-design.md`](docs/2026-10-20-qdb-client-design.md)。  
 9. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。  
 10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。

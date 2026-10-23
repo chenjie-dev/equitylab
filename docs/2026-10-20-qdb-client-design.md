@@ -8,10 +8,11 @@
 
 ## 硬性约定（后续一律遵守）
 
+- **读路径零外呼**：frontend / research / market-data / orchestrator **禁止**直查币安、新浪、AlphaFeed 等公开行情 HTTP/WS；一律读 qdb（经本包）或经 market-data 已 qdb 化的 REST/`/qdb/ws`。缺数据空返回或 503，由 collector 补写，**不回源**。  
 - **以后增加任何 qdb 用法**（新交易所、新页面、新 sidecar、脚本）**都必须走这些 client**。  
 - **业务代码禁止直连** qdb：不得在业务层手写 `QDB_URL` + `/v1/quotes|trades|docs|snapshots|klines|ws`。  
 - 缺方法 / 缺语言绑定：先改 `packages/qdb-*`，再改调用方。  
-- 写路径调用纪律不变：只有 collector（及其明确授权的采集进程）调用写 API；读路径只用读表面。
+- 写路径调用纪律不变：只有 collector（及其明确授权的采集进程）可回源并调用写 API；读路径只用读表面。
 
 ## Goals
 

@@ -1,10 +1,9 @@
-"""adata 封装：全市场代码 / 实时行情 / K 线 / 五档（同步库，经 to_thread 调用）。"""
+"""A 股读路径：全市场代码 / 实时行情 / K 线 / 五档，一律只读 qdb。"""
 
 from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any
 
 import pandas as pd
@@ -22,9 +21,6 @@ KTYPE_MAP = {
     "60m": 60,
     "1h": 60,
 }
-
-# all_code 上游偶发极慢：超时后回落种子列表，后台可再刷
-_CODES_FETCH_TIMEOUT_SEC = 25.0
 
 _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "600519", "short_name": "贵州茅台", "exchange": "SH", "symbol": "600519.SH"},
@@ -63,7 +59,7 @@ def _df_records(df: pd.DataFrame | None) -> list[dict[str, Any]]:
 
 
 class AshareService:
-    """进程内短 TTL 缓存，降低对上游公开源的压力。"""
+    """进程内短 TTL 缓存（只缓存已从 qdb 读到的结果）。"""
 
     def __init__(self) -> None:
         self._codes: list[dict[str, Any]] | None = None
@@ -71,15 +67,6 @@ class AshareService:
         self._codes_ttl = 3600.0
         self._quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._quote_ttl = 5.0
-
-    def _ensure_adata(self) -> Any:
-        try:
-            import adata  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(
-                "adata 未安装；请在 research 镜像中 pip install adata"
-            ) from e
-        return adata
 
     def list_codes(self, q: str | None = None, limit: int = 5000) -> dict[str, Any]:
         now = time.monotonic()
@@ -551,63 +538,6 @@ def _realtime_bar_from_snap(
         "change_pct": chg_pct,
         "bar_kind": "realtime",
     }
-
-
-# 新浪 scale：5/15/30/60 分钟；240 日；1200 周；7200 月
-_SINA_SCALE = {
-    "5m": 5,
-    "15m": 15,
-    "30m": 30,
-    "60m": 60,
-    "1h": 60,
-    "1d": 240,
-    "1w": 1200,
-    "1M": 7200,
-}
-
-
-def _sina_symbol(code: str) -> str:
-    code = code.zfill(6)
-    # 6/5/9 开头多为沪市；其余深市（简化，覆盖常见 A 股/ETF）
-    if code.startswith(("5", "6", "9")):
-        return f"sh{code}"
-    return f"sz{code}"
-
-
-def _klines_sina(code: str, k_type: str = "1d", limit: int = 300) -> list[dict[str, Any]]:
-    import requests
-
-    scale = _SINA_SCALE.get(k_type, 240)
-    symbol = _sina_symbol(code)
-    url = (
-        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-        "CN_MarketData.getKLineData"
-    )
-    r = requests.get(
-        url,
-        params={"symbol": symbol, "scale": scale, "ma": "no", "datalen": min(limit, 1023)},
-        headers={"User-Agent": "Mozilla/5.0 EquityLab-research/ashare"},
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list):
-        return []
-    out: list[dict[str, Any]] = []
-    for item in data:
-        day = str(item.get("day") or "")
-        out.append(
-            {
-                "trade_date": day[:10],
-                "trade_time": day if " " in day else f"{day[:10]} 00:00:00",
-                "open": item.get("open"),
-                "high": item.get("high"),
-                "low": item.get("low"),
-                "close": item.get("close"),
-                "volume": item.get("volume"),
-            }
-        )
-    return out
 
 
 # 单例，供 router 使用

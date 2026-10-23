@@ -15,8 +15,8 @@ EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 
 - 采集回源（仅 collector）：
   - REST：`BINANCE_REST_URL`（默认 `api.binance.com`，回落 `data-api`）用于 backfill / WS 断流兜底
   - **WS → qdb**：`BINANCE_WS_URL` combined stream（`bookTicker`/`trade`/`depth20@100ms`/`ticker`）写 `POST /v1/quotes` 与 docs
-- 调试用直连代理：market-data `WS .../binance/ws`（不经 qdb；正式 UI 订 `/qdb/ws`）
-- 读：`QDB_URL`（默认 `http://qdb:9090`）。ticker / depth / trades 来自 `GET /v1/docs`，K 线来自 `GET /v1/klines`（`BINANCE:{SYMBOL}`）
+- 读路径：**禁止** market-data 回源；`/binance/v3/{*}` 与 `/binance/ws` 已拒绝上游。订阅读只用 `/qdb/ws`
+- 读：`QDB_URL`（默认 `http://qdb:9090`）。ticker / depth / trades 来自 `GET /v1/docs`，K 线来自 docs/`GET /v1/klines`（`BINANCE:{SYMBOL}`）
 
 不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。qdb 原生周期为 `1m/5m/15m/1h/4h/1d`；`3m/30m/2h/6h/12h/3d/1w/1M` 由读路径折叠。
 
@@ -44,8 +44,9 @@ EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 
 exchanges/                 ← 多交易所 seam（登记 /exchanges）
   binance/                 ← 币安深模块
     mod.rs                 ← 对外：ID / BinanceModule::{router, provider}
-    client.rs              ← REST/WS 基址
-    http.rs · ws.rs        ← 原生路由
+    client.rs              ← qdb 读适配（拒绝 get_v3 外呼）
+    http.rs · ws.rs        ← 原生路由（ws 拒绝上游）
+    rwa.rs                 ← Ondo；只读 qdb docs
     provider.rs            ← 适配统一 MarketDataProvider
 ```
 
@@ -57,10 +58,10 @@ exchanges/                 ← 多交易所 seam（登记 /exchanges）
 |---|---|---|
 | 交易所目录 | `GET /exchanges` | 已注册交易所列表 |
 | 模块目录 | `GET /exchanges/binance` 或 `/binance` | 币安能力清单 |
-| REST | `.../ping` `time` `exchangeInfo` `ticker/*` `depth` `trades` `klines` … | 现货公开面 |
-| REST 透传 | `GET .../v3/{*path}` | 上游 `/api/v3/...`（仅 GET） |
-| WebSocket | `WS .../ws?streams=` | 公开流代理（直连 :3002） |
-| 统一接口 | `/quotes` `/bars` `/search` | `MARKET_PROVIDER=binance` |
+| REST | `.../ping` `time` `exchangeInfo` `ticker/*` `depth` `trades` `klines` … | **只读 qdb** |
+| REST 透传 | `GET .../v3/{*path}` | **403**（qdb-only，禁止上游） |
+| WebSocket | `WS .../ws` | **拒绝上游**；订阅读用 `/qdb/ws` |
+| 统一接口 | `/quotes` `/bars` `/search` | `MARKET_PROVIDER=binance`（读 qdb） |
 
 ## 环境变量
 
@@ -68,10 +69,10 @@ exchanges/                 ← 多交易所 seam（登记 /exchanges）
 |---|---|---|
 | `BINANCE_REST_URL` | `https://api.binance.com` | REST 基址（仅 collector） |
 | `BINANCE_REST_FALLBACK` | `https://data-api.binance.vision` | 主站 SSL/网络失败时回落 |
-| `BINANCE_WS_URL` | `wss://data-stream.binance.vision` | collector 订流写 qdb；亦为 market-data 直连代理基址 |
+| `BINANCE_WS_URL` | `wss://data-stream.binance.vision` | **仅** collector 订流写 qdb |
 | `BINANCE_WS_FALLBACK` | `wss://stream.binance.com:9443` | collector WS 主站失败时回落 |
-| `BINANCE_RWA_BASE_URL` | `https://www.binance.com` | Ondo RWA 公开 bapi 基址 |
-| `MARKET_PROVIDER` | `mock` | 设为 `binance` 时统一 Quote/Bars 走币安 |
+| `BINANCE_RWA_BASE_URL` | `https://www.binance.com` | **仅** collector Ondo RWA bapi |
+| `MARKET_PROVIDER` | `mock` | 设为 `binance` 时统一 Quote/Bars 读 qdb |
 
 符号：`BTCUSDT`（也接受 `btc/usdt`）。
 
@@ -93,11 +94,12 @@ curl -s http://localhost:3000/api/market/quotes/BTCUSDT
 curl -s 'http://localhost:3000/api/market/bars/ETHUSDT?period=1h&count=24'
 ```
 
-WebSocket（**直连** market-data，网关不升级 WS）：
+WebSocket 订阅读（**直连** market-data `:3002`，网关不升级 WS）：
 
 ```bash
-# 例：websocat
-websocat 'ws://localhost:3002/binance/ws?streams=btcusdt@trade/btcusdt@ticker'
+# 例：websocat → /qdb/ws，再发 SELECT … SUBSCRIBE
+websocat 'ws://localhost:3002/qdb/ws'
+# SELECT symbol, last FROM snapshots WHERE symbol = 'BINANCE:BTCUSDT' SUBSCRIBE
 ```
 
 ## 前端
