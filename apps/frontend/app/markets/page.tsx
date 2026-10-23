@@ -1,30 +1,34 @@
 "use client";
 
 /**
- * 币安风格公开行情台：市场列表 · K 线 · 盘口 · 成交 · 深度。
- * 仅公开 REST，无下单 / 账户 / 挂单。
+ * Wind 式公开行情台：红涨绿跌 · 推送最新价 · 闪烁 · ↑↓ 切票。
+ * 币安式壳：顶栏热门条（SiteHeader）+ `?symbol=` 切票；仅公开数据。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   BinanceChart,
   type Kline,
 } from "../components/markets/BinanceChart";
 import { DepthChart } from "../components/markets/DepthChart";
+import { HOT_SYMBOLS } from "../components/markets/HotTickerStrip";
+import { useListKeyboard } from "../components/markets/useListKeyboard";
+import { flashClass, usePriceFlash } from "../components/markets/usePriceFlash";
 import { useQdbSnapshot } from "../components/markets/useQdbSnapshot";
+import { useVisibilityPolling } from "../components/markets/useVisibilityPolling";
 import { formatLocalTime } from "../../lib/time";
 
 const WATCHLIST = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "BNBUSDT",
-  "SOLUSDT",
-  "XRPUSDT",
-  "DOGEUSDT",
-  "ADAUSDT",
-  "AVAXUSDT",
-  "DOTUSDT",
-  "LINKUSDT",
+  ...HOT_SYMBOLS,
   "POLUSDT",
   "LTCUSDT",
   "NEARUSDT",
@@ -32,6 +36,10 @@ const WATCHLIST = [
   "ATOMUSDT",
   "APTUSDT",
 ] as const;
+
+function isWatchSymbol(s: string): s is (typeof WATCHLIST)[number] {
+  return (WATCHLIST as readonly string[]).includes(s);
+}
 
 const INTERVALS = [
   "1m",
@@ -118,20 +126,54 @@ function baseAsset(sym: string): string {
 }
 
 export default function MarketsPage() {
-  const [symbol, setSymbol] = useState<string>("BTCUSDT");
+  return (
+    <Suspense
+      fallback={
+        <div className="bn-page wind">
+          <p className="bn-empty">加载行情…</p>
+        </div>
+      }
+    >
+      <MarketsPageInner />
+    </Suspense>
+  );
+}
+
+function MarketsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawSymbol = searchParams.get("symbol") || "BTCUSDT";
+  const symbol = isWatchSymbol(rawSymbol) ? rawSymbol : "BTCUSDT";
+
+  const setSymbol = useCallback(
+    (next: string) => {
+      const sym = isWatchSymbol(next) ? next : "BTCUSDT";
+      const params = new URLSearchParams(searchParams.toString());
+      if (params.get("symbol") === sym) return;
+      params.set("symbol", sym);
+      router.replace(`/markets?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  useEffect(() => {
+    if (rawSymbol !== symbol) setSymbol(symbol);
+  }, [rawSymbol, symbol, setSymbol]);
+
   const [interval, setIntervalTf] = useState<Interval>("15m");
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [list, setList] = useState<Ticker[]>([]);
   const [depth, setDepth] = useState<Depth | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [klines, setKlines] = useState<Kline[]>([]);
+  const [bid, setBid] = useState<number | null>(null);
+  const [ask, setAsk] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [favs, setFavs] = useState<Set<string>>(
     () => new Set(["BTCUSDT", "ETHUSDT"]),
   );
   const [mktTab, setMktTab] = useState<"fav" | "usdt">("usdt");
-  const [tick, setTick] = useState(0);
   const [rightTab, setRightTab] = useState<RightTab>("book");
   const [bookLimit, setBookLimit] = useState(16);
   const [historyDone, setHistoryDone] = useState(false);
@@ -139,6 +181,10 @@ export default function MarketsPage() {
   const historyLoadingRef = useRef(false);
   const klineAbortRef = useRef<AbortController | null>(null);
   const switchGenRef = useRef(0);
+  // 盘口 REST 5s；价走 WS。不可见停表
+  const bookTick = useVisibilityPolling(5_000);
+  const listTick = useVisibilityPolling(30_000);
+  const klineTick = useVisibilityPolling(30_000);
 
   const loadList = useCallback(async () => {
     const symbols = encodeURIComponent(JSON.stringify([...WATCHLIST]));
@@ -172,39 +218,47 @@ export default function MarketsPage() {
     });
   }, [list, symbol]);
 
-  // 当前标的：qdb snapshots 订阅覆盖 last；24hr 涨跌仍来自 REST ticker docs
+  // Wind：推送覆盖最新 / 买一卖一；24h 涨跌仍来自 REST ticker docs
   useQdbSnapshot(symbol ? `BINANCE:${symbol}` : null, (row) => {
     const last = String(row.last);
-    setTicker((prev) =>
-      prev && prev.symbol === symbol
-        ? { ...prev, lastPrice: last }
-        : {
-            symbol,
-            lastPrice: last,
-            priceChange: "0",
-            priceChangePercent: "0",
-            highPrice: last,
-            lowPrice: last,
-            volume: "0",
-            quoteVolume: "0",
-          },
-    );
-    setList((prev) =>
-      prev.map((t) => (t.symbol === symbol ? { ...t, lastPrice: last } : t)),
-    );
+    startTransition(() => {
+      if (row.bid != null && row.bid > 0) setBid(row.bid);
+      if (row.ask != null && row.ask > 0) setAsk(row.ask);
+      setTicker((prev) =>
+        prev && prev.symbol === symbol
+          ? { ...prev, lastPrice: last }
+          : {
+              symbol,
+              lastPrice: last,
+              priceChange: "0",
+              priceChangePercent: "0",
+              highPrice: last,
+              lowPrice: last,
+              volume: "0",
+              quoteVolume: "0",
+            },
+      );
+      setList((prev) =>
+        prev.map((t) => (t.symbol === symbol ? { ...t, lastPrice: last } : t)),
+      );
+    });
   });
 
   const loadBook = useCallback(async (sym: string) => {
     try {
       const [dRes, trRes] = await Promise.all([
-        fetch(`/api/market/binance/depth?symbol=${sym}&limit=50`),
-        fetch(`/api/market/binance/trades?symbol=${sym}&limit=50`),
+        fetch(`/api/market/binance/depth?symbol=${sym}&limit=20`),
+        fetch(`/api/market/binance/trades?symbol=${sym}&limit=40`),
       ]);
       if (!dRes.ok) throw new Error(`depth ${dRes.status}`);
       if (!trRes.ok) throw new Error(`trades ${trRes.status}`);
-      setDepth((await dRes.json()) as Depth);
-      setTrades((await trRes.json()) as Trade[]);
-      setError(null);
+      const depthBody = (await dRes.json()) as Depth;
+      const tradesBody = (await trRes.json()) as Trade[];
+      startTransition(() => {
+        setDepth(depthBody);
+        setTrades(tradesBody);
+        setError(null);
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -316,27 +370,33 @@ export default function MarketsPage() {
 
   useEffect(() => {
     void loadList();
-    const id = setInterval(() => void loadList(), 20_000);
-    return () => clearInterval(id);
   }, [loadList]);
 
-  // 盘口/成交跟 docs；K 线首屏窗口读
+  useEffect(() => {
+    if (listTick === 0) return;
+    void loadList();
+  }, [listTick, loadList]);
+
+  // 切票/周期：立刻拉盘口 + 首屏 K 线
   useEffect(() => {
     void loadBook(symbol);
     void loadKlines(symbol, interval);
-    const id = setInterval(() => setTick((n) => n + 1), 2_000);
-    return () => clearInterval(id);
   }, [symbol, interval, loadBook, loadKlines]);
 
   useEffect(() => {
-    if (tick === 0) return;
+    if (bookTick === 0) return;
     void loadBook(symbol);
-    if (tick % 15 === 0) void refreshKlineTail();
-  }, [tick, symbol, loadBook, refreshKlineTail]);
+  }, [bookTick, symbol, loadBook]);
+
+  useEffect(() => {
+    if (klineTick === 0) return;
+    void refreshKlineTail();
+  }, [klineTick, refreshKlineTail]);
 
   const change = Number(ticker?.priceChangePercent ?? 0);
   const changeUp = change >= 0;
   const digits = priceDigits(ticker?.lastPrice ?? "0");
+  const lastFlash = usePriceFlash(ticker?.lastPrice);
 
   const filteredList = useMemo(() => {
     let rows = list;
@@ -345,6 +405,12 @@ export default function MarketsPage() {
     if (q) rows = rows.filter((t) => t.symbol.includes(q));
     return rows;
   }, [list, query, mktTab, favs]);
+
+  const listIds = useMemo(
+    () => filteredList.map((t) => t.symbol),
+    [filteredList],
+  );
+  useListKeyboard(listIds, symbol, setSymbol);
 
   const book = useMemo(() => {
     const asksRaw = [...(depth?.asks ?? [])].slice(0, bookLimit).reverse();
@@ -385,7 +451,7 @@ export default function MarketsPage() {
   };
 
   return (
-    <div className="bn-page">
+    <div className="bn-page wind">
       <header className="bn-top">
         <div className="bn-top-pair">
           <div className="bn-top-name">
@@ -405,20 +471,22 @@ export default function MarketsPage() {
               type="button"
               className={favs.has(symbol) ? "bn-star on" : "bn-star"}
               onClick={() => toggleFav(symbol)}
-              title="Favorite"
-              aria-label="Favorite"
+              title="自选"
+              aria-label="自选"
             >
               ★
             </button>
-            <span className="bn-pill">Spot</span>
+            <span className="bn-pill">现货</span>
           </div>
-          <div className={`bn-top-last ${changeUp ? "up" : "down"}`}>
+          <div
+            className={`bn-top-last ${changeUp ? "up" : "down"} ${flashClass(lastFlash)}`}
+          >
             {ticker ? fmt(ticker.lastPrice, digits) : "—"}
           </div>
         </div>
         <div className="bn-top-stats">
           <div>
-            <span className="bn-label">24h Change</span>
+            <span className="bn-label">涨跌幅</span>
             <span className={changeUp ? "up" : "down"}>
               {ticker
                 ? `${changeUp ? "+" : ""}${fmt(ticker.priceChange, digits)} (${changeUp ? "+" : ""}${fmt(change, 2)}%)`
@@ -426,23 +494,54 @@ export default function MarketsPage() {
             </span>
           </div>
           <div>
-            <span className="bn-label">24h High</span>
-            <span>{ticker ? fmt(ticker.highPrice, digits) : "—"}</span>
+            <span className="bn-label">最高</span>
+            <span className="up">
+              {ticker ? fmt(ticker.highPrice, digits) : "—"}
+            </span>
           </div>
           <div>
-            <span className="bn-label">24h Low</span>
-            <span>{ticker ? fmt(ticker.lowPrice, digits) : "—"}</span>
+            <span className="bn-label">最低</span>
+            <span className="down">
+              {ticker ? fmt(ticker.lowPrice, digits) : "—"}
+            </span>
           </div>
           <div>
-            <span className="bn-label">24h Volume({baseAsset(symbol)})</span>
+            <span className="bn-label">成交量({baseAsset(symbol)})</span>
             <span>{ticker ? fmt(ticker.volume, 2) : "—"}</span>
           </div>
           <div>
-            <span className="bn-label">24h Volume(USDT)</span>
+            <span className="bn-label">成交额(USDT)</span>
             <span>{ticker ? fmt(ticker.quoteVolume, 2) : "—"}</span>
           </div>
         </div>
       </header>
+      <div className="bn-quote-strip" aria-label="五档摘要">
+        <div>
+          <span className="bn-label">最新</span>
+          <span className={changeUp ? "up" : "down"}>
+            {ticker ? fmt(ticker.lastPrice, digits) : "—"}
+          </span>
+        </div>
+        <div>
+          <span className="bn-label">买一</span>
+          <span className="up">
+            {bid != null ? fmt(bid, digits) : "—"}
+          </span>
+        </div>
+        <div>
+          <span className="bn-label">卖一</span>
+          <span className="down">
+            {ask != null ? fmt(ask, digits) : "—"}
+          </span>
+        </div>
+        <div>
+          <span className="bn-label">价差</span>
+          <span>
+            {bid != null && ask != null ? fmt(ask - bid, digits) : "—"}
+          </span>
+        </div>
+        <span className="bn-label">↑↓ 切换标的</span>
+      </div>
 
       {error ? <pre className="error bn-error">{error}</pre> : null}
 
@@ -454,7 +553,7 @@ export default function MarketsPage() {
               className={mktTab === "fav" ? "bn-tab active" : "bn-tab"}
               onClick={() => setMktTab("fav")}
             >
-              Favorites
+              自选
             </button>
             <button
               type="button"
@@ -466,53 +565,28 @@ export default function MarketsPage() {
           </div>
           <input
             className="bn-search"
-            placeholder="Search"
+            placeholder="搜索代码"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <div className="bn-mkt-head">
-            <span>Pair</span>
-            <span>Price</span>
-            <span>Change</span>
+            <span>名称</span>
+            <span>最新</span>
+            <span>涨幅</span>
           </div>
           <div className="bn-mkt-body">
-            {filteredList.map((t) => {
-              const pct = Number(t.priceChangePercent);
-              const active = t.symbol === symbol;
-              return (
-                <div
-                  key={t.symbol}
-                  className={active ? "bn-mkt-row active" : "bn-mkt-row"}
-                >
-                  <button
-                    type="button"
-                    className={
-                      favs.has(t.symbol) ? "bn-star-sm on" : "bn-star-sm"
-                    }
-                    onClick={() => toggleFav(t.symbol)}
-                    aria-label="Favorite"
-                  >
-                    ★
-                  </button>
-                  <button
-                    type="button"
-                    className="bn-mkt-pick"
-                    onClick={() => setSymbol(t.symbol)}
-                  >
-                    <span className="bn-mkt-pair">{pairLabel(t.symbol)}</span>
-                    <span className="bn-mono">
-                      {fmt(t.lastPrice, priceDigits(t.lastPrice))}
-                    </span>
-                    <span className={pct >= 0 ? "up" : "down"}>
-                      {pct >= 0 ? "+" : ""}
-                      {fmt(pct, 2)}%
-                    </span>
-                  </button>
-                </div>
-              );
-            })}
+            {filteredList.map((t) => (
+              <SpotMktRow
+                key={t.symbol}
+                t={t}
+                active={t.symbol === symbol}
+                fav={favs.has(t.symbol)}
+                onFav={() => toggleFav(t.symbol)}
+                onPick={() => setSymbol(t.symbol)}
+              />
+            ))}
             {!filteredList.length ? (
-              <p className="bn-empty">No markets</p>
+              <p className="bn-empty">无标的</p>
             ) : null}
           </div>
         </aside>
@@ -520,7 +594,7 @@ export default function MarketsPage() {
         <section className="bn-card bn-chart-panel">
           <div className="bn-tf-row">
             <div className="bn-tf-group">
-              <span className="bn-tf-label">Time</span>
+              <span className="bn-tf-label">周期</span>
               {INTERVALS.map((tf) => (
                 <button
                   key={tf}
@@ -532,13 +606,14 @@ export default function MarketsPage() {
                 </button>
               ))}
             </div>
-            <span className="bn-label">Public · read-only</span>
+            <span className="bn-label">只读 · 推送最新价</span>
           </div>
           <BinanceChart
             klines={klines}
             symbol={symbol}
             seriesKey={`${symbol}:${interval}`}
             loading={klineLoading}
+            palette="wind"
             onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
           />
         </section>
@@ -551,14 +626,14 @@ export default function MarketsPage() {
                 className={rightTab === "book" ? "bn-tab active" : "bn-tab"}
                 onClick={() => setRightTab("book")}
               >
-                Order Book
+                买卖盘
               </button>
               <button
                 type="button"
                 className={rightTab === "trades" ? "bn-tab active" : "bn-tab"}
                 onClick={() => setRightTab("trades")}
               >
-                Market Trades
+                成交明细
               </button>
               {rightTab === "book" ? (
                 <div className="bn-book-depth-btns">
@@ -579,9 +654,9 @@ export default function MarketsPage() {
             {rightTab === "book" ? (
               <>
                 <div className="bn-book-head">
-                  <span>Price(USDT)</span>
-                  <span>Amount({baseAsset(symbol)})</span>
-                  <span>Total</span>
+                  <span>价格(USDT)</span>
+                  <span>数量({baseAsset(symbol)})</span>
+                  <span>累计</span>
                 </div>
                 <div className="bn-asks bn-asks-tall">
                   {book.askRows.map((r) => (
@@ -601,7 +676,7 @@ export default function MarketsPage() {
                     {ticker ? fmt(ticker.lastPrice, digits) : "—"}
                   </strong>
                   <span className="bn-label">
-                    Spread{" "}
+                    价差{" "}
                     {Number.isFinite(book.spread)
                       ? `${fmt(book.spread, digits)} (${fmt(book.spreadPct, 4)}%)`
                       : "—"}
@@ -624,9 +699,9 @@ export default function MarketsPage() {
             ) : (
               <>
                 <div className="bn-trades-head">
-                  <span>Price(USDT)</span>
-                  <span>Amount({baseAsset(symbol)})</span>
-                  <span>Time</span>
+                  <span>价格</span>
+                  <span>数量</span>
+                  <span>时间</span>
                 </div>
                 <div className="bn-trades-body bn-trades-side bn-trades-tall">
                   {trades.map((t) => {
@@ -652,9 +727,9 @@ export default function MarketsPage() {
 
       <section className="bn-card bn-bottom">
         <div className="bn-card-head">
-          <span>Market Depth</span>
+          <span>深度图</span>
           <span className="bn-label">
-            Spread{" "}
+            价差{" "}
             {Number.isFinite(book.spread)
               ? `${fmt(book.spread, digits)} USDT`
               : "—"}
@@ -671,14 +746,53 @@ export default function MarketsPage() {
 
       <footer className="bn-status">
         <span className="bn-status-dot" />
-        <span>Binance Public API</span>
+        <span>Wind 式行情 · 红涨绿跌</span>
         <span className="bn-label">·</span>
-        <span className="bn-label">Quotes only · EquityLab Research</span>
+        <span className="bn-label">只读报价 · EquityLab</span>
         <span className="bn-status-right">
           {ticker ? pairLabel(symbol) : "—"} ·{" "}
           {ticker ? fmt(ticker.lastPrice, digits) : "—"}
         </span>
       </footer>
+    </div>
+  );
+}
+
+function SpotMktRow({
+  t,
+  active,
+  fav,
+  onFav,
+  onPick,
+}: {
+  t: Ticker;
+  active: boolean;
+  fav: boolean;
+  onFav: () => void;
+  onPick: () => void;
+}) {
+  const pct = Number(t.priceChangePercent);
+  const flash = usePriceFlash(t.lastPrice);
+  return (
+    <div className={active ? "bn-mkt-row active" : "bn-mkt-row"}>
+      <button
+        type="button"
+        className={fav ? "bn-star-sm on" : "bn-star-sm"}
+        onClick={onFav}
+        aria-label="自选"
+      >
+        ★
+      </button>
+      <button type="button" className="bn-mkt-pick" onClick={onPick}>
+        <span className="bn-mkt-pair">{pairLabel(t.symbol)}</span>
+        <span className={`bn-mono ${flashClass(flash)}`}>
+          {fmt(t.lastPrice, priceDigits(t.lastPrice))}
+        </span>
+        <span className={pct >= 0 ? "up" : "down"}>
+          {pct >= 0 ? "+" : ""}
+          {fmt(pct, 2)}%
+        </span>
+      </button>
     </div>
   );
 }

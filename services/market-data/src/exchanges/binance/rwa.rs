@@ -164,11 +164,33 @@ async fn catalog() -> Json<Value> {
     }))
 }
 
+#[derive(Deserialize)]
+pub struct BoardQuery {
+    /// 逗号分隔 ticker；轮询热路径只拉可见/热门，减小 100KB+ payload
+    #[serde(default)]
+    pub tickers: String,
+}
+
 /// collector 聚合的全市场轻量报价（`rwa:board`），供列表一次读完。
-async fn board() -> Result<Json<Value>, (StatusCode, String)> {
-    let v = crate::qdb_read::doc("rwa:board").await.unwrap_or_else(|| {
+async fn board(Query(q): Query<BoardQuery>) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut v = crate::qdb_read::doc("rwa:board").await.unwrap_or_else(|| {
         json!({"updatedAt": 0, "count": 0, "data": {}})
     });
+    let want: Vec<String> = q
+        .tickers
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !want.is_empty() {
+        let n = if let Some(data) = v.get_mut("data").and_then(|d| d.as_object_mut()) {
+            data.retain(|k, _| want.iter().any(|t| t == k));
+            data.len()
+        } else {
+            0
+        };
+        v["count"] = json!(n);
+    }
     Ok(Json(v))
 }
 

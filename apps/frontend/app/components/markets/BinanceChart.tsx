@@ -71,12 +71,31 @@ function toCandle(k: Kline): CandlestickData {
   };
 }
 
-function toVolume(k: Kline): HistogramData {
+/** Wind：红涨绿跌；binance：绿涨红跌 */
+export type ChartPalette = "wind" | "binance";
+
+const PALETTE = {
+  wind: {
+    up: "#e53935",
+    down: "#1b8f5a",
+    upVol: "rgba(229, 57, 53, 0.45)",
+    downVol: "rgba(27, 143, 90, 0.45)",
+  },
+  binance: {
+    up: "#0ecb81",
+    down: "#f6465d",
+    upVol: "rgba(14, 203, 129, 0.45)",
+    downVol: "rgba(246, 70, 93, 0.45)",
+  },
+} as const;
+
+function toVolume(k: Kline, palette: ChartPalette = "wind"): HistogramData {
   const up = Number(k[4]) >= Number(k[1]);
+  const p = PALETTE[palette];
   return {
     time: barLocalSec(k) as UTCTimestamp,
     value: Number(k[5]),
-    color: up ? "rgba(14, 203, 129, 0.45)" : "rgba(246, 70, 93, 0.45)",
+    color: up ? p.upVol : p.downVol,
   };
 }
 
@@ -149,6 +168,8 @@ type Props = {
   onNeedHistory?: () => void;
   /** 首屏/切票拉取中；与空 klines 区分，避免永远停在 Loading */
   loading?: boolean;
+  /** 默认 wind（红涨绿跌），对齐国内终端 */
+  palette?: ChartPalette;
 };
 
 export function BinanceChart({
@@ -157,6 +178,7 @@ export function BinanceChart({
   seriesKey,
   onNeedHistory,
   loading = false,
+  palette = "wind",
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -170,12 +192,17 @@ export function BinanceChart({
   const klinesRef = useRef(klines) as MutableRefObject<Kline[]>;
   const prevKeyRef = useRef<string | undefined>(undefined);
   const prevFirstTsRef = useRef<number | null>(null);
+  /** 图上最后一根 openTime（UTC ms），供 update 单调性校验 */
+  const prevLastTsRef = useRef<number | null>(null);
+  const prevLenRef = useRef(0);
   const historyBusyRef = useRef(false);
   const onNeedHistoryRef = useRef(onNeedHistory);
+  const paletteRef = useRef(palette);
   const [tip, setTip] = useState<HoverTip | null>(null);
 
   klinesRef.current = klines;
   onNeedHistoryRef.current = onNeedHistory;
+  paletteRef.current = palette;
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -224,12 +251,13 @@ export function BinanceChart({
       handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
     });
 
+    const pal = PALETTE[paletteRef.current];
     const candles = chart.addCandlestickSeries({
-      upColor: "#0ecb81",
-      downColor: "#f6465d",
+      upColor: pal.up,
+      downColor: pal.down,
       borderVisible: false,
-      wickUpColor: "#0ecb81",
-      wickDownColor: "#f6465d",
+      wickUpColor: pal.up,
+      wickDownColor: pal.down,
       lastValueVisible: false,
       priceLineVisible: false,
     });
@@ -346,18 +374,34 @@ export function BinanceChart({
       ma25Ref.current?.setData([]);
       ma99Ref.current?.setData([]);
       prevFirstTsRef.current = null;
+      prevLastTsRef.current = null;
+      prevLenRef.current = 0;
       setTip(null);
       return;
     }
     const key = seriesKey ?? symbol;
     const keyChanged = prevKeyRef.current !== key;
     const firstTs = Number(klines[0][0]);
+    const lastTs = Number(klines[klines.length - 1][0]);
     const prevFirst = prevFirstTsRef.current;
+    const prevLast = prevLastTsRef.current;
+    const prevLen = prevLenRef.current;
     const prepended =
       !keyChanged &&
       prevFirst != null &&
       firstTs < prevFirst &&
       klines.length > 0;
+    // LWC series.update 只能改「当前最后一根」或追加更新的一根；历史 prepend / 换票必须 setData
+    const canTailUpdate =
+      !keyChanged &&
+      !prepended &&
+      prevFirst != null &&
+      prevLast != null &&
+      prevFirst === firstTs &&
+      prevLen > 0 &&
+      klines.length >= prevLen &&
+      klines.length - prevLen <= 2 &&
+      lastTs >= prevLast;
 
     const range = prepended
       ? chartRef.current?.timeScale().getVisibleLogicalRange()
@@ -367,11 +411,50 @@ export function BinanceChart({
         ? klines.findIndex((k) => Number(k[0]) === prevFirst)
         : 0;
 
-    candleRef.current.setData(klines.map(toCandle));
-    volumeRef.current.setData(klines.map(toVolume));
-    ma7Ref.current?.setData(toMaLine(klines, 7));
-    ma25Ref.current?.setData(toMaLine(klines, 25));
-    ma99Ref.current?.setData(toMaLine(klines, 99));
+    const pal = paletteRef.current;
+    const applyFull = () => {
+      candleRef.current!.setData(klines.map(toCandle));
+      volumeRef.current!.setData(klines.map((k) => toVolume(k, pal)));
+      ma7Ref.current?.setData(toMaLine(klines, 7));
+      ma25Ref.current?.setData(toMaLine(klines, 25));
+      ma99Ref.current?.setData(toMaLine(klines, 99));
+    };
+
+    let usedTail = false;
+    if (canTailUpdate) {
+      // 只从「旧最后一根」起：同 time 覆盖 OHLC，再严格单调追加；禁止回写更早 bar
+      const from = prevLen - 1;
+      let cursorTs = prevLast;
+      let ok = true;
+      for (let i = from; i < klines.length; i++) {
+        const ts = Number(klines[i][0]);
+        if (i === from) {
+          if (ts !== prevLast) {
+            ok = false;
+            break;
+          }
+        } else if (!(ts > cursorTs)) {
+          ok = false;
+          break;
+        }
+        cursorTs = ts;
+      }
+      if (ok) {
+        try {
+          for (let i = from; i < klines.length; i++) {
+            candleRef.current.update(toCandle(klines[i]));
+            volumeRef.current.update(toVolume(klines[i], pal));
+          }
+          ma7Ref.current?.setData(toMaLine(klines, 7));
+          ma25Ref.current?.setData(toMaLine(klines, 25));
+          ma99Ref.current?.setData(toMaLine(klines, 99));
+          usedTail = true;
+        } catch {
+          usedTail = false;
+        }
+      }
+    }
+    if (!usedTail) applyFull();
 
     if (keyChanged) {
       chartRef.current?.timeScale().scrollToRealTime();
@@ -383,6 +466,8 @@ export function BinanceChart({
       });
     }
     prevFirstTsRef.current = firstTs;
+    prevLastTsRef.current = lastTs;
+    prevLenRef.current = klines.length;
     setTip(null);
   }, [klines, seriesKey, symbol]);
 

@@ -1,15 +1,26 @@
 "use client";
 
 /**
- * 币安 Ondo 代币化美股只读行情台：全量列表 + 搜索。
- * 列表价只读 collector 聚合的 `/rwa/board`；详情再读 `/rwa/quote`。
+ * Wind 式 Ondo 代币化美股行情：红涨绿跌 · 闪烁 · ↑↓ 切票 · 虚拟列表。
+ * 列表价读 `/rwa/board`；详情读 `/rwa/quote`。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   BinanceChart,
   type Kline,
 } from "../../components/markets/BinanceChart";
+import { useListKeyboard } from "../../components/markets/useListKeyboard";
+import { flashClass, usePriceFlash } from "../../components/markets/usePriceFlash";
+import { VirtualMktList } from "../../components/markets/VirtualMktList";
+import { useVisibilityPolling } from "../../components/markets/useVisibilityPolling";
 
 const KLINE_PAGE = 200;
 /** 与 collector RWA docs 硬顶对齐，超出丢最旧 */
@@ -134,9 +145,12 @@ export default function TokenizedStocksPage() {
   const [tokenMeta, setTokenMeta] = useState<StockToken | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedEmpty, setFeedEmpty] = useState(false);
-  const [tick, setTick] = useState(0);
   const [historyDone, setHistoryDone] = useState(false);
   const historyLoadingRef = useRef(false);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const boardTick = useVisibilityPolling(20_000);
+  const klineTick = useVisibilityPolling(30_000);
 
   const loadUniverse = useCallback(async () => {
     const res = await fetch(
@@ -164,9 +178,15 @@ export default function TokenizedStocksPage() {
     setMarket(body.data ?? null);
   }, []);
 
-  /** 一次读全市场列表价（collector 持续写入 rwa:board） */
-  const loadBoard = useCallback(async () => {
-    const res = await fetch(`/api/market/binance/rwa/board`);
+  /** full=全量；hot=热门+当前选中（轮询减 payload） */
+  const loadBoard = useCallback(async (mode: "full" | "hot" = "full") => {
+    const q =
+      mode === "hot"
+        ? `?tickers=${encodeURIComponent(
+            [...PRIORITY, selectedRef.current].filter(Boolean).join(","),
+          )}`
+        : "";
+    const res = await fetch(`/api/market/binance/rwa/board${q}`);
     if (!res.ok) return;
     const body = (await res.json()) as {
       data?: Record<string, BoardRow>;
@@ -184,7 +204,10 @@ export default function TokenizedStocksPage() {
         },
       };
     }
-    if (Object.keys(next).length) setQuotes(next);
+    if (!Object.keys(next).length) return;
+    startTransition(() => {
+      setQuotes((prev) => (mode === "hot" ? { ...prev, ...next } : next));
+    });
   }, []);
 
   const loadDetail = useCallback(async (ticker: string) => {
@@ -342,10 +365,13 @@ export default function TokenizedStocksPage() {
     return list;
   }, [universe, query]);
 
+  const listIds = useMemo(() => filtered.map((t) => t.ticker), [filtered]);
+  useListKeyboard(listIds, selected, setSelected, Boolean(listIds.length));
+
   useEffect(() => {
     void (async () => {
       try {
-        await Promise.all([loadUniverse(), loadMarket(), loadBoard()]);
+        await Promise.all([loadUniverse(), loadMarket(), loadBoard("full")]);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -354,17 +380,15 @@ export default function TokenizedStocksPage() {
   }, [loadUniverse, loadMarket, loadBoard]);
 
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 10_000);
-    return () => clearInterval(id);
-  }, []);
+    if (boardTick === 0) return;
+    void loadBoard("hot");
+    void loadMarket();
+  }, [boardTick, loadBoard, loadMarket]);
 
   useEffect(() => {
-    if (tick === 0) return;
-    void loadBoard();
-    void loadMarket();
-    // 盘中只刷尾部，不整表重载
+    if (klineTick === 0) return;
     void refreshKlineTail();
-  }, [tick, loadBoard, loadMarket, refreshKlineTail]);
+  }, [klineTick, refreshKlineTail]);
 
   useEffect(() => {
     if (!selected) {
@@ -393,9 +417,10 @@ export default function TokenizedStocksPage() {
   const chg = Number(ti?.priceChangePct24h ?? 0);
   const up = chg >= 0;
   const open = market?.openState === true;
+  const lastFlash = usePriceFlash(ti?.price);
 
   return (
-    <div className="bn-page">
+    <div className="bn-page wind">
       <header className="bn-top">
         <div className="bn-top-pair">
           <div className="bn-top-name">
@@ -417,21 +442,23 @@ export default function TokenizedStocksPage() {
                 ))
               )}
             </select>
-            <span className="bn-pill">Ondo · Tokenized</span>
+            <span className="bn-pill">代币化美股</span>
             <span
               className={open ? "bn-pill bn-pill-open" : "bn-pill bn-pill-closed"}
             >
-              {market?.marketStatus ?? (open ? "open" : "closed")}
+              {market?.marketStatus ?? (open ? "开盘" : "收盘")}
             </span>
           </div>
-          <div className={`bn-top-last ${up ? "up" : "down"}`}>
+          <div
+            className={`bn-top-last ${up ? "up" : "down"} ${flashClass(lastFlash)}`}
+          >
             {ti?.price ? fmt(ti.price, 2) : "—"}
-            <span className="bn-top-unit"> token USD</span>
+            <span className="bn-top-unit"> USD</span>
           </div>
         </div>
         <div className="bn-top-stats">
           <div>
-            <span className="bn-label">24h Change</span>
+            <span className="bn-label">涨跌幅</span>
             <span className={up ? "up" : "down"}>
               {ti
                 ? `${up ? "+" : ""}${fmt(ti.priceChange24h, 2)} (${up ? "+" : ""}${fmt(chg, 2)}%)`
@@ -439,25 +466,25 @@ export default function TokenizedStocksPage() {
             </span>
           </div>
           <div>
-            <span className="bn-label">Ref / share</span>
+            <span className="bn-label">参考股价</span>
             <span>{ref != null ? fmt(ref, 2) : "—"}</span>
           </div>
           <div>
-            <span className="bn-label">Multiplier</span>
+            <span className="bn-label">乘数</span>
             <span>{fmt(mult, 6)}</span>
           </div>
           <div>
-            <span className="bn-label">Stock P/E</span>
+            <span className="bn-label">市盈率</span>
             <span>{si?.priceToEarnings ?? "—"}</span>
           </div>
           <div>
-            <span className="bn-label">Div Yield</span>
+            <span className="bn-label">股息率</span>
             <span>
               {si?.dividendYield != null ? `${fmt(si.dividendYield, 2)}%` : "—"}
             </span>
           </div>
           <div>
-            <span className="bn-label">52w Range</span>
+            <span className="bn-label">52周区间</span>
             <span>
               {si?.priceLow52w && si?.priceHigh52w
                 ? `${fmt(si.priceLow52w)} – ${fmt(si.priceHigh52w)}`
@@ -466,72 +493,69 @@ export default function TokenizedStocksPage() {
           </div>
         </div>
       </header>
+      <div className="bn-quote-strip">
+        <div>
+          <span className="bn-label">最新</span>
+          <span className={up ? "up" : "down"}>
+            {ti?.price ? fmt(ti.price, 2) : "—"}
+          </span>
+        </div>
+        <div>
+          <span className="bn-label">涨跌</span>
+          <span className={up ? "up" : "down"}>
+            {ti ? `${up ? "+" : ""}${fmt(ti.priceChange24h, 2)}` : "—"}
+          </span>
+        </div>
+        <span className="bn-label">↑↓ 切换标的</span>
+      </div>
 
       {error ? <pre className="error bn-error">{error}</pre> : null}
 
       <div className="bn-main bn-main-quotes">
         <aside className="bn-card bn-markets">
           <div className="bn-card-head">
-            <span>Markets</span>
+            <span>行情列表</span>
             <span className="bn-label">
               {filtered.length}
-              {query ? ` / ${universe.length}` : ""} symbols
+              {query ? ` / ${universe.length}` : ""} 只
             </span>
           </div>
           <input
             className="bn-search"
-            placeholder="Search ticker or symbol"
+            placeholder="搜索代码 / 名称"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <div className="bn-mkt-head bn-mkt-head-stock">
-            <span>Ticker</span>
-            <span>Token</span>
-            <span>24h%</span>
+            <span>代码</span>
+            <span>最新</span>
+            <span>涨跌幅</span>
           </div>
-          <div className="bn-mkt-body">
-            {filtered.map((token) => {
-              const dyn = quotes[token.ticker];
-              const pct = Number(dyn?.tokenInfo?.priceChangePct24h ?? NaN);
-              const active = token.ticker === selected;
-              return (
-                <button
-                  key={`${token.chainId}-${token.contractAddress}`}
-                  type="button"
-                  className={
-                    active ? "bn-mkt-row-stock active" : "bn-mkt-row-stock"
-                  }
-                  onClick={() => setSelected(token.ticker)}
-                >
-                  <span className="bn-mkt-pair">
-                    {token.ticker}
-                    <em>{token.symbol}</em>
-                  </span>
-                  <span className="bn-mono">
-                    {fmt(dyn?.tokenInfo?.price, 2)}
-                  </span>
-                  <span
-                    className={
-                      Number.isFinite(pct) ? (pct >= 0 ? "up" : "down") : ""
-                    }
-                  >
-                    {Number.isFinite(pct)
-                      ? `${pct >= 0 ? "+" : ""}${fmt(pct, 2)}%`
-                      : "—"}
-                  </span>
-                </button>
-              );
-            })}
-            {!filtered.length ? (
-              <p className="bn-empty">No symbols match</p>
-            ) : null}
-          </div>
+          <VirtualMktList
+            className="bn-mkt-body"
+            items={filtered}
+            rowHeight={44}
+            height={520}
+            keyOf={(token) =>
+              `${token.chainId}-${token.contractAddress}`
+            }
+            empty={<p className="bn-empty">无匹配标的</p>}
+            renderRow={(token) => (
+              <StockMktRow
+                token={token}
+                price={quotes[token.ticker]?.tokenInfo?.price}
+                pct={quotes[token.ticker]?.tokenInfo?.priceChangePct24h}
+                active={token.ticker === selected}
+                onPick={() => setSelected(token.ticker)}
+              />
+            )}
+          />
         </aside>
 
         <section className="bn-card bn-chart-panel">
           <div className="bn-tf-row">
             <div className="bn-tf-group">
-              <span className="bn-tf-label">Time</span>
+              <span className="bn-tf-label">周期</span>
               {INTERVALS.map((tf) => (
                 <button
                   key={tf}
@@ -543,12 +567,13 @@ export default function TokenizedStocksPage() {
                 </button>
               ))}
             </div>
-            <span className="bn-label">Token K-Line · read-only</span>
+            <span className="bn-label">代币 K 线 · 只读</span>
           </div>
           <BinanceChart
             klines={klines}
             symbol={`${selected}on`}
             seriesKey={`${selected}:${interval}`}
+            palette="wind"
             onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
           />
         </section>
@@ -556,48 +581,48 @@ export default function TokenizedStocksPage() {
         <aside className="bn-right bn-right-quotes">
           <div className="bn-card bn-book bn-book-tall bn-fund">
             <div className="bn-card-head">
-              <span>Fundamentals</span>
+              <span>基本面</span>
               <span className="bn-label">{detail?.symbol ?? "—"}</span>
             </div>
             <dl className="bn-fund-list">
               <div>
-                <dt>Token price</dt>
+                <dt>代币价</dt>
                 <dd>{fmt(ti?.price, 4)}</dd>
               </div>
               <div>
-                <dt>Ref (price÷mult)</dt>
+                <dt>参考股价</dt>
                 <dd>{ref != null ? fmt(ref, 4) : "—"}</dd>
               </div>
               <div>
-                <dt>US stock price</dt>
+                <dt>美股现价</dt>
                 <dd>{si?.price != null ? fmt(si.price, 2) : "—"}</dd>
               </div>
               <div>
-                <dt>Holders</dt>
+                <dt>持有人数</dt>
                 <dd>{fmt(ti?.totalHolders, 0)}</dd>
               </div>
               <div>
-                <dt>Token mcap</dt>
+                <dt>代币市值</dt>
                 <dd>{fmt(ti?.marketCap, 2)}</dd>
               </div>
               <div>
-                <dt>Stock mcap</dt>
+                <dt>股票市值</dt>
                 <dd>{fmt(si?.marketCap, 2)}</dd>
               </div>
               <div>
-                <dt>Stock volume</dt>
+                <dt>股票成交量</dt>
                 <dd>{fmt(si?.volume, 0)}</dd>
               </div>
               <div>
-                <dt>Token vol (USD)*</dt>
+                <dt>代币成交额*</dt>
                 <dd>{fmt(ti?.volume24h, 2)}</dd>
               </div>
               <div>
-                <dt>Circulating</dt>
+                <dt>流通量</dt>
                 <dd>{fmt(ti?.circulatingSupply, 2)}</dd>
               </div>
               <div>
-                <dt>Asset status</dt>
+                <dt>资产状态</dt>
                 <dd>
                   {detail?.statusInfo?.marketStatus ??
                     detail?.statusInfo?.reasonCode ??
@@ -605,7 +630,7 @@ export default function TokenizedStocksPage() {
                 </dd>
               </div>
               <div>
-                <dt>Chain</dt>
+                <dt>链</dt>
                 <dd>
                   {tokenMeta?.chainId === "56"
                     ? "BSC"
@@ -615,7 +640,7 @@ export default function TokenizedStocksPage() {
                 </dd>
               </div>
               <div>
-                <dt>Contract</dt>
+                <dt>合约</dt>
                 <dd className="bn-addr">
                   {tokenMeta?.contractAddress
                     ? `${tokenMeta.contractAddress.slice(0, 10)}…`
@@ -624,8 +649,8 @@ export default function TokenizedStocksPage() {
               </div>
             </dl>
             <p className="bn-demo-hint">
-              *tokenInfo.volume24h 为底层美股成交额（USD），非链上 DEX 量。
-              代币 ≠ 1 股：ref = token÷multiplier。列表为全量；未刷到的价显示 —，点选后加载。
+              *成交额为底层美股 USD，非链上 DEX。代币 ≠ 1 股：参考价 =
+              代币价÷乘数。未刷到的价显示 —，点选后加载。
             </p>
           </div>
         </aside>
@@ -633,17 +658,50 @@ export default function TokenizedStocksPage() {
 
       <footer className="bn-status">
         <span className="bn-status-dot" />
-        <span>Binance Ondo RWA Public API</span>
+        <span>Ondo 代币化美股</span>
         <span className="bn-label">·</span>
-        <span className="bn-label">
-          Tokenized stocks · Quotes only · EquityLab
-        </span>
+        <span className="bn-label">只读报价 · EquityLab</span>
         <span className="bn-status-right">
           {selected}
           {Number.isFinite(tokenPx) ? ` · ${fmt(tokenPx, 2)}` : ""}
-          {market?.nextClose ? ` · nextClose ${market.nextClose}` : ""}
+          {market?.nextClose ? ` · 下一收盘 ${market.nextClose}` : ""}
         </span>
       </footer>
     </div>
+  );
+}
+
+function StockMktRow({
+  token,
+  price,
+  pct: pctRaw,
+  active,
+  onPick,
+}: {
+  token: StockToken;
+  price?: string;
+  pct?: string;
+  active: boolean;
+  onPick: () => void;
+}) {
+  const pct = Number(pctRaw ?? NaN);
+  const flash = usePriceFlash(price);
+  return (
+    <button
+      type="button"
+      className={active ? "bn-mkt-row-stock active" : "bn-mkt-row-stock"}
+      onClick={onPick}
+    >
+      <span className="bn-mkt-pair">
+        {token.ticker}
+        <em>{token.symbol}</em>
+      </span>
+      <span className={`bn-mono ${flashClass(flash)}`}>{fmt(price, 2)}</span>
+      <span className={Number.isFinite(pct) ? (pct >= 0 ? "up" : "down") : ""}>
+        {Number.isFinite(pct)
+          ? `${pct >= 0 ? "+" : ""}${fmt(pct, 2)}%`
+          : "—"}
+      </span>
+    </button>
   );
 }

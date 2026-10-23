@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { Suspense } from "react";
 import { usePathname } from "next/navigation";
+import { HotTickerStrip } from "./markets/HotTickerStrip";
 
 const NAV = [
-  { href: "/markets", label: "Spot" },
-  { href: "/chat", label: "Chat" },
-  { href: "/markets/stocks", label: "Stocks" },
+  { href: "/markets", label: "现货" },
+  { href: "/markets/stocks", label: "代币化美股" },
   { href: "/markets/ashare", label: "A股" },
-  { href: "/backtest", label: "Backtest" },
+  { href: "/chat", label: "对话" },
+  { href: "/backtest", label: "回测" },
 ];
 
 export function SiteHeader() {
@@ -18,7 +20,13 @@ export function SiteHeader() {
     <header className="site-header">
       <div className="site-header-inner">
         <Link href="/" className="brand">
-          <img className="brand-mark" src="/icon.svg" alt="" width={22} height={22} />
+          <img
+            className="brand-mark"
+            src="/icon.svg"
+            alt=""
+            width={22}
+            height={22}
+          />
           <span className="brand-name">EquityLab</span>
         </Link>
         <nav className="site-nav" aria-label="主导航">
@@ -26,7 +34,8 @@ export function SiteHeader() {
             const active =
               item.href === "/markets"
                 ? pathname === "/" || pathname === "/markets"
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+                : pathname === item.href ||
+                  pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}
@@ -38,8 +47,11 @@ export function SiteHeader() {
             );
           })}
         </nav>
-        <span className="header-tag">Quotes · Public</span>
+        <span className="header-tag">只读报价</span>
       </div>
+      <Suspense fallback={null}>
+        <HotTickerStrip />
+      </Suspense>
     </header>
   );
 }

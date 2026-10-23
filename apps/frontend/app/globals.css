@@ -55,19 +55,82 @@ a:hover {
   position: sticky;
   top: 0;
   z-index: 40;
-  height: var(--bn-header-h);
   background: var(--bn-bg);
   border-bottom: 1px solid var(--bn-border);
 }
 
 .site-header-inner {
   max-width: none;
-  height: 100%;
+  height: var(--bn-header-h);
   margin: 0;
   padding: 0 16px;
   display: flex;
   align-items: center;
   gap: 28px;
+  border-bottom: 1px solid transparent;
+}
+
+/* 币安式热门行情条（Wind 色挂在 .wind） */
+.bn-hot-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 4px 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  background: var(--bn-bg-elevated, var(--bn-bg));
+  border-top: 1px solid var(--bn-border);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.bn-hot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--bn-text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bn-hot-chip:hover {
+  background: var(--bn-card);
+}
+
+.bn-hot-chip.active {
+  border-color: var(--bn-border);
+  background: var(--bn-card);
+}
+
+.bn-hot-pair {
+  color: var(--bn-text-secondary);
+  font-weight: 600;
+}
+
+.bn-hot-chip.active .bn-hot-pair {
+  color: var(--bn-yellow, #f0b90b);
+}
+
+.bn-hot-strip.wind .up {
+  color: var(--bn-up, #e53935);
+}
+
+.bn-hot-strip.wind .down {
+  color: var(--bn-down, #1b8f5a);
+}
+
+.bn-hot-strip.wind .flash-up {
+  animation: wind-flash-up 0.45s ease-out;
+}
+
+.bn-hot-strip.wind .flash-down {
+  animation: wind-flash-down 0.45s ease-out;
 }
 
 .brand {
@@ -478,6 +541,64 @@ code {
 .down {
   color: var(--bn-red);
 }
+
+/* —— Wind 终端：A 股惯例红涨绿跌 + 报价闪烁 —— */
+.bn-page.wind {
+  --bn-up: #e53935;
+  --bn-down: #1b8f5a;
+  --bn-up-dim: rgba(229, 57, 53, 0.22);
+  --bn-down-dim: rgba(27, 143, 90, 0.22);
+}
+.bn-page.wind .up {
+  color: var(--bn-up);
+}
+.bn-page.wind .down {
+  color: var(--bn-down);
+}
+.bn-page.wind .flash-up {
+  animation: wind-flash-up 0.45s ease-out;
+}
+.bn-page.wind .flash-down {
+  animation: wind-flash-down 0.45s ease-out;
+}
+@keyframes wind-flash-up {
+  0% {
+    background: var(--bn-up-dim);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@keyframes wind-flash-down {
+  0% {
+    background: var(--bn-down-dim);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.bn-page.wind .bn-top-last {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  padding: 2px 8px;
+  border-radius: 2px;
+}
+.bn-page.wind .bn-quote-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--bn-border);
+  background: var(--bn-bg-elevated);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.bn-page.wind .bn-quote-strip .bn-label {
+  margin-right: 6px;
+}
+.bn-page.wind .bn-mkt-head span:nth-child(3) {
+  text-align: right;
+}
 .mk-muted {
   color: var(--bn-text-tertiary);
   font-size: 11px;
@@ -723,9 +844,13 @@ code {
 .bn-mkt-body {
   overflow: auto;
   flex: 1;
+  /* 虚拟列表自管高度；非虚拟时仍可滚动 */
+  min-height: 0;
 }
 
 .bn-mkt-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 40px;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1293,7 +1418,10 @@ code {
   grid-template-columns: 1.2fr 1fr 0.8fr;
   gap: 4px;
   width: 100%;
+  height: 100%;
   border: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 44px;
   background: transparent;
   color: var(--bn-text);
   font: inherit;
