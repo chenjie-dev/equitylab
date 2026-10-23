@@ -33,6 +33,10 @@ def _env_flag(name: str, default: str = "0") -> bool:
 def main() -> None:
     codes = [c.strip() for c in CODES.split(",") if c.strip()]
     wait_qdb()
+    # 单写者门闸：高优先现货/A 股，低优先 RWA，避免并发单条 POST 饿死 snapshots
+    from write_gate import start_gate
+
+    start_gate(_post_raw)
     skip_ashare = _env_flag("COLLECTOR_SKIP_ASHARE", "0")
     # 币安：WS 推送写 qdb；A 股仍 REST 热路径；盘口/RWA/回填后台。
     print(
@@ -305,9 +309,27 @@ def get_klines(symbol: str, period: str) -> list[dict]:
     return qdb.klines(symbol, period)
 
 
-def post(path: str, body: dict) -> None:
-    """兼容 markets / binance_ws：path 如 /v1/quotes。"""
+def _post_raw(path: str, body: dict) -> None:
+    """直连 qdb（仅 write_gate 刷盘线程调用）。"""
     qdb.post_json(path, body)
+
+
+def post(path: str, body: dict, *, priority: str = "high") -> None:
+    """兼容 markets / binance_ws：path 如 /v1/quotes。
+
+    priority=high：币安 WS / A 股（snapshots 热路径）。
+    priority=low：RWA 扫盘（可合并、可被高优先插队）。
+    """
+    from write_gate import get_gate
+
+    gate = get_gate()
+    if gate is None:
+        _post_raw(path, body)
+        return
+    if priority == "sync":
+        gate.post_sync(path, body)
+        return
+    gate.enqueue(path, body, priority="low" if priority == "low" else "high")
 
 
 def sina_symbol(code: str) -> str:

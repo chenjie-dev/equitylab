@@ -71,11 +71,18 @@ _RWA_STATUS = "/bapi/defi/v1/public/wallet-direct/buw/wallet/market/token/rwa/ma
 _RWA_DYNAMIC = "/bapi/defi/v2/public/wallet-direct/buw/wallet/market/token/rwa/dynamic/ai"
 _RWA_KLINE = "/bapi/defi/v1/public/wallet-direct/buw/wallet/dex/market/token/kline/ai"
 # 全市场并行扫盘；前端只读聚合 doc `rwa:board`。设 0 可停（www.binance.com 不可达时）
-RWA_WORKERS = max(0, int(os.environ.get("RWA_WORKERS", "24")))
-RWA_CHUNK = max(8, int(os.environ.get("RWA_CHUNK", "48")))
+# 默认降并发：扫盘并行拉上游，但 qdb 写入经 write_gate 低优先合并
+RWA_WORKERS = max(0, int(os.environ.get("RWA_WORKERS", "8")))
+RWA_CHUNK = max(8, int(os.environ.get("RWA_CHUNK", "32")))
 # K 线：全市场持续写 `rwa:kline:{TICKER}:{interval}`，读路径优先此 doc
-RWA_KLINE_WORKERS = max(0, int(os.environ.get("RWA_KLINE_WORKERS", "16")))
-RWA_KLINE_CHUNK = max(4, int(os.environ.get("RWA_KLINE_CHUNK", "24")))
+RWA_KLINE_WORKERS = max(0, int(os.environ.get("RWA_KLINE_WORKERS", "4")))
+RWA_KLINE_CHUNK = max(4, int(os.environ.get("RWA_KLINE_CHUNK", "16")))
+# rwa:board 全量覆盖写节流（秒）；避免每 chunk 重写巨大 JSON 饿死现货
+RWA_BOARD_FLUSH_SEC = max(0.2, float(os.environ.get("RWA_BOARD_FLUSH_SEC", "1.5")))
+# 仅热门 ticker 写引擎 /v1/quotes（snapshots）；冷门只落 board/docs
+RWA_ENGINE_QUOTES_HOT_ONLY = os.environ.get(
+    "RWA_ENGINE_QUOTES_HOT_ONLY", "1"
+).strip().lower() not in ("0", "false", "no", "off")
 RWA_KLINE_INTERVALS = [
     s.strip()
     for s in os.environ.get(
@@ -105,11 +112,14 @@ RWA_KLINE_DOC_LIMIT = min(
 )
 _BOARD: dict[str, dict[str, Any]] = {}
 _BOARD_LOCK = threading.Lock()
+_board_dirty = False
+_last_board_flush_at = 0.0
 _rwa_cursor = 0
 _last_catalog_at = 0.0
 _rwa_kline_cursor = 0
 _rwa_kline_interval_i = 0
 _binance_kline_i = 0
+_HOT_TICKERS = {t.upper() for t in RWA_TICKERS}
 
 
 def backfill_markets() -> None:
@@ -139,7 +149,20 @@ def backfill_markets() -> None:
         print("rwa backfill skipped (RWA workers=0)", flush=True)
         return
     tokens = _rwa_tokens()
-    _put_docs([{"key": "rwa:stocks", "value": {"code": "000000", "success": True, "count": len(tokens), "data": tokens}}])
+    _put_docs(
+        [
+            {
+                "key": "rwa:stocks",
+                "value": {
+                    "code": "000000",
+                    "success": True,
+                    "count": len(tokens),
+                    "data": tokens,
+                },
+            }
+        ],
+        priority="low",
+    )
     # 热门先种 1h K 线；全市场由 start_rwa_kline_feed 持续补齐
     for token in tokens:
         ticker = str(token.get("ticker") or "").upper()
@@ -445,23 +468,36 @@ def _rwa_priority_tokens(tokens: list[dict]) -> list[dict]:
 
 
 def _rwa_store_chunk(chunk: list[dict]) -> tuple[int, int]:
+    """并行拉上游；docs/quotes 收齐后各打一批低优先写入（禁止每标的单条 POST）。"""
     ok = 0
     fail = 0
     if not chunk:
         return ok, fail
+    docs: list[dict] = []
+    quotes: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(RWA_WORKERS, len(chunk))) as pool:
         futs = {
-            pool.submit(_store_dynamic, tok): str(tok.get("ticker") or "").upper()
+            pool.submit(_fetch_dynamic, tok): str(tok.get("ticker") or "").upper()
             for tok in chunk
         }
         for fut in as_completed(futs):
             ticker = futs[fut]
             try:
-                fut.result()
+                result = fut.result()
+                if result is None:
+                    continue
+                d_items, q_item = result
+                docs.extend(d_items)
+                if q_item is not None:
+                    quotes.append(q_item)
                 ok += 1
             except Exception as exc:
                 fail += 1
                 print(f"rwa dynamic {ticker} failed: {exc}", flush=True)
+    if docs:
+        _put_docs(docs, priority="low")
+    if quotes:
+        post("/v1/quotes", {"items": quotes}, priority="low")
     return ok, fail
 
 
@@ -489,7 +525,7 @@ def _rwa_worker() -> None:
             if not priority_done:
                 hot = _rwa_priority_tokens(tokens)
                 ok, fail = _rwa_store_chunk(hot)
-                _flush_board()
+                _flush_board(force=True)
                 print(
                     f"rwa priority tickers={len(hot)} ok={ok} fail={fail} "
                     f"ms={int((time.monotonic() - t0) * 1000)}",
@@ -503,7 +539,7 @@ def _rwa_worker() -> None:
             _rwa_cursor = (start + len(chunk)) % n
             full_pass = len(chunk) >= n or (start + len(chunk)) >= n
             ok, fail = _rwa_store_chunk(chunk)
-            _flush_board()
+            _flush_board(force=full_pass)
             if full_pass:
                 passes += 1
                 with _BOARD_LOCK:
@@ -524,7 +560,7 @@ def _refresh_rwa_catalog() -> None:
         status = requests.get(
             f"{RWA}{_RWA_STATUS}", timeout=30, proxies=_rwa_proxies()
         ).json()
-        _put_docs([{"key": "rwa:status", "value": status}])
+        _put_docs([{"key": "rwa:status", "value": status}], priority="low")
         tokens = _rwa_tokens()
         _put_docs(
             [
@@ -537,7 +573,8 @@ def _refresh_rwa_catalog() -> None:
                         "data": tokens,
                     },
                 }
-            ]
+            ],
+            priority="low",
         )
     except Exception as exc:
         print(f"rwa catalog failed: {exc}", flush=True)
@@ -557,11 +594,20 @@ def _hydrate_board() -> None:
         print(f"rwa board hydrate failed: {exc}", flush=True)
 
 
-def _flush_board() -> None:
+def _flush_board(*, force: bool = False) -> None:
+    """节流全量 board 覆盖写；force 用于优先热门扫完立刻可见。"""
+    global _board_dirty, _last_board_flush_at
+    now = time.monotonic()
     with _BOARD_LOCK:
+        if not _BOARD:
+            return
+        if not force and not _board_dirty:
+            return
+        if not force and (now - _last_board_flush_at) < RWA_BOARD_FLUSH_SEC:
+            return
         snapshot = dict(_BOARD)
-    if not snapshot:
-        return
+        _board_dirty = False
+        _last_board_flush_at = now
     _put_docs(
         [
             {
@@ -572,11 +618,13 @@ def _flush_board() -> None:
                     "data": snapshot,
                 },
             }
-        ]
+        ],
+        priority="low",
     )
 
 
 def _board_put(token: dict, dynamic: dict | None) -> None:
+    global _board_dirty
     ticker = str(token.get("ticker") or "").upper()
     if not ticker:
         return
@@ -593,6 +641,7 @@ def _board_put(token: dict, dynamic: dict | None) -> None:
     }
     with _BOARD_LOCK:
         _BOARD[ticker] = row
+        _board_dirty = True
 
 
 def _rwa_get(path: str, params: dict | None = None, timeout: int = 12) -> Any:
@@ -615,52 +664,57 @@ def _rwa_get(path: str, params: dict | None = None, timeout: int = 12) -> Any:
     raise last_err
 
 
-def _store_dynamic(token: dict) -> None:
+def _fetch_dynamic(
+    token: dict,
+) -> tuple[list[dict], dict | None] | None:
+    """拉 dynamic；返回 (docs, optional_quote)。写入由 chunk 批量提交。"""
     ticker = str(token.get("ticker") or "").upper()
     chain = str(token.get("chainId") or "56")
     contract = str(token.get("contractAddress") or "")
     if not ticker or not contract:
-        return
+        return None
     raw = _rwa_get(_RWA_DYNAMIC, {"chainId": chain, "contractAddress": contract}, timeout=12)
     dynamic = raw.get("data") if isinstance(raw, dict) else None
-    _put_docs(
-        [
-            {"key": f"rwa:dynamic:{chain}:{contract}", "value": raw},
-            {
-                "key": f"rwa:quote:{ticker}",
-                "value": {
-                    "ticker": ticker,
-                    "token": token,
-                    "chainId": chain,
-                    "contractAddress": contract,
-                    "dynamic": dynamic,
-                },
+    docs = [
+        {"key": f"rwa:dynamic:{chain}:{contract}", "value": raw},
+        {
+            "key": f"rwa:quote:{ticker}",
+            "value": {
+                "ticker": ticker,
+                "token": token,
+                "chainId": chain,
+                "contractAddress": contract,
+                "dynamic": dynamic,
             },
-        ]
-    )
+        },
+    ]
     _board_put(token, dynamic if isinstance(dynamic, dict) else None)
     info = (dynamic or {}).get("tokenInfo") or {}
     price = float(info.get("price") or 0)
-    if price <= 0:
-        return
-    post(
-        "/v1/quotes",
-        {
-            "items": [
-                {
-                    "exchange": "ONDO",
-                    "code": ticker,
-                    "ts_ns": int(time.time() * 1_000_000_000),
-                    "last": scale(price),
-                    "name": ticker,
-                    "price": price,
-                    "pre_close": price / (1 + float(info.get("priceChangePct24h") or 0) / 100) if info.get("priceChangePct24h") else price,
-                    "volume": float(info.get("volume24h") or 0),
-                    "amount": float((dynamic or {}).get("stockInfo", {}).get("marketCap") or 0),
-                }
-            ]
-        },
-    )
+    quote: dict | None = None
+    if price > 0:
+        hot = ticker in _HOT_TICKERS
+        if hot or not RWA_ENGINE_QUOTES_HOT_ONLY:
+            pct = info.get("priceChangePct24h")
+            pre = (
+                price / (1 + float(pct) / 100)
+                if pct not in (None, "")
+                else price
+            )
+            quote = {
+                "exchange": "ONDO",
+                "code": ticker,
+                "ts_ns": int(time.time() * 1_000_000_000),
+                "last": scale(price),
+                "name": ticker,
+                "price": price,
+                "pre_close": pre,
+                "volume": float(info.get("volume24h") or 0),
+                "amount": float(
+                    (dynamic or {}).get("stockInfo", {}).get("marketCap") or 0
+                ),
+            }
+    return docs, quote
 
 
 def _rwa_kline_worker() -> None:
@@ -760,8 +814,12 @@ def _store_rwa_klines(
                 data = {**data, "klineInfos": infos}
                 raw = {**raw, "data": data}
         raw = trim_rwa_kline_doc(raw)
-    _put_docs([{"key": f"rwa:kline:{ticker}:{interval}", "value": raw}])
-    if not write_trades:
+    _put_docs(
+        [{"key": f"rwa:kline:{ticker}:{interval}", "value": raw}],
+        priority="low",
+    )
+    # 引擎 trades 只喂热门，避免全市场 1h 回补占住引擎
+    if not write_trades or ticker not in _HOT_TICKERS:
         return
     infos = ((raw.get("data") or {}).get("klineInfos") or []) if isinstance(raw, dict) else []
     if not infos:
@@ -790,8 +848,19 @@ def _store_rwa_klines(
             )
         )
     trades.sort(key=lambda item: item["ts_ns"])
-    if trades:
-        post("/v1/trades", {"items": trades})
+    if not trades:
+        return
+    # 小批 + 低优先，与现货 quotes 错峰
+    batch = 64
+    pause = float(os.environ.get("RWA_KLINE_WRITE_PAUSE_SEC", "0.2"))
+    for i in range(0, len(trades), batch):
+        post(
+            "/v1/trades",
+            {"items": trades[i : i + batch]},
+            priority="low",
+        )
+        if pause > 0 and i + batch < len(trades):
+            time.sleep(pause)
 
 
 def _rwa_tokens() -> list[dict]:
@@ -847,7 +916,8 @@ def _ensure_tokens() -> list[dict]:
                         "data": tokens,
                     },
                 }
-            ]
+            ],
+            priority="low",
         )
         return tokens
     except Exception as exc:
@@ -864,9 +934,9 @@ def _binance_klines(symbol: str, interval: str, limit: int) -> list[list]:
     return data if isinstance(data, list) else []
 
 
-def _put_docs(items: list[dict]) -> None:
+def _put_docs(items: list[dict], *, priority: str = "high") -> None:
     if items:
-        post("/v1/docs", {"items": items})
+        post("/v1/docs", {"items": items}, priority=priority)
 
 
 def start_retention_gc() -> None:
@@ -877,9 +947,13 @@ def start_retention_gc() -> None:
 
         return qdb.get_doc(key)
 
+    def put_docs_gc(items: list[dict]) -> None:
+        # GC 走低优先，不挡现货 quotes
+        _put_docs(items, priority="low")
+
     start_docs_gc(
         get_doc=get_doc,
-        put_docs=_put_docs,
+        put_docs=put_docs_gc,
         binance_symbols=list(BINANCE_SYMBOLS),
         binance_intervals=list(BINANCE_KLINE_INTERVALS),
         rwa_tickers=list(RWA_TICKERS),

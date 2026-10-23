@@ -377,19 +377,20 @@ class BinanceWsFeed:
                         "amount": st["amount"],
                     }
                 )
-        if trade_items and WRITE_QDB_TRADES:
-            # 限长，避免断线重连后积压打爆 qdb
-            if len(trade_items) > 500:
-                trade_items = trade_items[-500:]
-            try:
-                self._post("/v1/trades", {"items": trade_items})
-            except Exception as exc:
-                print(f"binance ws trade flush failed: {exc}", flush=True)
+        # quotes 先入队：snapshots 订阅读跟 /v1/quotes；trades 次之
         if WRITE_QDB_QUOTES and items:
             try:
                 self._post("/v1/quotes", {"items": items})
             except Exception as exc:
                 print(f"binance ws quote flush failed: {exc}", flush=True)
+        if trade_items and WRITE_QDB_TRADES:
+            # 限长，避免断线重连后积压打爆 qdb
+            if len(trade_items) > 256:
+                trade_items = trade_items[-256:]
+            try:
+                self._post("/v1/trades", {"items": trade_items})
+            except Exception as exc:
+                print(f"binance ws trade flush failed: {exc}", flush=True)
 
     def _flush_docs(self) -> None:
         docs: list[dict] = []
