@@ -129,6 +129,33 @@ services:
         condition: service_healthy
     networks: [equitylab]
 
+  # 授权回源边车：扫描 market 日线缺口，从新浪补近半年（与盘中 collector 解耦）
+  history-ingest:
+    build:
+      context: .
+      dockerfile: services/history-ingest/Dockerfile
+    image: equitylab-history-ingest:local
+    container_name: equitylab-history-ingest
+    restart: unless-stopped
+    environment:
+      QDB_URL: http://qdb:9090
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
+      HISTORY_INGEST_WINDOW_DAYS: ${HISTORY_INGEST_WINDOW_DAYS:-180}
+      HISTORY_INGEST_MIN_BARS: ${HISTORY_INGEST_MIN_BARS:-100}
+      HISTORY_INGEST_DATALEN: ${HISTORY_INGEST_DATALEN:-200}
+      HISTORY_INGEST_SLEEP_MS: ${HISTORY_INGEST_SLEEP_MS:-400}
+      HISTORY_INGEST_IDLE_SEC: ${HISTORY_INGEST_IDLE_SEC:-30}
+      HISTORY_INGEST_BATCH: ${HISTORY_INGEST_BATCH:-50}
+      HISTORY_INGEST_MAX_PER_ROUND: ${HISTORY_INGEST_MAX_PER_ROUND:-200}
+      HISTORY_INGEST_FAIL_TTL_SEC: ${HISTORY_INGEST_FAIL_TTL_SEC:-1800}
+      HISTORY_INGEST_SKIP: ${HISTORY_INGEST_SKIP:-0}
+    depends_on:
+      qdb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks: [equitylab]
+
   # --- 应用服务 ---
   # 行情：Provider + Redis 短缓存；也可经网关 /api/market/* 访问
   market-data:

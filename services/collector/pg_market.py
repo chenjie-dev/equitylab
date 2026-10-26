@@ -416,6 +416,104 @@ def get_watermark_day(source_code: str, dataset: str, scope_key: str = "") -> da
     return row[0] if row and row[0] else None
 
 
+def get_watermark(
+    source_code: str, dataset: str, scope_key: str = ""
+) -> dict[str, Any] | None:
+    """返回 watermark_day / detail / updated_at；无行则 None。"""
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT watermark_day, detail, updated_at
+            FROM market.ingest_watermark
+            WHERE source_code=%s AND dataset=%s AND scope_key=%s
+            """,
+            (source_code, dataset, scope_key or ""),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "watermark_day": row[0],
+        "detail": row[1] if isinstance(row[1], dict) else row[1],
+        "updated_at": row[2],
+    }
+
+
+def daily_coverage_map(
+    *,
+    window_start: date | str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """(exchange, secu_code) → {count, min_day, max_day}（窗口内日线）。"""
+    start = (
+        window_start
+        if isinstance(window_start, date)
+        else date.fromisoformat(str(window_start)[:10])
+    )
+    conn = _connect()
+    if conn is None:
+        return {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.exchange_code, s.secu_code,
+                   COUNT(b.trading_day)::int AS cnt,
+                   MIN(b.trading_day) AS min_day,
+                   MAX(b.trading_day) AS max_day
+            FROM market.security s
+            LEFT JOIN market.bar_daily b
+              ON b.inner_code = s.inner_code
+             AND b.trading_day >= %s
+            WHERE s.exchange_code IN ('SSE', 'SZSE', 'BSE')
+            GROUP BY s.exchange_code, s.secu_code
+            """,
+            (start,),
+        )
+        for ex, code, cnt, min_day, max_day in cur.fetchall():
+            out[(str(ex), str(code))] = {
+                "count": int(cnt or 0),
+                "min_day": min_day,
+                "max_day": max_day,
+            }
+    return out
+
+
+def daily_bar_count(
+    exchange_code: str,
+    secu_code: str,
+    *,
+    window_start: date | str,
+) -> dict[str, Any]:
+    """单票窗口内日线覆盖。"""
+    start = (
+        window_start
+        if isinstance(window_start, date)
+        else date.fromisoformat(str(window_start)[:10])
+    )
+    inner = ensure_security(exchange_code, secu_code)
+    if inner is None:
+        return {"count": 0, "min_day": None, "max_day": None}
+    conn = _connect()
+    if conn is None:
+        return {"count": 0, "min_day": None, "max_day": None}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)::int, MIN(trading_day), MAX(trading_day)
+            FROM market.bar_daily
+            WHERE inner_code=%s AND trading_day >= %s
+            """,
+            (inner, start),
+        )
+        row = cur.fetchone()
+    if not row:
+        return {"count": 0, "min_day": None, "max_day": None}
+    return {"count": int(row[0] or 0), "min_day": row[1], "max_day": row[2]}
+
+
 def ingest_sina_klines(
     exchange_code: str,
     secu_code: str,

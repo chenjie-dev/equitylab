@@ -15,14 +15,15 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | redis | equitylab-redis | **16379→6379** | 缓存（宿主机默认 16379，避免与本机其他 Redis 冲突） |
 | qdrant | equitylab-qdrant | 6333 | 向量库 |
 | qdb | equitylab-qdb | 9090 | 行情库（构建上下文 `../qdb`，不回源） |
-| collector | equitylab-collector | （内部） | 采集公开行情并写入 qdb |
+| collector | equitylab-collector | （内部） | 盘中采集：上游 → qdb + 部分 `market` |
+| history-ingest | equitylab-history-ingest | （内部） | 冷历史：扫描 `market` 日线缺口 → 新浪补近半年 |
 | loki | equitylab-loki | 3100 | 日志存储 |
 | alloy | equitylab-alloy | （内部） | 采集容器日志 → Loki（需 docker.sock） |
 | grafana | equitylab-grafana | **3003** | 日志查询 UI（匿名 Viewer） |
 
 卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
 
-qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。`collector` 是**唯一**可回源公开行情的服务：A 股、币安现货、Ondo 代币化美股经 `packages/qdb-py`（`equitylab_qdb`）写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层（`qdb-py`）与 market-data（`qdb-rs`）**读路径零外呼**，只读 `http://qdb:9090`（经客户端包）；前端订阅读经 market-data `/qdb/ws` + `@equitylab/qdb`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。**授权采集族**可回源：`collector`（盘中 → qdb / 部分 `market`）与 `history-ingest`（冷日线缺口 → `market.bar_daily`）。研究层与 market-data **读路径零外呼**。边界见 [行情模块边界](./2026-10-26-行情模块边界.md)。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 
@@ -35,7 +36,11 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
-| `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector |
+| `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector、history-ingest |
+| `HISTORY_INGEST_WINDOW_DAYS` | `180` | 日线覆盖窗口（自然日） |
+| `HISTORY_INGEST_MIN_BARS` | `100` | 窗口内达标根数（约半年交易日） |
+| `HISTORY_INGEST_SLEEP_MS` | `400` | 每票拉取间隔 |
+| `HISTORY_INGEST_SKIP` | `0` | `1`=停回补（进程空转） |
 | `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
 | `QDB_FEED_CODES` / `COLLECTOR_CODES` | seed≈22（茅台/宁德/北交所/ETF） | A 股 **seed**：热门报价前置 + 默认 K 线回填集 |
 | `ASHARE_UNIVERSE` | `full` | `full`=新浪 hs_a→docs `ashare:codes`（数千）+ 分批报价；`seed`=仅上表 |
@@ -62,7 +67,7 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 cp .env.example .env
 docker compose up -d --build
 docker compose ps
-docker compose logs -f gateway orchestrator research market-data collector qdb
+docker compose logs -f gateway orchestrator research market-data collector history-ingest qdb
 
 curl http://localhost:3000/health
 curl -s 'http://localhost:9090/v1/snapshots?symbols=SSE:600519' | head -c 200
@@ -90,6 +95,7 @@ docker compose down
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
 | 行情空 / 只有几根 K 线 | collector 未写 docs，或引擎 late-tick | Spot 看 `binance:kline:*`；`logs collector`；见 [qdb 排障](./2026-10-20-qdb-行情库.md) |
 | A 股 `/markets/ashare` 或 `SSE:600519` 快照一直空 | `.env` 留着 `COLLECTOR_SKIP_ASHARE=1`（排障应急未关回） | 设 `COLLECTOR_SKIP_ASHARE=0`（或删掉该行，compose 默认 0）；`docker compose up -d --force-recreate collector`；日志应有 `ashare=N` 而非 `ashare=skip`；再 curl `http://localhost:9090/v1/snapshots?symbols=SSE:600519` |
+| 非 seed 票历史 K 很少 / `source=qdb` 短窗 | `history-ingest` 未跑或刚起步 | `docker compose logs history-ingest` 应有 `cover=` / `fill=`；PG：`SELECT count(*) FROM market.bar_daily`；设 `HISTORY_INGEST_SKIP=0` |
 | A 股有数但价格落后新浪 / 倒退 | write_gate quotes FIFO 积压，过期 last 盖回快照 | collector `write_gate` quotes 按 `exchange:code` 只留最新；日志 `q_pending` 应≈标的数；对比新浪 `hq.sinajs.cn/list=sh600519` vs `localhost:9090/v1/snapshots?symbols=SSE:600519`，盘中 \|lag\| 宜 <1 元 |
 | A 股报价对、日/分钟 K 几乎只有今天 | live poll 早于 backfill → qdb `late_tick` 丢历史；或 `bar_ts` 曾把北京时间当 UTC | collector 须先同步 ashare backfill 再 poll；清空卷 `docker compose stop collector && docker volume rm equitylab-qdbdata && docker compose up -d --build qdb collector`；日志应先有 `ashare backfill … blocking` / `ashare backfill done` 再有 live tick |
 | `/v1/klines` 超时、图表 Loading | ashare/全量 backfill/过密 trades 占住引擎锁 | `.env`：**临时** `COLLECTOR_SKIP_ASHARE=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；**保持** `BINANCE_WS_WRITE_QUOTES=1`（write_gate 已抬优先）；先 `stop collector` 再 `restart qdb`；引擎恢复后**务必**把 `COLLECTOR_SKIP_ASHARE` 改回 `0`，否则 A 股会一直空 |
