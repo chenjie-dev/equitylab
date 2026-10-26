@@ -66,8 +66,10 @@ const PRIORITY = [
   "002415",
 ] as const;
 
-/** research `/ashare/quotes` 单次最多约 80；分块拉全列表。 */
+/** research `/ashare/quotes` 单次最多约 80；分块拉可视窗口。 */
 const QUOTE_CHUNK = 60;
+/** 报价窗口在可视区外再多拉若干行，滚动时少闪「—」。 */
+const QUOTE_BUFFER = 24;
 
 /** 主 Tab：分时 | 日K | 其他周期 */
 type ChartTab = "intraday" | "1d" | "other";
@@ -176,6 +178,7 @@ export default function AsharePage() {
   const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
   const [catalogNote, setCatalogNote] = useState<string | null>(null);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 40 });
   const [kMeta, setKMeta] = useState<{
     session?: string;
     historyCount?: number;
@@ -184,6 +187,17 @@ export default function AsharePage() {
   }>({});
 
   const activeKType = chartTab === "1d" ? "1d" : chartTab === "intraday" ? "intraday" : otherK;
+
+  const onVisibleRange = useCallback((start: number, end: number) => {
+    setVisibleRange((prev) =>
+      prev.start === start && prev.end === end ? prev : { start, end },
+    );
+  }, []);
+
+  // 搜索变更后列表 remount，窗口先回到顶部，避免沿用旧 scroll 下标拉错报价
+  useEffect(() => {
+    setVisibleRange({ start: 0, end: 40 });
+  }, [query]);
 
   const loadCodes = useCallback(async () => {
     setLoadingCodes(true);
@@ -349,32 +363,38 @@ export default function AsharePage() {
     return list;
   }, [codes, query]);
 
-  const displayList = useMemo(
-    () => filtered.slice(0, query.trim() ? 500 : 800),
-    [filtered, query],
-  );
+  // 全量目录交给虚拟列表；不再 slice(800) 截断
+  const displayList = filtered;
   const listIds = useMemo(
     () => displayList.map((c) => c.stock_code),
     [displayList],
   );
   useListKeyboard(listIds, selected, setSelected, Boolean(listIds.length));
 
-  // 拉取当前展示列表全部报价（分块），不只 PRIORITY / 前几行
-  useEffect(() => {
-    if (!displayList.length) return;
-    const want = displayList.map((c) => c.stock_code);
+  // 仅可视窗口 ± buffer + 当前选中：避免对 ~5k 全表每轮报价
+  const quoteCodes = useMemo(() => {
+    if (!displayList.length) return selected ? [selected] : [];
+    const from = Math.max(0, visibleRange.start - QUOTE_BUFFER);
+    const to = Math.min(
+      displayList.length,
+      Math.max(visibleRange.end, visibleRange.start + 1) + QUOTE_BUFFER,
+    );
+    const want = displayList.slice(from, to).map((c) => c.stock_code);
     if (selected && !want.includes(selected)) want.push(selected);
-    void loadQuotes(want);
+    return want;
+  }, [displayList, visibleRange, selected]);
+
+  useEffect(() => {
+    if (!quoteCodes.length) return;
+    void loadQuotes(quoteCodes);
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [displayList, selected, loadQuotes]);
+  }, [quoteCodes, loadQuotes]);
 
   useEffect(() => {
     if (tick === 0) return;
-    const want = displayList.map((c) => c.stock_code);
-    if (selected && !want.includes(selected)) want.push(selected);
-    void loadQuotes(want);
-  }, [tick, displayList, selected, loadQuotes]);
+    void loadQuotes(quoteCodes);
+  }, [tick, quoteCodes, loadQuotes]);
 
   useQdbSnapshot(selected ? ashareQdbSymbol(selected) : null, (row) => {
     const price = row.last;
@@ -542,7 +562,7 @@ export default function AsharePage() {
             <span className="bn-label">
               {loadingCodes
                 ? "loading…"
-                : `${displayList.length}${query ? ` / ${codes.length}` : ""}`}
+                : `${displayList.length}${query.trim() ? ` / ${codes.length}` : ""} 只`}
             </span>
           </div>
           <input
@@ -558,11 +578,13 @@ export default function AsharePage() {
             <span>涨跌%</span>
           </div>
           <VirtualMktList
+            key={query.trim() ? `q:${query.trim()}` : "all"}
             className="bn-mkt-body"
             items={displayList}
             rowHeight={40}
             height={560}
             keyOf={(c) => c.stock_code}
+            onVisibleRange={onVisibleRange}
             empty={<p className="bn-empty">无匹配标的</p>}
             renderRow={(c) => (
               <AshareMktRow
