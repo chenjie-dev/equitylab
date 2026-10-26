@@ -25,17 +25,24 @@
     {
       "type": "stat",
       "title": "采集链路",
-      "description": "collector + history-ingest 是否都在心跳。双活=两条写入链路都活；半挂/全挂立刻查容器。",
+      "description": "collector + history-ingest 是否都在心跳（各贡献 1）。双活=2；半挂=1；全挂=0。若仍异常：docker compose ps collector history-ingest。",
       "gridPos": { "h": 5, "w": 4, "x": 0, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "(equitylab_collector_up or vector(0)) + (equitylab_history_ingest_up or vector(0))",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum(equitylab_collector_up) + sum(equitylab_history_ingest_up)",
+          "legendFormat": "存活数",
+          "instant": true,
+          "range": false,
+          "editorMode": "code",
+          "exemplar": false
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "none",
+          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -46,21 +53,38 @@
           },
           "mappings": [
             {
-              "type": "value",
+              "type": "range",
               "options": {
-                "0": { "text": "全挂" },
-                "1": { "text": "半挂" },
-                "2": { "text": "双活" }
+                "from": -0.5,
+                "to": 0.5,
+                "result": { "text": "全挂", "index": 0, "color": "red" }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0.5,
+                "to": 1.5,
+                "result": { "text": "半挂", "index": 1, "color": "yellow" }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1.5,
+                "to": 2.5,
+                "result": { "text": "双活", "index": 2, "color": "green" }
               }
             }
           ]
         }
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "colorMode": "background",
         "graphMode": "none",
-        "textMode": "auto"
+        "textMode": "value",
+        "justifyMode": "center"
       }
     },
     {
@@ -722,5 +746,5 @@
   "timezone": "Asia/Shanghai",
   "title": "EquityLab 行情",
   "uid": "equitylab-market",
-  "version": 4
+  "version": 6
 }
