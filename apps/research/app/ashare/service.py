@@ -22,6 +22,22 @@ KTYPE_MAP = {
     "1h": 60,
 }
 
+# qdb snapshots 含 BINANCE / ONDO 等；A 股列表只认沪/深/北（含 ETF 如 510300）
+_ASHARE_EXCHANGES = frozenset({"SSE", "SZSE", "BSE"})
+_EX_UI = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}
+
+
+def _ashare_code6(raw: str) -> str | None:
+    """仅接受 6 位数字代码；拒绝 BTCUSDT / NVDA 等非 A 股 code。
+
+    北交所亦为 6 位（如 830879 / 920088）；新浪 `bj` 前缀，qdb `BSE:`。
+    """
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+    if len(digits) != 6 or digits == "000000":
+        return None
+    return digits
+
+
 _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "600519", "short_name": "贵州茅台", "exchange": "SH", "symbol": "600519.SH"},
     {"stock_code": "000001", "short_name": "平安银行", "exchange": "SZ", "symbol": "000001.SZ"},
@@ -33,6 +49,8 @@ _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "601012", "short_name": "隆基绿能", "exchange": "SH", "symbol": "601012.SH"},
     {"stock_code": "688981", "short_name": "中芯国际", "exchange": "SH", "symbol": "688981.SH"},
     {"stock_code": "510300", "short_name": "沪深300ETF", "exchange": "SH", "symbol": "510300.SH"},
+    {"stock_code": "830879", "short_name": "基康仪器", "exchange": "BJ", "symbol": "830879.BJ"},
+    {"stock_code": "835185", "short_name": "贝特瑞", "exchange": "BJ", "symbol": "835185.BJ"},
     {"stock_code": "000568", "short_name": "泸州老窖", "exchange": "SZ", "symbol": "000568.SZ"},
     {"stock_code": "600900", "short_name": "长江电力", "exchange": "SH", "symbol": "600900.SH"},
     {"stock_code": "601899", "short_name": "紫金矿业", "exchange": "SH", "symbol": "601899.SH"},
@@ -76,17 +94,26 @@ class AshareService:
 
             by_code = {row["stock_code"]: dict(row) for row in _SEED_CODES}
             for row in snapshots_all().get("data") or []:
-                code = str(row.get("stock_code") or "").zfill(6)
-                if not code or code == "000000":
+                ex_raw = str(row.get("exchange") or "").upper()
+                if ex_raw not in _ASHARE_EXCHANGES:
+                    # 兼容仅带 symbol、无 exchange 的行
+                    sym = str(row.get("symbol") or "")
+                    if sym.startswith("SSE:"):
+                        ex_raw = "SSE"
+                    elif sym.startswith("SZSE:"):
+                        ex_raw = "SZSE"
+                    elif sym.startswith("BSE:"):
+                        ex_raw = "BSE"
+                    else:
+                        continue
+                code = _ashare_code6(str(row.get("stock_code") or ""))
+                if not code:
                     continue
-                exchange = "SH" if str(row.get("exchange") or "").startswith("SS") or code.startswith(("5", "6", "9")) else "SZ"
-                if str(row.get("exchange") or "") == "SZSE":
-                    exchange = "SZ"
-                elif str(row.get("exchange") or "") == "SSE":
-                    exchange = "SH"
+                exchange = _EX_UI[ex_raw]
                 by_code[code] = {
                     "stock_code": code,
-                    "short_name": row.get("short_name") or by_code.get(code, {}).get("short_name", ""),
+                    "short_name": row.get("short_name")
+                    or by_code.get(code, {}).get("short_name", ""),
                     "exchange": exchange,
                     "symbol": f"{code}.{exchange}",
                 }
@@ -118,10 +145,9 @@ class AshareService:
             name = r.get("short_name") or r.get("name") or ""
             exchange = r.get("exchange") or r.get("market") or ""
             if not exchange:
-                if code.startswith(("5", "6", "9")):
-                    exchange = "SH"
-                else:
-                    exchange = "SZ"
+                from app.ashare.qdb_client import ashare_exchange
+
+                exchange = _EX_UI[ashare_exchange(code)]
             norm.append(
                 {
                     "stock_code": code,
@@ -299,12 +325,40 @@ class AshareService:
         return payload
 
     def five(self, stock_code: str) -> dict[str, Any]:
-        from app.ashare.qdb_client import snapshots
+        """五档买卖：优先 `ashare:depth:*` docs；否则用快照买一/卖一并标明档位不足。"""
+        from app.ashare.qdb_client import depth_doc, snapshots
 
         code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        snap_rows = snapshots([code]).get("data") or []
+        quote = snap_rows[0] if snap_rows else None
+        depth = depth_doc(code)
+        bids: list[dict[str, Any]] = []
+        asks: list[dict[str, Any]] = []
+        levels = 0
+        note = ""
+        if depth:
+            bids = _normalize_levels(depth.get("bids"))
+            asks = _normalize_levels(depth.get("asks"))
+            levels = max(len(bids), len(asks))
+            note = "qdb docs ashare:depth（新浪五档）"
+        if not bids and not asks and quote:
+            if quote.get("bid") is not None:
+                bids = [{"price": quote["bid"], "volume": None}]
+            if quote.get("ask") is not None:
+                asks = [{"price": quote["ask"], "volume": None}]
+            levels = max(len(bids), len(asks))
+            note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 ashare:depth"
+        if not note:
+            note = "无盘口数据；等 collector 补 ashare:depth 或 quotes bid/ask"
         return {
             "stock_code": code,
-            "data": snapshots([code]).get("data") or [],
+            "bids": bids,
+            "asks": asks,
+            "levels": levels,
+            "note": note,
+            "quote": quote,
+            # 兼容旧前端：data 仍为快照行
+            "data": snap_rows,
             "source": "qdb",
         }
 
@@ -320,7 +374,7 @@ class AshareService:
 
 def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]]:
     """K 线只从 qdb 读（窗口 limit）。周/月由日线归并，30 分由 15 分两两归并。"""
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
 
     from app.ashare.qdb_client import klines as qdb_klines
     from app.ashare.qdb_client import qdb_symbol
@@ -333,12 +387,14 @@ def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]
     want = max(1, int(limit) if limit > 0 else 300)
     raw_limit = min(5000, want * fold + fold)
     candles: list[dict[str, Any]] = []
+    # A 股交易日历按东八区切日；桶 ts 为绝对时间
+    sh_tz = timezone(timedelta(hours=8))
     for row in qdb_klines(qdb_symbol(code), period, limit=raw_limit):
         ts = row.get("ts")
         if ts is None:
             continue
         ms = int(ts) // 1_000_000
-        day = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        day = datetime.fromtimestamp(ms / 1000, tz=sh_tz).strftime("%Y-%m-%d")
         candles.append(
             {
                 "time": ms,
@@ -453,6 +509,26 @@ def _to_candle(r: dict[str, Any], bar_kind: str = "history") -> dict[str, Any]:
         "change_pct": r.get("change_pct"),
         "bar_kind": bar_kind,
     }
+
+
+def _normalize_levels(raw: Any) -> list[dict[str, Any]]:
+    """统一五档条目为 {price, volume}；支持 [[px,vol], ...] 或 {price,volume}。"""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw[:5]:
+        if isinstance(item, (list, tuple)) and len(item) >= 1:
+            px = _num(item[0])
+            vol = _num(item[1]) if len(item) > 1 else None
+        elif isinstance(item, dict):
+            px = _num(item.get("price", item.get("px")))
+            vol = _num(item.get("volume", item.get("vol", item.get("qty"))))
+        else:
+            continue
+        if px is None or px <= 0:
+            continue
+        out.append({"price": px, "volume": vol})
+    return out
 
 
 def _cn_session_status() -> dict[str, Any]:

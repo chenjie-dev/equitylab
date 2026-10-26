@@ -22,8 +22,8 @@
 | GET | `/ashare/codes?q=&limit=` | 全市场代码（可搜） |
 | GET | `/ashare/quotes?codes=000001,600519` | 批量实时行情 |
 | GET | `/ashare/klines/{code}?k_type=1d&view=merged&limit=` | K 线（Wind 风格拆分，见下） |
-| GET | `/ashare/five/{code}` | 五档（由 qdb 快照合成） |
-| GET | `/ashare/intraday/{code}` | 当日分时（由 qdb K 线合成） |
+| GET | `/ashare/five/{code}` | 五档：优先 `ashare:depth:{EX}:{code}` docs；否则买一/卖一 |
+| GET | `/ashare/intraday/{code}` | 分时（qdb 5m K 线合成；非逐笔） |
 
 `k_type`：`1d` / `1w` / `1M` / `5m` / `15m` / `30m` / `60m`（映射 qdb 周期或读路径折叠）。
 
@@ -53,7 +53,10 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 
 - 代码、报价、K 线、五档和分时都只读 `QDB_URL`（经 `equitylab_qdb`）。不在研究层回源。
 - K 线 HTTP **窗口读**（`limit` / 可选 `endTime`，手册上限 5000）；勿一次拉全历史。
-- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中。
+- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）；五档写入 docs 键 `ashare:depth:{SSE\|SZSE\|BSE}:{code}`。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中（默认含北交所如 `830879`）。
+- 北交所：qdb `BSE:6位码`（如 `BSE:830879` / `BSE:920088`），新浪 `bj` 前缀；`list_codes` 展示 `830879.BJ`。仍排除 BINANCE/ONDO。
+- **启动**：A 股历史 trades 在首轮 live poll **之前**同步直写（qdb `late_tick`：早于未闭合桶的成交不进 K 线）。`bar_ts` 用北京时间。write_gate quotes 按标的只留最新。
+- UI：`/markets/ashare` 为同花顺启发的左列表 / 右图+五档布局（红涨绿跌）。
 - 非交易所官方低延迟 feed；实时合成非 Wind 终端授权数据。
 - 不做交易、账户、融资融券。
 - 分钟 K 历史深度受 collector 回填窗口限制。
@@ -63,4 +66,5 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 1. 查 `.env`：`COLLECTOR_SKIP_ASHARE=1` 会关掉 A 股 REST 热路径与 backfill（compose 默认 `0`）。日常开发保持 `0` 或未设置。  
 2. `docker logs equitylab-collector`：正常应见 `ashare=N (… rest hot-path)`；若是 `ashare=skip` / `ashare backfill skipped`，按上条改 env 后 `docker compose up -d --force-recreate collector`。  
 3. 冒烟：`curl -s 'http://localhost:9090/v1/snapshots?symbols=SSE:600519'` 应有 `data`；再打 `GET /api/research/ashare/quotes?codes=600519`。  
-4. 读路径无新浪：若 qdb 有数而 research 空，查 `QDB_URL` / 符号映射（`600519` → `SSE:600519`），勿在 research 回源。
+4. 读路径无新浪：若 qdb 有数而 research 空，查 `QDB_URL` / 符号映射（`600519` → `SSE:600519`），勿在 research 回源。  
+5. 报价对但日 K 几乎只有今天：日志须先有 `ashare backfill … blocking` / `ashare backfill done` 再 live tick；否则清空 `equitylab-qdbdata` 后重建 collector（见 containers 排障表）。

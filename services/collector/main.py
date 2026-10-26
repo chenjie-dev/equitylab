@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 import requests
 from equitylab_qdb import Client, scale as qdb_scale
@@ -13,7 +13,7 @@ from equitylab_qdb import PRICE_SCALE as SCALE
 
 CODES = os.environ.get(
     "COLLECTOR_CODES",
-    "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300",
+    "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185",
 )
 INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "500")) / 1000
 UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.cn"}
@@ -68,9 +68,25 @@ def main() -> None:
     except Exception as exc:
         print(f"retention gc start failed: {exc}", flush=True)
 
+    # A 股历史回填必须在首轮 live poll 之前完成：qdb 对「早于当前未闭合桶」的
+    # 成交记 late_tick，不进 K 线。若先 poll 再 backfill，日/分钟历史会永久空洞。
+    if not skip_ashare and codes:
+        print(
+            f"collector ashare backfill {len(codes)} symbols (blocking before live poll)",
+            flush=True,
+        )
+        for code in codes:
+            try:
+                backfill(code)
+            except Exception as exc:
+                print(f"backfill {code} failed: {exc}", flush=True)
+        print("collector ashare backfill done", flush=True)
+    else:
+        print("collector ashare backfill skipped (COLLECTOR_SKIP_ASHARE)", flush=True)
+
     threading.Thread(
-        target=_backfill_worker,
-        args=([] if skip_ashare else codes, markets),
+        target=_market_backfill_worker,
+        args=(markets,),
         name="collector-backfill",
         daemon=True,
     ).start()
@@ -113,21 +129,12 @@ def main() -> None:
             time.sleep(remain)
 
 
-def _backfill_worker(codes: list[str], markets: object) -> None:
-    if codes:
-        print(f"collector backfill {len(codes)} ashare symbols (background)", flush=True)
-        for code in codes:
-            try:
-                backfill(code)
-            except Exception as exc:
-                print(f"backfill {code} failed: {exc}", flush=True)
-    else:
-        print("collector ashare backfill skipped (COLLECTOR_SKIP_ASHARE)", flush=True)
+def _market_backfill_worker(markets: object) -> None:
     try:
         markets.backfill_markets()  # type: ignore[attr-defined]
     except Exception as exc:
         print(f"market backfill failed: {exc}", flush=True)
-    print("collector backfill done", flush=True)
+    print("collector market backfill done", flush=True)
 
 
 def _slow_worker(markets: object) -> None:
@@ -181,7 +188,10 @@ def backfill(code: str) -> None:
     for ts, bar, _kind in events:
         trades.extend(ohlc_trades(exchange, code, ts, bar))
     if trades:
-        post("/v1/trades", {"items": trades})
+        # 启动期尚无 live poll：直写 qdb，避免与币安高优先队列抢、并保证先于未闭合桶落盘
+        batch = 256
+        for i in range(0, len(trades), batch):
+            _post_raw("/v1/trades", {"items": trades[i : i + batch]})
         print(f"backfill {symbol} trades={len(trades)}", flush=True)
 
 
@@ -190,6 +200,7 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
     text = requests.get(f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8).content.decode("gb18030", "replace")
     quotes = []
     trades = []
+    depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
     for row in parse_sina(text):
         quotes.append(
@@ -211,24 +222,47 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
                 "amount": row["amount"],
             }
         )
-        vol = int(row["volume"])
-        prev = last_vol.get(row["code"], 0)
-        delta = vol - prev if vol > prev else 0
-        last_vol[row["code"]] = max(vol, prev)
-        if delta > 0:
-            trades.append(
+        # 五档进 docs（引擎 quotes 只落买一/卖一）；读路径经 GET /v1/docs
+        bids = row.get("bids") or []
+        asks = row.get("asks") or []
+        if bids or asks:
+            symbol = f"{row['exchange']}:{row['code']}"
+            depth_docs.append(
                 {
-                    "exchange": row["exchange"],
-                    "code": row["code"],
-                    "ts_ns": now_ns,
-                    "price": scale(row["price"]),
-                    "volume": delta,
+                    "key": f"ashare:depth:{symbol}",
+                    "value": {
+                        "symbol": symbol,
+                        "bids": bids,
+                        "asks": asks,
+                        "ts_ns": now_ns,
+                        "source": "sina",
+                    },
                 }
             )
+        vol = int(row["volume"])
+        prev = last_vol.get(row["code"])
+        # 首见只记量、不写 trade，避免把「当日累计成交量」整笔打进当前 5m 桶
+        if prev is None:
+            last_vol[row["code"]] = vol
+        else:
+            delta = vol - prev if vol > prev else 0
+            last_vol[row["code"]] = max(vol, prev)
+            if delta > 0:
+                trades.append(
+                    {
+                        "exchange": row["exchange"],
+                        "code": row["code"],
+                        "ts_ns": now_ns,
+                        "price": scale(row["price"]),
+                        "volume": delta,
+                    }
+                )
     if quotes:
         post("/v1/quotes", {"items": quotes})
     if trades:
         post("/v1/trades", {"items": trades})
+    if depth_docs:
+        post("/v1/docs", {"items": depth_docs})
 
 
 def ohlc_trades(exchange: str, code: str, ts: int, bar: dict) -> list[dict]:
@@ -285,15 +319,25 @@ def parse_sina(body: str) -> list[dict]:
             exchange, code = "SSE", sym[2:8]
         elif sym.startswith("sz"):
             exchange, code = "SZSE", sym[2:8]
+        elif sym.startswith("bj"):
+            # 北交所：新浪 hq_str_bj830879 / bj920088 → qdb BSE:6 位码
+            exchange, code = "BSE", sym[2:8]
         else:
             continue
         payload = quoted.split('"')[1] if '"' in quoted else ""
         parts = payload.split(",")
         if len(parts) < 10 or not parts[3]:
             continue
-        # 新浪：6/7 竞买卖价；11/21 为买一/卖一价（更准，缺省回落到 6/7）
-        bid = num(parts[11]) if len(parts) > 11 and parts[11] else num(parts[6])
-        ask = num(parts[21]) if len(parts) > 21 and parts[21] else num(parts[7])
+        # 新浪：10–19 买一～买五（量/价交替）；20–29 卖一～卖五
+        # 6/7 为竞买卖价；缺档时回落
+        bids = _sina_levels(parts, start=10)
+        asks = _sina_levels(parts, start=20)
+        bid = bids[0]["price"] if bids else (
+            num(parts[6]) if len(parts) > 6 else None
+        )
+        ask = asks[0]["price"] if asks else (
+            num(parts[7]) if len(parts) > 7 else None
+        )
         rows.append(
             {
                 "exchange": exchange,
@@ -306,11 +350,29 @@ def parse_sina(body: str) -> list[dict]:
                 "low": num(parts[5]),
                 "bid": bid,
                 "ask": ask,
+                "bids": bids,
+                "asks": asks,
                 "volume": num(parts[8]),
                 "amount": num(parts[9]),
             }
         )
     return rows
+
+
+def _sina_levels(parts: list[str], *, start: int) -> list[dict]:
+    """解析新浪五档：start 起连续 5 组 (量, 价)。"""
+    out: list[dict] = []
+    for i in range(5):
+        vol_i = start + i * 2
+        px_i = start + i * 2 + 1
+        if px_i >= len(parts):
+            break
+        px = num(parts[px_i]) if parts[px_i] else None
+        vol = num(parts[vol_i]) if vol_i < len(parts) and parts[vol_i] else None
+        if px is None or px <= 0:
+            continue
+        out.append({"price": px, "volume": vol or 0})
+    return out
 
 
 def get_klines(symbol: str, period: str, *, limit: int = 5000) -> list[dict]:
@@ -341,21 +403,44 @@ def post(path: str, body: dict, *, priority: str = "high") -> None:
     gate.enqueue(path, body, priority="low" if priority == "low" else "high")
 
 
+def _ashare_code6(raw: str) -> str:
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+    return digits[-6:].zfill(6) if digits else "000000"
+
+
+def ashare_exchange(code: str) -> str:
+    """6 位 A 股码 → qdb 交易所标签。
+
+    北交所优先：4/8 开头（原新三板精选层等）或 92xxxx（北交所新号段）。
+    须先于「9→SSE」判断，否则 920088 会被误标为沪市。
+    """
+    code = _ashare_code6(code)
+    if code.startswith(("4", "8")) or code.startswith("92"):
+        return "BSE"
+    if code.startswith(("5", "6", "9")):
+        return "SSE"
+    return "SZSE"
+
+
 def sina_symbol(code: str) -> str:
-    code = "".join(ch for ch in code if ch.isdigit())[-6:].zfill(6)
-    return ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
+    code = _ashare_code6(code)
+    prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[ashare_exchange(code)]
+    return prefix + code
 
 
 def split_symbol(code: str) -> tuple[str, str]:
-    code = "".join(ch for ch in code if ch.isdigit())[-6:].zfill(6)
-    exchange = "SSE" if code.startswith(("5", "6", "9")) else "SZSE"
-    return exchange, code
+    code = _ashare_code6(code)
+    return ashare_exchange(code), code
 
 
 def bar_ts(day: str) -> int:
+    """新浪 K 线时间为北京时间；写成绝对 ns（勿当 UTC，否则盘中桶错位 8h）。"""
+    from zoneinfo import ZoneInfo
+
     raw = day.strip().replace("T", " ")
     fmt = "%Y-%m-%d %H:%M:%S" if " " in raw else "%Y-%m-%d"
-    dt = datetime.strptime(raw[:19] if " " in raw else raw[:10], fmt).replace(tzinfo=timezone.utc)
+    naive = datetime.strptime(raw[:19] if " " in raw else raw[:10], fmt)
+    dt = naive.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
     return int(dt.timestamp() * 1_000_000_000)
 
 

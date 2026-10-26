@@ -96,7 +96,7 @@ MVP：`POST /rag/search` 返回演示切片，尚未接 Embedding / Qdrant。
 |---|---|---|
 | 写入 | collector → qdb HTTP | `POST /v1/quotes` · `/trades` · `/docs`；Compose 内 `QDB_FEED=0` |
 | 实时快照 | GET qdb `/v1/snapshots` 或 `/v1/docs` | A 股 / 币安 ticker；Redis TTL≈3s 仍可做边路 |
-| 历史 K 线 | GET qdb `/v1/klines` | 符号 `SSE:` / `SZSE:` / `BINANCE:` / `ONDO:`；读路径可折叠周期 |
+| 历史 K 线 | GET qdb `/v1/klines` | 符号 `SSE:` / `SZSE:` / `BSE:` / `BINANCE:` / `ONDO:`；读路径可折叠周期 |
 | 盘中推送 | WebSocket | 币安公开流仍直连 market-data，不进 qdb / MCP |
 
 Provider Adapter：`MarketDataProvider` trait；`mock` / `binance` / `alphafeed`。`MARKET_PROVIDER=binance` 时统一 `/quotes` `/bars` 也读 qdb。A 股见 Research `/ashare`。总览：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。

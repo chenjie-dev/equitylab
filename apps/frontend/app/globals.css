@@ -1568,4 +1568,141 @@ code {
   word-break: break-all;
 }
 
+/* —— A 股同花顺启发布局：更密终端感 —— */
+.bn-page.ths {
+  --bn-card: #12161c;
+  --bn-bg: #0c0f13;
+  --bn-bg-elevated: #161b22;
+  --bn-border: #252b34;
+}
+.bn-page.ths .ths-top {
+  padding: 8px 12px 10px;
+  gap: 12px 20px;
+}
+.bn-page.ths .ths-code {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.bn-page.ths .ths-name {
+  font-size: 15px;
+  color: var(--bn-text-secondary);
+  font-weight: 500;
+}
+.bn-page.ths .ths-stats {
+  gap: 10px 18px;
+}
+.bn-page.ths .ths-strip {
+  padding: 4px 12px;
+  font-size: 11px;
+}
+.bn-page.ths .ths-main {
+  grid-template-columns: 280px minmax(0, 1fr) 220px;
+  min-height: 700px;
+}
+.bn-page.ths .ths-list .bn-mkt-row-stock {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.bn-page.ths .ths-tabs {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.bn-page.ths .ths-other {
+  border-left: 1px solid var(--bn-border);
+  padding-left: 8px;
+}
+.bn-page.ths .ths-book .bn-book-tall {
+  min-height: 640px;
+}
+.ths-five-head {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr;
+  gap: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--bn-text-tertiary);
+  border-bottom: 1px solid var(--bn-border);
+}
+.ths-five-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.ths-five-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr;
+  gap: 4px;
+  align-items: center;
+  padding: 5px 10px;
+  position: relative;
+}
+.ths-five-row.ask:hover,
+.ths-five-row.bid:hover {
+  background: var(--bn-bg-elevated);
+}
+.ths-five-side {
+  color: var(--bn-text-tertiary);
+  font-size: 11px;
+}
+.ths-five-vol {
+  position: relative;
+  text-align: right;
+  z-index: 1;
+}
+.ths-five-vol i {
+  position: absolute;
+  right: 0;
+  top: 1px;
+  bottom: 1px;
+  background: rgba(229, 57, 53, 0.12);
+  z-index: -1;
+  border-radius: 1px;
+  pointer-events: none;
+}
+.ths-five-row.ask .ths-five-vol i {
+  background: rgba(27, 143, 90, 0.14);
+}
+.ths-five-row.bid .ths-five-vol i {
+  background: rgba(229, 57, 53, 0.14);
+}
+.ths-five-mid {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--bn-border);
+  border-bottom: 1px solid var(--bn-border);
+  background: var(--bn-bg-elevated);
+  font-size: 16px;
+  font-weight: 700;
+}
+.ths-five-note {
+  margin-top: auto;
+  font-size: 10px;
+  line-height: 1.4;
+}
+@media (max-width: 1280px) {
+  .bn-page.ths .ths-main {
+    grid-template-columns: minmax(0, 1fr) 200px;
+  }
+}
+@media (max-width: 860px) {
+  .bn-page.ths .ths-main {
+    grid-template-columns: 1fr;
+  }
+  .bn-page.ths .ths-book {
+    order: 3;
+  }
+}
+
 
