@@ -36,7 +36,11 @@ function ashareQdbSymbol(code: string): string {
   return `${ex}:${c}`;
 }
 
-/** 与 research `_SEED_CODES` / collector 默认 COLLECTOR_CODES 对齐（排序置顶）。 */
+/**
+ * 热门置顶（与 collector seed / K 线回填集对齐）。
+ * 全市场代码来自 qdb `ashare:codes`（数千）；列表报价 round-robin 有滞后。
+ * K 线历史默认仅 seed/priority 有回填，其余可能只有盘中快照合成。
+ */
 const PRIORITY = [
   "600519",
   "000001",
@@ -171,6 +175,7 @@ export default function AsharePage() {
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
+  const [catalogNote, setCatalogNote] = useState<string | null>(null);
   const [kMeta, setKMeta] = useState<{
     session?: string;
     historyCount?: number;
@@ -192,10 +197,22 @@ export default function AsharePage() {
       })),
     );
     try {
-      const res = await fetch(`/api/ashare/codes?limit=8000`);
+      const res = await fetch(`/api/ashare/codes?limit=10000`);
       if (!res.ok) throw new Error(`codes ${res.status}`);
-      const body = (await res.json()) as { data?: CodeRow[] };
+      const body = (await res.json()) as {
+        data?: CodeRow[];
+        meta?: { note?: string; universe?: string; catalog_count?: number };
+      };
       if (body.data?.length) setCodes(body.data);
+      if (body.meta?.note) {
+        setCatalogNote(
+          body.meta.universe === "full"
+            ? `全市场 ${body.meta.catalog_count ?? body.data?.length ?? "—"} 只；报价分批刷新（有滞后）；K 线完整回填仅热门 seed`
+            : body.meta.note,
+        );
+      } else {
+        setCatalogNote(null);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -506,6 +523,14 @@ export default function AsharePage() {
         <span className="bn-label">
           {meta?.exchange ?? "—"} · 只读 qdb
         </span>
+        {catalogNote ? (
+          <>
+            <span className="bn-label">·</span>
+            <span className="bn-label" title={catalogNote}>
+              {catalogNote}
+            </span>
+          </>
+        ) : null}
       </div>
 
       {error ? <pre className="error bn-error">{error}</pre> : null}

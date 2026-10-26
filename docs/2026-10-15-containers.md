@@ -37,8 +37,12 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector |
 | `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
-| `QDB_FEED_CODES` / `COLLECTOR_CODES` | seed≈22（茅台/宁德/北交所等） | A 股采集；与 `/markets/ashare` seed 对齐，扩大写 `.env` 后 recreate collector |
-| `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股报价热路径间隔；币安实时走 WS→qdb |
+| `QDB_FEED_CODES` / `COLLECTOR_CODES` | seed≈22（茅台/宁德/北交所/ETF） | A 股 **seed**：热门报价前置 + 默认 K 线回填集 |
+| `ASHARE_UNIVERSE` | `full` | `full`=新浪 hs_a→docs `ashare:codes`（数千）+ 分批报价；`seed`=仅上表 |
+| `ASHARE_QUOTE_BATCH` | `80` | 每 tick 旋转批大小（新浪 `hq.sinajs.cn` 硬顶≈100） |
+| `ASHARE_UNIVERSE_REFRESH_SEC` | `21600` | 全表代码重拉间隔（秒） |
+| `ASHARE_KLINE_CODES` | 空→seed | K 线启动回填：空=seed；`all`=全宇宙（极重）；或逗号列表 |
+| `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股每批报价间隔；全表一轮滞后≈count/batch×interval；币安走 WS |
 | 客户端包 | `packages/qdb-{py,ts,rs}` | Compose 构建 context 为仓库根以 `COPY packages/` |
 | `NEXT_PUBLIC_MARKET_WS_URL` | `ws://localhost:3002` | 前端订 qdb（经 `/qdb/ws`） |
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |

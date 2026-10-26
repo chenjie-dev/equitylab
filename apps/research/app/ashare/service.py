@@ -38,8 +38,8 @@ def _ashare_code6(raw: str) -> str | None:
     return digits
 
 
-# 列表种子：须与 collector 默认 COLLECTOR_CODES / Compose QDB_FEED_CODES 对齐，
-# 否则 UI 会列出无 qdb 快照的行。扩大宇宙：改三处默认 + 设 QDB_FEED_CODES。
+# 列表种子（热门 + ETF）；全市场以 collector 写入的 qdb docs `ashare:codes` 为准。
+# ASHARE_UNIVERSE=full 时 list_codes 优先读该 catalog，再与 snapshots 合并名称。
 _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "600519", "short_name": "贵州茅台", "exchange": "SH", "symbol": "600519.SH"},
     {"stock_code": "000001", "short_name": "平安银行", "exchange": "SZ", "symbol": "000001.SZ"},
@@ -85,16 +85,50 @@ class AshareService:
         self._codes: list[dict[str, Any]] | None = None
         self._codes_at = 0.0
         self._codes_ttl = 3600.0
+        self._codes_meta: dict[str, Any] = {}
+        self._codes_source = "qdb"
         self._quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._quote_ttl = 5.0
 
     def list_codes(self, q: str | None = None, limit: int = 5000) -> dict[str, Any]:
         now = time.monotonic()
         source = "qdb"
+        meta: dict[str, Any] = {}
         if self._codes is None or now - self._codes_at > self._codes_ttl:
-            from app.ashare.qdb_client import snapshots_all
+            from app.ashare.qdb_client import codes_catalog, snapshots_all
 
             by_code = {row["stock_code"]: dict(row) for row in _SEED_CODES}
+            catalog = codes_catalog()
+            if catalog and catalog.get("codes"):
+                source = "qdb:ashare:codes"
+                meta = {
+                    "universe": catalog.get("universe"),
+                    "catalog_count": catalog.get("count"),
+                    "catalog_source": catalog.get("source"),
+                    "kline_codes": catalog.get("kline_codes"),
+                    "note": catalog.get("note"),
+                    "quote_batch": catalog.get("quote_batch"),
+                }
+                for item in catalog["codes"]:
+                    if not isinstance(item, dict):
+                        continue
+                    code = _ashare_code6(str(item.get("code") or item.get("stock_code") or ""))
+                    if not code:
+                        continue
+                    ex_raw = str(item.get("exchange") or "").upper()
+                    if ex_raw not in _ASHARE_EXCHANGES:
+                        from app.ashare.qdb_client import ashare_exchange
+
+                        ex_raw = ashare_exchange(code)
+                    exchange = _EX_UI[ex_raw]
+                    name = str(item.get("name") or item.get("short_name") or "")
+                    by_code[code] = {
+                        "stock_code": code,
+                        "short_name": name
+                        or by_code.get(code, {}).get("short_name", ""),
+                        "exchange": exchange,
+                        "symbol": f"{code}.{exchange}",
+                    }
             for row in snapshots_all().get("data") or []:
                 ex_raw = str(row.get("exchange") or "").upper()
                 if ex_raw not in _ASHARE_EXCHANGES:
@@ -112,17 +146,22 @@ class AshareService:
                 if not code:
                     continue
                 exchange = _EX_UI[ex_raw]
+                prev = by_code.get(code, {})
                 by_code[code] = {
                     "stock_code": code,
                     "short_name": row.get("short_name")
-                    or by_code.get(code, {}).get("short_name", ""),
+                    or prev.get("short_name", ""),
                     "exchange": exchange,
                     "symbol": f"{code}.{exchange}",
                 }
             self._codes = list(by_code.values())
             self._codes_at = now
+            self._codes_meta = meta
+            self._codes_source = source
 
         rows = self._codes or list(_SEED_CODES)
+        source = getattr(self, "_codes_source", source)
+        meta = getattr(self, "_codes_meta", meta)
         if q:
             qq = q.strip().upper()
             rows = [
@@ -135,7 +174,10 @@ class AshareService:
         total = len(rows)
         if limit > 0:
             rows = rows[:limit]
-        return {"count": total, "data": rows, "source": source}
+        out: dict[str, Any] = {"count": total, "data": rows, "source": source}
+        if meta:
+            out["meta"] = meta
+        return out
 
     @staticmethod
     def _normalize_codes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

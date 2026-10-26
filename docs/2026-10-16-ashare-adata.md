@@ -44,19 +44,23 @@
 
 ```bash
 curl -s http://localhost:3000/api/research/ashare/ | head
-curl -s 'http://localhost:3000/api/research/ashare/quotes?codes=600519,000001' | head -c 400
+curl -s 'http://localhost:3000/api/research/ashare/codes?limit=5' | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('count'), d.get('source'), d.get('meta',{}).get('universe'))"
+curl -s 'http://localhost:3000/api/research/ashare/quotes?codes=600519,000001,830879' | head -c 400
 curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=merged&limit=5' | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('session'), d['history']['count'], bool(d.get('realtime')), d['count'])"
-curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=history&limit=3' | head -c 500
+curl -s 'http://localhost:9090/v1/docs?key=ashare:codes' | python3 -c "import sys,json;d=json.load(sys.stdin);v=d.get('value',d);print(v.get('count'), v.get('source'), v.get('universe'))"
 ```
 
 ## 边界
 
 - 代码、报价、K 线、五档和分时都只读 `QDB_URL`（经 `equitylab_qdb`）。不在研究层回源。
 - K 线 HTTP **窗口读**（`limit` / 可选 `endTime`，手册上限 5000）；勿一次拉全历史。
-- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）；五档写入 docs 键 `ashare:depth:{SSE\|SZSE\|BSE}:{code}`。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中（默认与 research `_SEED_CODES` 约 22 只对齐，含北交所如 `830879`；列表更长时扩 `.env`）。
+- 回源在 `services/collector`（新浪等公开源）：
+  - **代码表**：`ASHARE_UNIVERSE=full`（默认）拉新浪 `Market_Center` 节点 `hs_a`（沪+深+北，约 5k+），合并 seed（ETF 如 `510300`），写入 docs **`ashare:codes`**；`list_codes` 优先读该 catalog，再与 snapshots 补名称。`seed` 模式仅 `QDB_FEED_CODES` / `COLLECTOR_CODES`（约 22）。
+  - **报价**：`hq.sinajs.cn/list=` **单次硬顶约 100**；collector 按 `ASHARE_QUOTE_BATCH`（默认 80）round-robin，每批前置 seed。全表一轮滞后 ≈ `count/batch*(COLLECTOR_INTERVAL_MS/1000)`（约数十秒）。五档 docs：`ashare:depth:{SSE\|SZSE\|BSE}:{code}`。
+  - **K 线回填**：默认仅 seed / `ASHARE_KLINE_CODES`（全表回填极重，设 `=all` 才开启）。非回填标的可能只有盘中快照合成的实时 bar。
 - 北交所：qdb `BSE:6位码`（如 `BSE:830879` / `BSE:920088`），新浪 `bj` 前缀；`list_codes` 展示 `830879.BJ`。仍排除 BINANCE/ONDO。
-- **启动**：A 股历史 trades 在首轮 live poll **之前**同步直写（qdb `late_tick`：早于未闭合桶的成交不进 K 线）。`bar_ts` 用北京时间。write_gate quotes 按标的只留最新。
-- UI：`/markets/ashare` 为同花顺启发的左列表 / 右图+五档布局（红涨绿跌）。
+- **启动**：A 股历史 trades 在首轮 live poll **之前**同步直写（qdb `late_tick`）。`bar_ts` 用北京时间。write_gate quotes 按标的只留最新。
+- UI：`/markets/ashare` 左列表 / 右图+五档；顶栏提示全市场分批刷新与 K 线回填范围。
 - 非交易所官方低延迟 feed；实时合成非 Wind 终端授权数据。
 - 不做交易、账户、融资融券。
 - 分钟 K 历史深度受 collector 回填窗口限制。

@@ -11,14 +11,10 @@ import requests
 from equitylab_qdb import Client, scale as qdb_scale
 from equitylab_qdb import PRICE_SCALE as SCALE
 
+import ashare_universe as ashare_u
+
 # 默认与 research `_SEED_CODES` / 前端 PRIORITY 对齐（沪深北 + ETF）；
-# 扩大列表：设 QDB_FEED_CODES 或 COLLECTOR_CODES（Compose 透传前者）。
-_DEFAULT_ASHARE_CODES = (
-    "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,"
-    "830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,"
-    "600030,002415"
-)
-CODES = os.environ.get("COLLECTOR_CODES", _DEFAULT_ASHARE_CODES)
+# 全市场：ASHARE_UNIVERSE=full（默认）拉新浪 hs_a → docs ashare:codes，报价 round-robin。
 INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "500")) / 1000
 UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.cn"}
 # 进程级 qdb 客户端（读写）；写纪律：仅本进程回源
@@ -35,18 +31,52 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 def main() -> None:
-    codes = [c.strip() for c in CODES.split(",") if c.strip()]
+    seed = ashare_u.seed_codes_from_env()
     wait_qdb()
     # 单写者门闸：高优先现货/A 股，低优先 RWA，避免并发单条 POST 饿死 snapshots
     from write_gate import start_gate
 
     start_gate(_post_raw)
     skip_ashare = _env_flag("COLLECTOR_SKIP_ASHARE", "0")
-    # 币安：WS 推送写 qdb；A 股仍 REST 热路径；盘口/RWA/回填后台。
+
+    kline_codes: list[str] = list(seed)
+    rotator: ashare_u.QuoteRotator | None = None
+    codes: list[str] = list(seed)
+
+    if not skip_ashare:
+        print(
+            f"collector ashare universe mode={ashare_u.universe_mode()} "
+            f"seed={len(seed)} batch={ashare_u.quote_batch_size()} "
+            f"(resolving…)",
+            flush=True,
+        )
+        rows, doc = ashare_u.resolve_universe(seed=seed)
+        codes = [r["code"] for r in rows]
+        kline_codes = list(doc.get("kline_codes") or seed)
+        post("/v1/docs", {"items": ashare_u.codes_doc_items(doc)})
+        rotator = ashare_u.QuoteRotator(codes, seed=seed)
+        # 每批实际旋转量 ≈ min(batch, 100-seed)；估算全表一轮滞后
+        rotate_n = max(1, len(codes) - len(seed))
+        per_tick = max(1, min(ashare_u.quote_batch_size(), ashare_u.SINA_HQ_BATCH_MAX - len(seed)))
+        lag_s = (rotate_n / per_tick) * INTERVAL if codes else 0.0
+        print(
+            f"collector ashare catalog count={doc['count']} source={doc['source']} "
+            f"kline_backfill={len(kline_codes)} quote_full_cycle_s≈{lag_s:.0f} "
+            f"doc={ashare_u.CODES_DOC_KEY}",
+            flush=True,
+        )
+        threading.Thread(
+            target=_universe_refresh_worker,
+            args=(seed, rotator),
+            name="collector-ashare-universe",
+            daemon=True,
+        ).start()
+
+    # 币安：WS 推送写 qdb；A 股 REST 热路径（分批）；盘口/RWA/回填后台。
     print(
         f"collector cadence interval_ms={int(INTERVAL * 1000)} "
         f"ashare={'skip' if skip_ashare else len(codes)} "
-        f"(binance=ws→qdb; ashare={'off' if skip_ashare else 'rest hot-path'})",
+        f"(binance=ws→qdb; ashare={'off' if skip_ashare else 'rest batched'})",
         flush=True,
     )
     import markets
@@ -73,13 +103,14 @@ def main() -> None:
         print(f"retention gc start failed: {exc}", flush=True)
 
     # A 股历史回填必须在首轮 live poll 之前完成：qdb 对「早于当前未闭合桶」的
-    # 成交记 late_tick，不进 K 线。若先 poll 再 backfill，日/分钟历史会永久空洞。
-    if not skip_ashare and codes:
+    # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（ASHARE_KLINE_CODES）。
+    if not skip_ashare and kline_codes:
         print(
-            f"collector ashare backfill {len(codes)} symbols (blocking before live poll)",
+            f"collector ashare backfill {len(kline_codes)} symbols "
+            f"(blocking before live poll; full-universe klines deferred)",
             flush=True,
         )
-        for code in codes:
+        for code in kline_codes:
             try:
                 backfill(code)
             except Exception as exc:
@@ -105,9 +136,10 @@ def main() -> None:
     cycle = 0
     while True:
         t0 = time.monotonic()
-        if not skip_ashare and codes:
+        if not skip_ashare and rotator is not None:
             try:
-                poll_quotes(codes, last_vol)
+                batch = rotator.next_batch()
+                poll_quotes(batch, last_vol)
             except Exception as exc:
                 print(f"ashare poll failed: {exc}", flush=True)
         # WS 健康时 noop；断流才 REST 兜底
@@ -122,15 +154,34 @@ def main() -> None:
                 ws_ok = markets.binance_ws_healthy()
             except Exception:
                 pass
+            n = len(rotator.codes) if rotator else 0
             print(
                 f"collector tick cycle={cycle} ashare_ms={elapsed_ms} "
-                f"binance_ws={'up' if ws_ok else 'down'}",
+                f"ashare_n={n} binance_ws={'up' if ws_ok else 'down'}",
                 flush=True,
             )
         cycle += 1
         remain = INTERVAL - (time.monotonic() - t0)
         if remain > 0:
             time.sleep(remain)
+
+
+def _universe_refresh_worker(seed: list[str], rotator: ashare_u.QuoteRotator) -> None:
+    """定期重拉 hs_a，刷新 ashare:codes 与内存 rotator（默认 6h）。"""
+    while True:
+        time.sleep(ashare_u.universe_refresh_sec())
+        if ashare_u.universe_mode() != "full":
+            continue
+        try:
+            rows, doc = ashare_u.resolve_universe(seed=seed)
+            post("/v1/docs", {"items": ashare_u.codes_doc_items(doc)})
+            rotator.set_codes([r["code"] for r in rows], seed=seed)
+            print(
+                f"ashare universe refreshed count={doc['count']} source={doc['source']}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"ashare universe refresh failed: {exc}", flush=True)
 
 
 def _market_backfill_worker(markets: object) -> None:

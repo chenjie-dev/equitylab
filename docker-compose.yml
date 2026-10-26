@@ -79,9 +79,16 @@ services:
     restart: unless-stopped
     environment:
       QDB_URL: http://qdb:9090
+      # seed / 热门（K 线回填默认集）；全市场见 ASHARE_UNIVERSE
       COLLECTOR_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,600030,002415}
       COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
       COLLECTOR_SKIP_ASHARE: ${COLLECTOR_SKIP_ASHARE:-0}
+      # full=新浪 hs_a→docs ashare:codes + 分批报价；seed=仅 COLLECTOR_CODES
+      ASHARE_UNIVERSE: ${ASHARE_UNIVERSE:-full}
+      ASHARE_QUOTE_BATCH: ${ASHARE_QUOTE_BATCH:-80}
+      ASHARE_UNIVERSE_REFRESH_SEC: ${ASHARE_UNIVERSE_REFRESH_SEC:-21600}
+      # K 线回填：默认 seed；all=全表（极重）；或逗号列表
+      ASHARE_KLINE_CODES: ${ASHARE_KLINE_CODES:-}
       # 公开行情回源（仅 collector）；api.binance.com 默认，data-api 作 fallback
       # 国内/部分 Docker Desktop 网络：api.binance.com 常超时，默认走 vision
       BINANCE_REST_URL: ${BINANCE_REST_URL:-https://data-api.binance.vision}

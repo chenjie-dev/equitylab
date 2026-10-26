@@ -72,6 +72,10 @@ def test_list_codes_excludes_binance_and_ondo(monkeypatch):
         "app.ashare.qdb_client.snapshots_all",
         lambda: mixed,
     )
+    monkeypatch.setattr(
+        "app.ashare.qdb_client.codes_catalog",
+        lambda: None,
+    )
 
     svc = AshareService()
     out = svc.list_codes(limit=8000)
@@ -92,3 +96,36 @@ def test_list_codes_excludes_binance_and_ondo(monkeypatch):
         assert r["stock_code"].isdigit() and len(r["stock_code"]) == 6
         assert r["exchange"] in ("SH", "SZ", "BJ")
         assert not str(r["stock_code"]).endswith("USDT")
+
+
+def test_list_codes_prefers_ashare_codes_catalog(monkeypatch):
+    monkeypatch.setattr(
+        "app.ashare.qdb_client.codes_catalog",
+        lambda: {
+            "universe": "full",
+            "count": 3,
+            "source": "sina:hs_a+seed",
+            "kline_codes": ["600519"],
+            "note": "test",
+            "codes": [
+                {"code": "600519", "name": "贵州茅台", "exchange": "SSE"},
+                {"code": "000001", "name": "平安银行", "exchange": "SZSE"},
+                {"code": "920088", "name": "北交示例", "exchange": "BSE"},
+                {"code": "BTCUSDT", "name": "bad", "exchange": "BINANCE"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.ashare.qdb_client.snapshots_all",
+        lambda: {"data": [], "source": "qdb"},
+    )
+    svc = AshareService()
+    out = svc.list_codes(limit=8000)
+    codes = {r["stock_code"]: r for r in out["data"]}
+    assert out["source"] == "qdb:ashare:codes"
+    assert out["meta"]["universe"] == "full"
+    assert "600519" in codes and codes["600519"]["exchange"] == "SH"
+    assert "920088" in codes and codes["920088"]["exchange"] == "BJ"
+    assert "BTCUSDT" not in codes
+    # seed 仍在（ETF 等）
+    assert "510300" in codes

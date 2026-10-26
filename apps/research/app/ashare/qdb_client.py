@@ -106,6 +106,20 @@ def depth_doc(code: str) -> dict[str, Any] | None:
     return None
 
 
+def codes_catalog() -> dict[str, Any] | None:
+    """读 collector 写入的全市场代码表 `ashare:codes`。"""
+    body = _client.get_doc("ashare:codes")
+    if not body:
+        return None
+    if isinstance(body, dict) and isinstance(body.get("codes"), list):
+        return body
+    if isinstance(body, dict) and isinstance(body.get("value"), dict):
+        value = body["value"]
+        if isinstance(value.get("codes"), list):
+            return value
+    return None
+
+
 def snapshots(codes: list[str]) -> dict[str, Any]:
     symbols = [qdb_symbol(c) for c in codes if c]
     if not symbols:
