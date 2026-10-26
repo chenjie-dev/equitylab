@@ -85,6 +85,7 @@ services:
       COLLECTOR_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,600030,002415}
       COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
       COLLECTOR_SKIP_CN_EQUITY: ${COLLECTOR_SKIP_CN_EQUITY:-0}
+      METRICS_PORT: ${COLLECTOR_METRICS_PORT:-9101}
       # full=新浪 hs_a→docs cn-equity:codes + 分批报价；seed=仅 COLLECTOR_CODES
       CN_EQUITY_UNIVERSE: ${CN_EQUITY_UNIVERSE:-full}
       CN_EQUITY_QUOTE_BATCH: ${CN_EQUITY_QUOTE_BATCH:-80}
@@ -149,6 +150,7 @@ services:
       HISTORY_INGEST_MAX_PER_ROUND: ${HISTORY_INGEST_MAX_PER_ROUND:-200}
       HISTORY_INGEST_FAIL_TTL_SEC: ${HISTORY_INGEST_FAIL_TTL_SEC:-1800}
       HISTORY_INGEST_SKIP: ${HISTORY_INGEST_SKIP:-0}
+      METRICS_PORT: ${HISTORY_INGEST_METRICS_PORT:-9102}
     depends_on:
       qdb:
         condition: service_healthy
@@ -275,7 +277,22 @@ services:
       - gateway
     networks: [equitylab]
 
-  # --- 可观测性：JSON 日志 → Alloy → Loki → Grafana ---
+  # --- 可观测性：JSON 日志 → Alloy → Loki；指标 → Prometheus → Grafana ---
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: equitylab-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - equitylab_prometheus:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9091}:9090"
+    networks: [equitylab]
+
   loki:
     image: grafana/loki:3.4.2
     container_name: equitylab-loki
@@ -317,11 +334,13 @@ services:
       GF_USERS_DEFAULT_THEME: dark
     volumes:
       - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - equitylab_grafana:/var/lib/grafana
     ports:
       - "${GRAFANA_PORT:-3003}:3000"
     depends_on:
       - loki
+      - prometheus
     networks: [equitylab]
 
 networks:
@@ -341,3 +360,5 @@ volumes:
     name: equitylab-alloy
   equitylab_grafana:
     name: equitylab-grafana
+  equitylab_prometheus:
+    name: equitylab-prometheus

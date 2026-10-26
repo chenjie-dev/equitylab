@@ -8,3 +8,5 @@ adata>=2.9.0
 psycopg2-binary==2.9.10
 # equitylab-qdb：Compose 构建时从 packages/qdb-py 安装（见 Dockerfile）
 requests>=2.31
+prometheus-fastapi-instrumentator==7.1.0
+prometheus-client==0.21.1

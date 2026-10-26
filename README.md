@@ -85,4 +85,6 @@ curl -s -X POST http://localhost:3000/api/chat \
 
 **已落地：**多服务骨架、健康检查、网关反向代理与限流、行情 Provider trait + Mock/AlphaFeed 骨架、研究层 FastAPI 占位、编排层意图路由与工具调用、前端对话壳、基础 schema 与文档。
 
-**后续：**LangGraph 状态机、完整 RAG、MCP Server、真实行情 Provider 与熔断、Token 预算与计费、Langfuse / Prometheus。
+**可观测：**Prometheus `:9091` + Grafana `:3003`（Platform / Market 看板）；日志 Loki。见 `docs/platform/2026-10-16-observability.md`。
+
+**后续：**LangGraph 状态机、完整 RAG、MCP Server、真实行情 Provider 与熔断、Token 预算与计费、Langfuse / Alertmanager。

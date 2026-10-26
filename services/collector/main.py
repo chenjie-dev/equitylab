@@ -31,6 +31,11 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 def main() -> None:
+    import prom_metrics as pm
+
+    pm.start_metrics_server()
+    pm.heartbeat_loop()
+
     seed = cn_u.seed_codes_from_env()
     wait_qdb()
     # 单写者门闸：高优先现货/A 股，低优先 RWA，避免并发单条 POST 饿死 snapshots
@@ -38,6 +43,7 @@ def main() -> None:
 
     start_gate(_post_raw)
     skip_cn_equity = _env_flag("COLLECTOR_SKIP_CN_EQUITY", "0")
+    pm.set_skip(skip_cn_equity)
 
     kline_codes: list[str] = list(seed)
     rotator: cn_u.QuoteRotator | None = None
@@ -55,6 +61,7 @@ def main() -> None:
         kline_codes = list(doc.get("kline_codes") or seed)
         post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
         rotator = cn_u.QuoteRotator(codes, seed=seed)
+        pm.set_universe(len(codes))
         # 每批实际旋转量 ≈ min(batch, 100-seed)；估算全表一轮滞后
         rotate_n = max(1, len(codes) - len(seed))
         per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - len(seed)))
@@ -153,18 +160,24 @@ def main() -> None:
                 poll_quotes(batch, last_vol)
             except Exception as exc:
                 print(f"cn_equity poll failed: {exc}", flush=True)
+                pm.inc_qdb_error()
         # WS 健康时 noop；断流才 REST 兜底
         try:
             markets.poll_quotes_hot()
         except Exception as exc:
             print(f"binance rest fallback failed: {exc}", flush=True)
+        poll_s = time.monotonic() - t0
+        pm.observe_poll(poll_s)
+        ws_ok = False
+        try:
+            ws_ok = markets.binance_ws_healthy()
+        except Exception:
+            pass
+        pm.set_binance_ws(ws_ok)
+        if rotator is not None:
+            pm.set_universe(len(rotator.codes))
         if cycle % 60 == 0:
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            ws_ok = False
-            try:
-                ws_ok = markets.binance_ws_healthy()
-            except Exception:
-                pass
+            elapsed_ms = int(poll_s * 1000)
             n = len(rotator.codes) if rotator else 0
             print(
                 f"collector tick cycle={cycle} cn_equity_ms={elapsed_ms} "
@@ -461,7 +474,16 @@ def get_klines(symbol: str, period: str, *, limit: int = 5000) -> list[dict]:
 
 def _post_raw(path: str, body: dict) -> None:
     """直连 qdb（仅 write_gate 刷盘线程调用）。"""
-    qdb.post_json(path, body)
+    try:
+        qdb.post_json(path, body)
+    except Exception:
+        try:
+            import prom_metrics as pm
+
+            pm.inc_qdb_error()
+        except Exception:
+            pass
+        raise
 
 
 def post(path: str, body: dict, *, priority: str = "high") -> None:

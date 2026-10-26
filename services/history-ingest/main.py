@@ -196,11 +196,18 @@ def wait_ready() -> None:
 
 
 def main() -> None:
+    import prom_metrics as pm
+
+    pm.start_metrics_server()
+    pm.heartbeat_loop()
+
     if _env_flag("HISTORY_INGEST_SKIP", "0"):
+        pm.set_skip(True)
         print("history-ingest skipped (HISTORY_INGEST_SKIP=1)", flush=True)
         while True:
             time.sleep(3600)
 
+    pm.set_skip(False)
     wait_ready()
     window_start = date.today() - timedelta(days=WINDOW_DAYS)
     print(
@@ -223,6 +230,9 @@ def main() -> None:
                 if int(cov.get("count") or 0) >= MIN_BARS:
                     ok_n += 1
             gaps = pick_gaps(universe, coverage, limit=MAX_PER_ROUND)
+            pm.set_cover(
+                universe=len(universe), ok=ok_n, gaps=len(gaps), round_n=round_n
+            )
             print(
                 f"history-ingest cover= round={round_n} universe={len(universe)} "
                 f"ok={ok_n} gaps_queued={len(gaps)} window_start={window_start}",
@@ -236,6 +246,7 @@ def main() -> None:
                 try:
                     result = fill_one(gap)
                     filled += 1
+                    pm.inc_fill(str(result.get("status") or "unknown"))
                     print(
                         f"history-ingest fill= {result['scope']} "
                         f"written={result['written']} count={result['count']} "
@@ -243,6 +254,7 @@ def main() -> None:
                         flush=True,
                     )
                 except Exception as exc:
+                    pm.inc_fill("fail")
                     print(
                         f"history-ingest fill_fail {gap.get('scope')}: {exc}",
                         flush=True,

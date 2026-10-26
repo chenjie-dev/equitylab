@@ -11,6 +11,7 @@ import express from "express";
 import { z } from "zod";
 import { PORT } from "./config.js";
 import { runChatGraph } from "./graph/run.js";
+import { metricsHandler, metricsMiddleware } from "./metrics.js";
 import { listTools } from "./tools/registry.js";
 import { log, TRACE_HEADER, traceMiddleware } from "./tracing.js";
 
@@ -26,10 +27,13 @@ const app = express();
 app.use(cors({ exposedHeaders: [TRACE_HEADER] }));
 app.use(express.json({ limit: "2mb" }));
 app.use(traceMiddleware);
+app.use(metricsMiddleware);
 
 app.get("/health", (_req, res) => {
   res.json({ status: "UP", service: "orchestrator", ts: new Date().toISOString() });
 });
+
+app.get("/metrics", metricsHandler);
 
 app.get("/tools", (_req, res) => {
   res.json(listTools());

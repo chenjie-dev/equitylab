@@ -39,6 +39,19 @@ def create_app() -> FastAPI:
     application.include_router(factors.router)
     application.include_router(backtests.router)
     application.include_router(cn_equity.router)
+    # Prometheus：用 FastAPI 路由模板（{code}），避免真实 code 高基数
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator
+
+        Instrumentator(
+            should_group_status_codes=True,
+            should_ignore_untemplated=True,
+            excluded_handlers=["/metrics"],
+        ).instrument(application).expose(
+            application, endpoint="/metrics", include_in_schema=False
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("prometheus instrumentator unavailable: %s", exc)
     return application
 
 

@@ -25,10 +25,10 @@
 
 ### 运维
 
-1. 最小可观测：容器日志、`/health`、`/ready`（research）。  
+1. 可观测：容器日志、`/health`、`/ready`（research）、Prometheus `/metrics` 与 Grafana 看板。  
 2. 排障表更新到 containers 文档。  
 3. 密钥仅环境变量；不进镜像层。  
-4. 后续：Prometheus/Langfuse 任务单独立项，不在无门禁时偷加。
+4. Prometheus 已落地（见 `docs/platform/2026-10-16-observability.md`）；Alertmanager / Langfuse 后续另立。
 
 ## 产出
 

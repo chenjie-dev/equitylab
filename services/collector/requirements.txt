@@ -1,3 +1,4 @@
 requests==2.32.3
 websocket-client==1.8.0
+prometheus-client==0.21.1
 # psycopg2 经 equitylab-market（Dockerfile 安装 packages/market-py）

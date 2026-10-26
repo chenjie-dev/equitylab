@@ -19,3 +19,5 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"

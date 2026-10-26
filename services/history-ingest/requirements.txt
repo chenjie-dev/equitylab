@@ -1,2 +1,3 @@
 requests==2.32.3
+prometheus-client==0.21.1
 # psycopg2 经 equitylab-market（Dockerfile 安装 packages/market-py）

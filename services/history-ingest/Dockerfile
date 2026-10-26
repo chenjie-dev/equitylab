@@ -10,7 +10,7 @@ COPY services/history-ingest/requirements.txt .
 RUN pip install --no-cache-dir /tmp/qdb-py /tmp/market-py \
     && pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/qdb-py /tmp/market-py
-COPY services/history-ingest/main.py ./
+COPY services/history-ingest/main.py services/history-ingest/prom_metrics.py ./
 USER appuser
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]

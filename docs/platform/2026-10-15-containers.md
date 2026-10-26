@@ -17,11 +17,12 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | qdb | equitylab-qdb | 9090 | 行情库（构建上下文 `../qdb`，不回源） |
 | collector | equitylab-collector | （内部） | 盘中采集：上游 → qdb + 部分 `market` |
 | history-ingest | equitylab-history-ingest | （内部） | 冷历史：扫描 `market` 日线缺口 → 新浪补近半年 |
+| prometheus | equitylab-prometheus | **9091**→9090 | 指标抓取（避开本机 qdb:9090） |
 | loki | equitylab-loki | 3100 | 日志存储 |
 | alloy | equitylab-alloy | （内部） | 采集容器日志 → Loki（需 docker.sock） |
-| grafana | equitylab-grafana | **3003** | 日志查询 UI（匿名 Viewer） |
+| grafana | equitylab-grafana | **3003** | Loki Explore + Prometheus 看板（匿名 Viewer） |
 
-卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
+卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`、`equitylab-prometheus`。
 
 qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。**授权采集族**可回源：`collector`（盘中 → qdb / 部分 `market`）与 `history-ingest`（冷日线缺口 → `market.bar_daily`）。研究层与 market-data **读路径零外呼**。边界见 [行情模块边界](../market/2026-10-26-行情模块边界.md)。用法与排障：[2026-10-20-qdb-行情库.md](../market/2026-10-20-qdb-行情库.md)。
 
@@ -34,6 +35,8 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | 变量 | 默认/示例 | 作用 |
 |---|---|---|
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
+| `PROMETHEUS_PORT` / `GRAFANA_PORT` / `LOKI_PORT` | 9091 / 3003 / 3100 | 可观测性 UI |
+| `COLLECTOR_METRICS_PORT` / `HISTORY_INGEST_METRICS_PORT` | 9101 / 9102 | 采集族 metrics（仅内网 scrape） |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector、history-ingest |
@@ -107,6 +110,7 @@ docker compose down
 | `www.binance.com` EOF / Stocks 空 | 本机到币安主站不通 | `.env` 设 `RWA_WORKERS=0` `RWA_KLINE_WORKERS=0` 先保现货；RWA 恢复后再打开 |
 | `/v1/klines` 一直挂起 | 引擎锁死（旧进程） | `docker compose restart qdb`（必要时先 `stop collector`） |
 | collector 解析不了 `qdb` | 容器网络陈旧 | `docker compose up -d --force-recreate collector` |
+| Prometheus target DOWN / Grafana 无指标 | 服务未 rebuild / scrape 端口错 | `docker compose up -d --build prometheus grafana gateway research market-data orchestrator collector history-ingest`；`curl localhost:9091/api/v1/targets` 看 `health`；采集族须有 `METRICS_PORT` 且日志含 `metrics listening` |
 
 ## Schema 初始化
 

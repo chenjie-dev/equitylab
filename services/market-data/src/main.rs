@@ -15,6 +15,7 @@
 mod cache;
 mod exchanges;
 mod handlers;
+mod http_metrics;
 mod providers;
 mod qdb_read;
 mod qdb_ws;
@@ -64,10 +65,13 @@ async fn main() {
         QuoteCache::disabled()
     });
 
+    let _metrics = http_metrics::init("market-data");
+
     let state = Arc::new(AppState { provider, cache });
 
     let unified = Router::new()
         .route("/health", get(handlers::health))
+        .route("/metrics", get(http_metrics::metrics_handler))
         .route("/quotes/{symbol}", get(handlers::get_quote))
         .route("/bars/{symbol}", get(handlers::get_bars))
         .route("/search", get(handlers::search))
@@ -81,6 +85,7 @@ async fn main() {
         .merge(unified)
         .merge(exchanges::mount_exchange_routes(&binance_mod))
         .merge(qdb_ws_routes)
+        .layer(from_fn(http_metrics::metrics_middleware))
         .layer(from_fn(trace::trace_middleware))
         .layer(CorsLayer::permissive());
 

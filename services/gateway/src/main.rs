@@ -34,6 +34,8 @@ use std::{
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
+mod http_metrics;
+
 const TRACE_HEADER: &str = "x-trace-id";
 
 /// 网关共享状态：上游基址、HTTP 客户端与限流器。
@@ -240,6 +242,8 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(120);
 
+    let _metrics = http_metrics::init("gateway");
+
     let state = Arc::new(AppState {
         http: reqwest::Client::new(),
         orchestrator_url: std::env::var("ORCHESTRATOR_URL")
@@ -253,8 +257,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(http_metrics::metrics_handler))
         .route("/api/{*rest}", any(proxy))
         .route("/v1/{*rest}", any(proxy))
+        .layer(from_fn(http_metrics::metrics_middleware))
         .layer(from_fn(trace_middleware))
         .layer(CorsLayer::permissive())
         .with_state(state);
