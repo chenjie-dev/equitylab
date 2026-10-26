@@ -7,28 +7,35 @@ import threading
 
 from prometheus_client import Counter, Gauge, start_http_server
 
-INGEST_UP = Gauge("equitylab_history_ingest_up", "history-ingest process heartbeating")
-UNIVERSE = Gauge("equitylab_history_ingest_universe", "Universe size this round")
+INGEST_UP = Gauge(
+    "equitylab_history_ingest_up", "历史回补进程心跳（1=存活）"
+)
+UNIVERSE = Gauge(
+    "equitylab_history_ingest_universe", "本轮回补宇宙标的数"
+)
 COVERAGE_OK = Gauge(
-    "equitylab_history_ingest_coverage_ok", "Symbols meeting MIN_BARS in window"
+    "equitylab_history_ingest_coverage_ok",
+    "窗口内日线达标（≥MIN_BARS）的标的只数",
 )
 COVERAGE_RATIO = Gauge(
     "equitylab_history_ingest_coverage_ratio",
-    "ok / universe coverage ratio (0–1)",
+    "日线覆盖率 = 达标 / 宇宙（0–1，越接近 1 越好）",
 )
 GAPS_QUEUED = Gauge(
-    "equitylab_history_ingest_gaps_queued", "Gaps queued for fill this round"
+    "equitylab_history_ingest_gaps_queued", "本轮排队待补的日线缺口数"
 )
 FILL_TOTAL = Counter(
     "equitylab_history_ingest_fill_total",
-    "Fill attempts by status",
+    "回补尝试次数（按 status）",
     ["status"],
 )
-ROUND = Gauge("equitylab_history_ingest_round", "Current cover round number")
-SKIP = Gauge("equitylab_history_ingest_skip", "1 if HISTORY_INGEST_SKIP else 0")
+ROUND = Gauge("equitylab_history_ingest_round", "当前覆盖轮次（重启从 1）")
+SKIP = Gauge(
+    "equitylab_history_ingest_skip", "1=已跳过回补（HISTORY_INGEST_SKIP）"
+)
 BAR_DAILY_ROWS = Gauge(
     "equitylab_market_bar_daily_rows",
-    "SELECT count(*) FROM market.bar_daily",
+    "Postgres market.bar_daily 总行数",
 )
 
 _started = False

@@ -8,14 +8,15 @@
   "panels": [
     {
       "type": "row",
-      "title": "1 · Feed health",
+      "title": "1 · 源健康（进程是否活着、写入是否堵）",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "collapsed": false,
       "panels": []
     },
     {
       "type": "stat",
-      "title": "collector up",
+      "title": "采集器存活",
+      "description": "collector 进程心跳。绿=正在跑；红=进程挂了或 metrics 未起来。",
       "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "equitylab_collector_up", "refId": "A" }],
@@ -29,7 +30,7 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }
+            { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
           ]
         }
       },
@@ -37,7 +38,8 @@
     },
     {
       "type": "stat",
-      "title": "history-ingest up",
+      "title": "历史回补存活",
+      "description": "history-ingest 进程心跳。负责把 A 股日线缺口写入 Postgres market.bar_daily。",
       "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "equitylab_history_ingest_up", "refId": "A" }],
@@ -51,7 +53,7 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }
+            { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
           ]
         }
       },
@@ -59,7 +61,8 @@
     },
     {
       "type": "stat",
-      "title": "cn-equity skip",
+      "title": "A 股采集开关",
+      "description": "COLLECTOR_SKIP_CN_EQUITY。绿「采集中」=正在拉 A 股；红「已跳过」=排障应急关掉了，行情页会空。",
       "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "equitylab_cn_equity_skip", "refId": "A" }],
@@ -73,7 +76,7 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "ON" }, "1": { "text": "SKIPPED" } } }
+            { "type": "value", "options": { "0": { "text": "采集中" }, "1": { "text": "已跳过" } } }
           ]
         }
       },
@@ -81,7 +84,8 @@
     },
     {
       "type": "stat",
-      "title": "Binance WS",
+      "title": "币安 WS",
+      "description": "币安现货 WebSocket 是否健康。红=断流，现货盘口会停更。",
       "gridPos": { "h": 4, "w": 3, "x": 9, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "equitylab_binance_ws_up", "refId": "A" }],
@@ -95,7 +99,7 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } }
+            { "type": "value", "options": { "0": { "text": "断流" }, "1": { "text": "通" } } }
           ]
         }
       },
@@ -103,7 +107,8 @@
     },
     {
       "type": "stat",
-      "title": "qdb write errors/s",
+      "title": "qdb 写失败/秒",
+      "description": "写 qdb 失败速率。持续 >0 说明引擎忙、网络断或鉴权问题，盘口会发僵。",
       "gridPos": { "h": 4, "w": 3, "x": 12, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -116,7 +121,8 @@
     },
     {
       "type": "timeseries",
-      "title": "write_gate pending",
+      "title": "写队列积压（write_gate）",
+      "description": "待刷入 qdb 的条数。quotes=报价、trades=成交、docs=文档。quotes 长期很高 → 盘口滞后。",
       "gridPos": { "h": 8, "w": 9, "x": 15, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -131,13 +137,14 @@
     },
     {
       "type": "timeseries",
-      "title": "write_gate trade drops (cumulative)",
+      "title": "成交队列丢弃累计",
+      "description": "成交缓冲溢出被丢掉的条数（累计）。上升说明 trades 写不过来；报价路径一般不受影响。",
       "gridPos": { "h": 4, "w": 12, "x": 0, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "equitylab_write_gate_trade_drops_total",
-          "legendFormat": "trade_drop",
+          "legendFormat": "成交丢弃",
           "refId": "A"
         }
       ],
@@ -145,28 +152,29 @@
     },
     {
       "type": "timeseries",
-      "title": "qdb write errors rate",
+      "title": "qdb 写失败速率",
+      "description": "与左侧「写失败/秒」同源，看趋势是否在恶化。",
       "gridPos": { "h": 4, "w": 3, "x": 12, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "rate(equitylab_qdb_write_errors_total[5m])",
-          "legendFormat": "errors/s",
+          "legendFormat": "失败/秒",
           "refId": "A"
         }
       ]
     },
     {
       "type": "row",
-      "title": "2 · Freshness（休市时 stale 可偏高）",
+      "title": "2 · 新鲜度（盘口是否在动；休市时发僵属正常）",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
       "collapsed": false,
       "panels": []
     },
     {
       "type": "stat",
-      "title": "cn quote age",
-      "description": "time() - last successful cn_equity quote write",
+      "title": "A 股报价年龄",
+      "description": "距上次成功写入 A 股报价过了多久（秒）。盘中宜 < 数分钟；休市会持续变大，属正常。",
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -192,7 +200,8 @@
     },
     {
       "type": "stat",
-      "title": "binance quote age",
+      "title": "币安报价年龄",
+      "description": "距上次成功写入币安报价过了多久（秒）。币安几乎 7×24，年龄长期很大说明 WS 断了。",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -218,7 +227,8 @@
     },
     {
       "type": "stat",
-      "title": "seed max age",
+      "title": "种子盘口最大年龄",
+      "description": "种子标的（CN_EQUITY_SEED）里最旧的一只距上次写入多久。反映「核心票」是否在更新。",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -244,8 +254,8 @@
     },
     {
       "type": "stat",
-      "title": "seed stale count",
-      "description": "seed symbols with age > STALE_QUOTE_SEC (default 120s); elevated off-hours is expected",
+      "title": "种子发僵只数",
+      "description": "种子集中超过 STALE_QUOTE_SEC（默认 120 秒）未更新的只数。盘中非 skip 时宜≈0；休市偏高正常。",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -270,7 +280,8 @@
     },
     {
       "type": "stat",
-      "title": "full cycle ≈",
+      "title": "全表一轮约需",
+      "description": "按当前宇宙与批次估算：扫完一遍全部 A 股报价大约要多少秒。越大=边缘票越「旧」。",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -284,7 +295,8 @@
     },
     {
       "type": "stat",
-      "title": "universe size",
+      "title": "A 股宇宙规模",
+      "description": "collector 正在轮询的 A 股标的数（含沪深北）。为 0 且「已跳过」时说明未开 A 股采集。",
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 10 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -297,7 +309,8 @@
     },
     {
       "type": "timeseries",
-      "title": "quote write rate",
+      "title": "报价写入吞吐",
+      "description": "每秒写入 qdb 的报价条数（按市场）。跌到接近 0 且非休市 → 采集/写路径异常。",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -312,13 +325,14 @@
     },
     {
       "type": "timeseries",
-      "title": "cn-equity poll duration",
+      "title": "A 股单轮轮询耗时",
+      "description": "一轮 REST 拉价平均耗时（秒）。突然变大可能是上游慢或本机代理问题。",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "rate(equitylab_cn_equity_poll_seconds_sum[5m]) / rate(equitylab_cn_equity_poll_seconds_count[5m])",
-          "legendFormat": "avg poll s",
+          "legendFormat": "平均耗时",
           "refId": "A"
         }
       ],
@@ -326,14 +340,15 @@
     },
     {
       "type": "row",
-      "title": "3 · Coverage（冷日线）",
+      "title": "3 · 覆盖缺口（冷日线是否补齐）",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
       "collapsed": false,
       "panels": []
     },
     {
       "type": "stat",
-      "title": "coverage ratio",
+      "title": "日线覆盖率",
+      "description": "窗口内达标标的 / 宇宙。越接近 100% 越好；回补初期会从低往上爬。",
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -361,7 +376,8 @@
     },
     {
       "type": "stat",
-      "title": "coverage ok",
+      "title": "已达标只数",
+      "description": "窗口内日线条数 ≥ MIN_BARS 的标的数量。",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -374,7 +390,8 @@
     },
     {
       "type": "stat",
-      "title": "universe",
+      "title": "回补宇宙",
+      "description": "本轮 history-ingest 要覆盖的标的总数（通常≈全 A）。",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -387,7 +404,8 @@
     },
     {
       "type": "stat",
-      "title": "gaps queued",
+      "title": "本轮缺口队列",
+      "description": "本轮排队去拉上游补日线的缺口数。为 0 且覆盖率高 = 暂时补齐。",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -400,7 +418,8 @@
     },
     {
       "type": "stat",
-      "title": "bar_daily rows",
+      "title": "日线总行数",
+      "description": "Postgres market.bar_daily 全表行数。应随回补单调增加（不会因读路径而变）。",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -413,7 +432,8 @@
     },
     {
       "type": "stat",
-      "title": "cover round",
+      "title": "回补轮次",
+      "description": "history-ingest 已跑完的覆盖轮数。重启会从 1 重新计。",
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 23 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -426,7 +446,8 @@
     },
     {
       "type": "timeseries",
-      "title": "fill by status",
+      "title": "回补结果速率（按状态）",
+      "description": "每秒填缺口次数，按 status 分。ok/written 上升健康；fail 持续升高需看日志。",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -440,13 +461,14 @@
     },
     {
       "type": "timeseries",
-      "title": "coverage ratio over time",
+      "title": "日线覆盖率趋势",
+      "description": "覆盖率随时间变化。健康形态是逐步爬升后在高位横盘。",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "equitylab_history_ingest_coverage_ratio",
-          "legendFormat": "ratio",
+          "legendFormat": "覆盖率",
           "refId": "A"
         }
       ],
@@ -460,12 +482,12 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["equitylab", "market", "dataplane"],
+  "tags": ["equitylab", "market", "dataplane", "行情"],
   "templating": { "list": [] },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "EquityLab Market",
+  "title": "EquityLab 行情",
   "uid": "equitylab-market",
-  "version": 2
+  "version": 3
 }

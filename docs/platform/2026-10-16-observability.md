@@ -47,36 +47,38 @@ Browser / curl
 
 ### 行情数据面指标（新鲜度 + 覆盖）
 
-| 指标 | 来源 | 含义 |
+| 指标 | 来源 | 中文含义（怎么读） |
 |---|---|---|
-| `equitylab_quote_last_success_unixtime{market}` | collector | 该市场最后成功写 quotes 的 unix 秒（`cn_equity` / `binance`） |
-| `equitylab_quotes_written_total{market}` | collector | 报价写入条数（吞吐用 `rate()`） |
-| `equitylab_write_gate_pending{kind}` | collector | `quotes` / `trades` / `docs` 待刷条数 |
-| `equitylab_write_gate_trade_drops_total` | collector | 成交队列溢出丢弃累计 |
-| `equitylab_cn_equity_full_cycle_seconds` | collector | 估测全表报价一轮滞后 |
-| `equitylab_snapshot_age_seconds{sample="seed"}` | collector | seed 集最大报价年龄（本进程 last-write） |
-| `equitylab_snapshot_stale_count{sample="seed"}` | collector | seed 中 age > `STALE_QUOTE_SEC`（默认 120）的个数；**休市可偏高** |
-| `equitylab_history_ingest_coverage_ratio` | history-ingest | `ok / universe`（0–1） |
-| `equitylab_market_bar_daily_rows` | history-ingest | `market.bar_daily` 总行数 |
-| `equitylab_cn_equity_universe_size` / `_skip` / `*_gaps_queued` / `*_fill_total` | 既有 | 宇宙、skip、缺口、fill |
+| `equitylab_quote_last_success_unixtime{market}` | collector | 该市场**最后一次成功写报价**的时间戳；看板用 `time()-…` 显示「报价年龄」秒数。`cn_equity`=A 股，`binance`=币安 |
+| `equitylab_quotes_written_total{market}` | collector | 写入报价累计条数；`rate()` 即**每秒写入吞吐**，盘中接近 0 不正常 |
+| `equitylab_write_gate_pending{kind}` | collector | 写 qdb 前的**队列积压**：`quotes` 报价 / `trades` 成交 / `docs` 文档。报价积压高 → 盘口滞后 |
+| `equitylab_write_gate_trade_drops_total` | collector | 成交队列溢出**丢掉**的累计条数；上升说明成交写不过来 |
+| `equitylab_cn_equity_full_cycle_seconds` | collector | 估测扫完**一整轮 A 股报价**大约要多少秒；越大边缘票越旧 |
+| `equitylab_snapshot_age_seconds{sample="seed"}` | collector | **种子标的**里最旧一只距上次写入的秒数（核心票新鲜度） |
+| `equitylab_snapshot_stale_count{sample="seed"}` | collector | 种子中超过 `STALE_QUOTE_SEC`（默认 120s）未更新的只数；**休市偏高正常**，盘中宜≈0 |
+| `equitylab_history_ingest_coverage_ratio` | history-ingest | 日线**覆盖率** = 达标只数 / 宇宙（0–1），越接近 1 越好 |
+| `equitylab_market_bar_daily_rows` | history-ingest | Postgres `market.bar_daily` **总行数**，随回补应单调增加 |
+| `equitylab_cn_equity_universe_size` | collector | 正在轮询的 A 股标的数 |
+| `equitylab_cn_equity_skip` | collector | `1`=已跳过 A 股采集（排障应急），行情会空 |
+| `equitylab_history_ingest_gaps_queued` / `*_fill_total` | history-ingest | 本轮**缺口队列**长度；fill 按 status 计回补尝试 |
 
 推荐 PromQL：
 
 ```promql
-# 报价年龄（秒）
+# 报价年龄（秒）——越小越新鲜；休市会变大
 time() - equitylab_quote_last_success_unixtime{market="cn_equity"}
 time() - equitylab_quote_last_success_unixtime{market="binance"}
-rate(equitylab_quotes_written_total[1m])
-equitylab_write_gate_pending
-equitylab_snapshot_stale_count{sample="seed"}
-equitylab_history_ingest_coverage_ratio
-equitylab_market_bar_daily_rows
+rate(equitylab_quotes_written_total[1m])          # 写入吞吐
+equitylab_write_gate_pending                        # 写队列积压
+equitylab_snapshot_stale_count{sample="seed"}       # 种子发僵只数
+equitylab_history_ingest_coverage_ratio             # 日线覆盖率
+equitylab_market_bar_daily_rows                     # 日线总行数
 ```
 
 ### Grafana 看板
 
-- **EquityLab Platform**（uid `equitylab-platform`）：targets up、QPS、p95、5xx
-- **EquityLab Market**（uid `equitylab-market`）：三区 — Feed health / Freshness / Coverage
+- **EquityLab 平台**（uid `equitylab-platform`）：抓取存活、QPS、p95、5xx（面板标题与悬停说明为中文）
+- **EquityLab 行情**（uid `equitylab-market`）：三区 — **源健康** / **新鲜度** / **覆盖缺口**（面板悬停有中文释义）
 
 预置 JSON：`infra/observability/grafana/dashboards/`。
 

@@ -8,13 +8,14 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Scrape targets up",
+      "title": "抓取目标存活数",
+      "description": "gateway / market-data / research / orchestrator / collector / history-ingest 共 6 个目标中，Prometheus 抓到的 up 个数。满 6 为绿。",
       "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "sum(up{job=~\"gateway|market-data|research|orchestrator|collector|history-ingest\"})",
-          "legendFormat": "up",
+          "legendFormat": "存活",
           "refId": "A"
         }
       ],
@@ -34,7 +35,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Target up (1=ok)",
+      "title": "各服务抓取状态（1=正常）",
+      "description": "Prometheus 对每个 job 的 up。掉到 0 = 该服务 metrics 端口不可达或进程挂了。",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -47,7 +49,8 @@
     },
     {
       "type": "timeseries",
-      "title": "HTTP QPS by service",
+      "title": "HTTP 请求速率（QPS）",
+      "description": "各服务每秒处理的 HTTP 请求数。骤降可能是上游挂了或流量切走。",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -60,7 +63,8 @@
     },
     {
       "type": "timeseries",
-      "title": "HTTP p95 latency (s)",
+      "title": "HTTP p95 延迟（秒）",
+      "description": "95 分位耗时。持续抬高说明该服务变慢（DB/qdb/模型）。",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -73,7 +77,8 @@
     },
     {
       "type": "timeseries",
-      "title": "HTTP 5xx rate",
+      "title": "HTTP 5xx 速率",
+      "description": "每秒 5xx 次数。偶发可忽略；持续升高需看对应服务日志与 TraceId。",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -86,7 +91,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Gateway path groups QPS",
+      "title": "网关路径组 QPS",
+      "description": "gateway 按 path_group 拆的请求速率，便于看哪类 API 在吃流量。",
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -99,11 +105,11 @@
     }
   ],
   "schemaVersion": 39,
-  "tags": ["equitylab", "platform"],
+  "tags": ["equitylab", "platform", "平台"],
   "templating": { "list": [] },
   "time": { "from": "now-1h", "to": "now" },
   "timezone": "browser",
-  "title": "EquityLab Platform",
+  "title": "EquityLab 平台",
   "uid": "equitylab-platform",
-  "version": 1
+  "version": 2
 }

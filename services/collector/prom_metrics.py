@@ -9,53 +9,55 @@ from typing import Any
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
-COLLECTOR_UP = Gauge("equitylab_collector_up", "Collector process heartbeating")
+COLLECTOR_UP = Gauge(
+    "equitylab_collector_up", "采集器进程心跳（1=存活）"
+)
 CN_EQUITY_UNIVERSE = Gauge(
-    "equitylab_cn_equity_universe_size", "A-share universe size in rotator/catalog"
+    "equitylab_cn_equity_universe_size", "正在轮询的 A 股标的数"
 )
 CN_EQUITY_SKIP = Gauge(
-    "equitylab_cn_equity_skip", "1 if COLLECTOR_SKIP_CN_EQUITY else 0"
+    "equitylab_cn_equity_skip", "1=已跳过 A 股采集（COLLECTOR_SKIP_CN_EQUITY）"
 )
 CN_EQUITY_POLL = Histogram(
     "equitylab_cn_equity_poll_seconds",
-    "A-share poll cycle duration seconds",
+    "A 股单轮 REST 拉价耗时（秒）",
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 CN_EQUITY_FULL_CYCLE = Gauge(
     "equitylab_cn_equity_full_cycle_seconds",
-    "Estimated seconds to rotate full A-share quote universe once",
+    "估测扫完一整轮 A 股报价约需秒数",
 )
-BINANCE_WS_UP = Gauge("equitylab_binance_ws_up", "1 if Binance WS healthy")
+BINANCE_WS_UP = Gauge("equitylab_binance_ws_up", "币安 WebSocket 是否健康（1=通）")
 QDB_WRITE_ERRORS = Counter(
-    "equitylab_qdb_write_errors_total", "qdb write/post failures"
+    "equitylab_qdb_write_errors_total", "写 qdb 失败累计次数"
 )
 QUOTE_LAST_SUCCESS = Gauge(
     "equitylab_quote_last_success_unixtime",
-    "Unix time of last successful quote enqueue/write",
+    "该市场最后一次成功写报价的 unix 秒（看板用 time()-值 看年龄）",
     ["market"],
 )
 QUOTES_WRITTEN = Counter(
     "equitylab_quotes_written_total",
-    "Quote items enqueued/written",
+    "写入报价累计条数（rate 即吞吐）",
     ["market"],
 )
 WRITE_GATE_PENDING = Gauge(
     "equitylab_write_gate_pending",
-    "write_gate pending items by kind",
+    "写队列积压条数（kind=quotes/trades/docs）",
     ["kind"],
 )
 WRITE_GATE_TRADE_DROPS = Gauge(
     "equitylab_write_gate_trade_drops_total",
-    "Cumulative trade drops from write_gate overflow (gauge of counter)",
+    "成交队列溢出丢弃累计（gauge 展示计数）",
 )
 SNAPSHOT_AGE_MAX = Gauge(
     "equitylab_snapshot_age_seconds",
-    "Max quote age seconds over sample set",
+    "样本集内最大报价年龄秒数（sample=seed 为种子盘口）",
     ["sample"],
 )
 SNAPSHOT_STALE = Gauge(
     "equitylab_snapshot_stale_count",
-    "Symbols in sample with age > STALE_QUOTE_SEC",
+    "样本中超过 STALE_QUOTE_SEC 未更新的只数（休市可偏高）",
     ["sample"],
 )
 
