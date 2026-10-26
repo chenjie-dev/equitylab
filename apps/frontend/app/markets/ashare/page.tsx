@@ -444,22 +444,24 @@ export default function AsharePage() {
   });
 
   useEffect(() => {
-    // 先清空，避免 seriesKey 已换、K 线仍是上只票时被图表尾巴 update 粘住
-    setKlines([]);
-    setKMeta({});
+    // 换票/周期：seriesKey 已变，图表会 forceFull；勿先清空——否则 429/慢请求时会白屏
+    let cancelled = false;
     void (async () => {
       try {
         await Promise.all([loadKlines(selected, activeKType), loadFive(selected)]);
-        setError(null);
+        if (!cancelled) setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
     const id = setInterval(() => {
       void loadKlines(selected, activeKType).catch(() => undefined);
       void loadFive(selected);
     }, 15_000);
-    return () => clearInterval(id);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [selected, activeKType, loadKlines, loadFive]);
 
   const q = quotes[selected];

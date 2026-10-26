@@ -112,7 +112,8 @@ export function VirtualMktList<T>({
       className={className}
       style={{
         height: typeof height === "number" ? height : undefined,
-        flex: height === "fill" ? 1 : undefined,
+        // flex-basis:0：在 max-height 父级内只吃剩余高度，禁止被内 spacer 撑开
+        flex: height === "fill" ? "1 1 0" : undefined,
         minHeight: height === "fill" ? 0 : undefined,
         overflowY: "auto",
         position: "relative",

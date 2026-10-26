@@ -817,11 +817,12 @@ code {
 }
 
 .bn-markets {
+  /* 必须封顶：否则虚拟列表内 spacer 会把 grid 行撑到数万 px，K 线图被拉空白 */
   max-height: 720px;
-  /* 让虚拟列表 flex:1 量到剩余高度，可滚完全表 */
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .bn-search {
@@ -898,6 +899,8 @@ code {
 
 .bn-chart-panel {
   min-height: 560px;
+  max-height: 720px;
+  overflow: hidden;
 }
 
 .bn-tf-row {
@@ -1607,9 +1610,9 @@ code {
   min-height: 700px;
 }
 .bn-page.ths .ths-list {
-  max-height: none;
-  height: 100%;
+  max-height: 720px;
   min-height: 640px;
+  height: auto;
 }
 .bn-page.ths .ths-list .bn-mkt-row-stock {
   font-size: 12px;
