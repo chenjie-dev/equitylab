@@ -10,6 +10,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -21,6 +22,11 @@ import {
   flashClass,
   usePriceFlash,
 } from "../../components/markets/usePriceFlash";
+import {
+  ASHARE_BOARDS,
+  type AshareBoardId,
+  matchesAshareBoard,
+} from "../../components/markets/ashareBoards";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
 import { useQdbSnapshot } from "../../components/markets/useQdbSnapshot";
 
@@ -162,6 +168,7 @@ function mapCandles(
 
 export default function AsharePage() {
   const [query, setQuery] = useState("");
+  const [board, setBoard] = useState<AshareBoardId>("all");
   const [codes, setCodes] = useState<CodeRow[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState("600519");
@@ -188,16 +195,22 @@ export default function AsharePage() {
 
   const activeKType = chartTab === "1d" ? "1d" : chartTab === "intraday" ? "intraday" : otherK;
 
+  // 滚动会高频回调；合并到 rAF，减少 quotes 分块打爆网关（ashare 虽已豁免限流，仍降抖）
+  const rangeRaf = useRef<number | null>(null);
   const onVisibleRange = useCallback((start: number, end: number) => {
-    setVisibleRange((prev) =>
-      prev.start === start && prev.end === end ? prev : { start, end },
-    );
+    if (rangeRaf.current != null) cancelAnimationFrame(rangeRaf.current);
+    rangeRaf.current = requestAnimationFrame(() => {
+      rangeRaf.current = null;
+      setVisibleRange((prev) =>
+        prev.start === start && prev.end === end ? prev : { start, end },
+      );
+    });
   }, []);
 
-  // 搜索变更后列表 remount，窗口先回到顶部，避免沿用旧 scroll 下标拉错报价
+  // 搜索/板块变更后列表 remount，窗口先回到顶部，避免沿用旧 scroll 下标拉错报价
   useEffect(() => {
     setVisibleRange({ start: 0, end: 40 });
-  }, [query]);
+  }, [query, board]);
 
   const loadCodes = useCallback(async () => {
     setLoadingCodes(true);
@@ -211,19 +224,22 @@ export default function AsharePage() {
       })),
     );
     try {
+      // 与 research le=12000 对齐；勿再传 > 上限以免 422 只剩种子
       const res = await fetch(`/api/ashare/codes?limit=10000`);
       if (!res.ok) throw new Error(`codes ${res.status}`);
       const body = (await res.json()) as {
         data?: CodeRow[];
+        count?: number;
         meta?: { note?: string; universe?: string; catalog_count?: number };
       };
       if (body.data?.length) setCodes(body.data);
-      if (body.meta?.note) {
+      const n = body.meta?.catalog_count ?? body.count ?? body.data?.length;
+      if (body.meta?.universe === "full" || (typeof n === "number" && n > 100)) {
         setCatalogNote(
-          body.meta.universe === "full"
-            ? `全市场 ${body.meta.catalog_count ?? body.data?.length ?? "—"} 只；报价分批刷新（有滞后）；K 线完整回填仅热门 seed`
-            : body.meta.note,
+          `全市场 ${n ?? "—"} 只；列表可滚动；报价按可视窗口分批（有滞后）；K 线完整回填仅热门 seed`,
         );
+      } else if (body.meta?.note) {
+        setCatalogNote(body.meta.note);
       } else {
         setCatalogNote(null);
       }
@@ -258,6 +274,8 @@ export default function AsharePage() {
   const loadKlines = useCallback(async (code: string, kt: string) => {
     if (kt === "intraday") {
       const res = await fetch(`/api/ashare/intraday/${code}`);
+      // 429 时保留旧图，避免整页 Error 条把行情台打挂
+      if (res.status === 429) return;
       if (!res.ok) throw new Error(`intraday ${res.status}`);
       const body = (await res.json()) as {
         data?: {
@@ -345,7 +363,9 @@ export default function AsharePage() {
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     const priorityIdx = new Map(PRIORITY.map((c, i) => [c, i]));
-    let list = [...codes];
+    let list = codes.filter((c) =>
+      matchesAshareBoard(c.stock_code, c.exchange, board),
+    );
     if (q) {
       list = list.filter(
         (c) =>
@@ -361,9 +381,9 @@ export default function AsharePage() {
       return a.stock_code.localeCompare(b.stock_code);
     });
     return list;
-  }, [codes, query]);
+  }, [codes, query, board]);
 
-  // 全量目录交给虚拟列表；不再 slice(800) 截断
+  // 全量目录交给虚拟列表；不再 slice 截断
   const displayList = filtered;
   const listIds = useMemo(
     () => displayList.map((c) => c.stock_code),
@@ -562,8 +582,28 @@ export default function AsharePage() {
             <span className="bn-label">
               {loadingCodes
                 ? "loading…"
-                : `${displayList.length}${query.trim() ? ` / ${codes.length}` : ""} 只`}
+                : `${displayList.length}${
+                    board !== "all" || query.trim()
+                      ? ` / ${codes.length}`
+                      : ""
+                  } 只`}
             </span>
+          </div>
+          <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
+            {ASHARE_BOARDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                role="tab"
+                aria-selected={board === b.id}
+                className={
+                  board === b.id ? "ths-board-tab active" : "ths-board-tab"
+                }
+                onClick={() => setBoard(b.id)}
+              >
+                {b.label}
+              </button>
+            ))}
           </div>
           <input
             className="bn-search"
@@ -578,11 +618,11 @@ export default function AsharePage() {
             <span>涨跌%</span>
           </div>
           <VirtualMktList
-            key={query.trim() ? `q:${query.trim()}` : "all"}
+            key={`${board}:${query.trim() || "all"}`}
             className="bn-mkt-body"
             items={displayList}
             rowHeight={40}
-            height={560}
+            height="fill"
             keyOf={(c) => c.stock_code}
             onVisibleRange={onVisibleRange}
             empty={<p className="bn-empty">无匹配标的</p>}

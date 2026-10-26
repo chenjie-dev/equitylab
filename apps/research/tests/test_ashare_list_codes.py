@@ -6,6 +6,16 @@ from app.ashare.qdb_client import ashare_exchange, qdb_symbol
 from app.ashare.service import AshareService
 
 
+def test_codes_router_limit_covers_full_universe():
+    """前端 limit=10000 不得被 FastAPI le 卡成 422。"""
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
+    text = src.read_text(encoding="utf-8")
+    assert "le=12000" in text
+    assert "limit=10000" in text or '= 10000' in text
+
+
 def test_ashare_exchange_maps_bse_before_sse_nine():
     assert ashare_exchange("600519") == "SSE"
     assert ashare_exchange("000001") == "SZSE"

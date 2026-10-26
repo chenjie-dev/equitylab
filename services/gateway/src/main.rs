@@ -138,8 +138,12 @@ async fn proxy(
         .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]));
 
     let path = req.uri().path().to_string();
-    // 公开行情代理不计入网关 RPM（上游 Binance + market-data 缓存已自限）；对话等仍限流。
-    let skip_rate_limit = path.starts_with("/api/market");
+    // 公开行情只读不计入网关 RPM：
+    // - /api/market：币安/RWA（market-data 自限）
+    // - /api/research/ashare：A 股列表/报价/K 线（只读 qdb；前端虚拟列表分块会短时打出大量请求）
+    // 对话 / 其它 research 仍限流。
+    let skip_rate_limit = path.starts_with("/api/market")
+        || path.starts_with("/api/research/ashare");
     if !skip_rate_limit && !state.rate_limiter.is_allowed(peer) {
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".into()));
     }

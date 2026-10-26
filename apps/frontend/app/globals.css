@@ -818,6 +818,10 @@ code {
 
 .bn-markets {
   max-height: 720px;
+  /* 让虚拟列表 flex:1 量到剩余高度，可滚完全表 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .bn-search {
@@ -1602,9 +1606,41 @@ code {
   grid-template-columns: 280px minmax(0, 1fr) 220px;
   min-height: 700px;
 }
+.bn-page.ths .ths-list {
+  max-height: none;
+  height: 100%;
+  min-height: 640px;
+}
 .bn-page.ths .ths-list .bn-mkt-row-stock {
   font-size: 12px;
   padding: 5px 10px;
+}
+.ths-board-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--bn-border);
+}
+.ths-board-tab {
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--bn-text-tertiary);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ths-board-tab:hover {
+  color: var(--bn-text-secondary);
+  background: var(--bn-bg-elevated);
+}
+.ths-board-tab.active {
+  color: var(--bn-yellow);
+  background: var(--bn-bg-elevated);
+  box-shadow: inset 0 -2px 0 var(--bn-yellow);
 }
 .bn-page.ths .ths-tabs {
   flex-wrap: wrap;

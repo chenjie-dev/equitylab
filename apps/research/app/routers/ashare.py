@@ -41,7 +41,8 @@ async def catalog() -> Catalog:
 @router.get("/codes")
 async def codes(
     q: Annotated[str | None, Query(description="代码或名称关键词")] = None,
-    limit: Annotated[int, Query(ge=1, le=8000)] = 5000,
+    # 全市场 hs_a ≈ 5.5k+；须 ≥ catalog，否则前端 limit=10000 会 422 只剩种子
+    limit: Annotated[int, Query(ge=1, le=12000)] = 10000,
 ) -> dict:
     try:
         return await asyncio.to_thread(service.list_codes, q, limit)

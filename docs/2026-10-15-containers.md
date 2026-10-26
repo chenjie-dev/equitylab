@@ -48,7 +48,7 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
 | `COLLECTOR_HTTP(S)_PROXY` | 空 / `host.docker.internal:18080` | 容器 TLS 异常时走宿主机 CONNECT 代理 |
-| `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口 |
+| `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口；`/api/market/*` 与 `/api/research/ashare/*` 豁免 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:3000` | 浏览器访问网关 |
 | `GRAFANA_PORT` / `LOKI_PORT` | 3003 / 3100 | Grafana / Loki 宿主机端口 |

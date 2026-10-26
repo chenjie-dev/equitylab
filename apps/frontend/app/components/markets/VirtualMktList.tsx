@@ -2,6 +2,7 @@
 
 /**
  * 轻量窗口虚拟列表（无第三方依赖）：只挂载可视区 ± overscan 行。
+ * height 可数字或 "fill"（填满 flex 父级，ResizeObserver 量高）。
  * 可选 onVisibleRange：父层可只拉可视窗口报价，避免全表轮询。
  */
 
@@ -16,8 +17,8 @@ import {
 type Props<T> = {
   items: T[];
   rowHeight: number;
-  /** 列表视口高度（px）；与 CSS 滚动区一致 */
-  height: number;
+  /** 列表视口高度（px）；"fill" 时撑满 flex 父级 */
+  height: number | "fill";
   overscan?: number;
   keyOf: (item: T, index: number) => string;
   renderRow: (item: T, index: number) => ReactNode;
@@ -40,7 +41,29 @@ export function VirtualMktList<T>({
 }: Props<T>) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [measuredH, setMeasuredH] = useState(
+    typeof height === "number" ? height : 560,
+  );
   const rangeRef = useRef<{ start: number; end: number } | null>(null);
+
+  const viewportH = typeof height === "number" ? height : measuredH;
+
+  useEffect(() => {
+    if (height !== "fill") {
+      setMeasuredH(height);
+      return;
+    }
+    const el = scrollerRef.current;
+    if (!el) return;
+    const apply = () => {
+      const h = el.clientHeight;
+      if (h > 0) setMeasuredH(h);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [height]);
 
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
@@ -53,7 +76,7 @@ export function VirtualMktList<T>({
     totalRows === 0
       ? 0
       : Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const visibleCount = Math.ceil(height / rowHeight) + overscan * 2;
+  const visibleCount = Math.ceil(viewportH / rowHeight) + overscan * 2;
   const end =
     totalRows === 0 ? 0 : Math.min(totalRows, start + visibleCount);
 
@@ -64,6 +87,17 @@ export function VirtualMktList<T>({
     rangeRef.current = { start, end };
     onVisibleRange(start, end);
   }, [start, end, onVisibleRange, totalRows]);
+
+  // items 变短且 scrollTop 越界时拉回，避免空白
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || totalRows === 0) return;
+    const maxScroll = Math.max(0, totalRows * rowHeight - viewportH);
+    if (el.scrollTop > maxScroll) {
+      el.scrollTop = maxScroll;
+      setScrollTop(maxScroll);
+    }
+  }, [totalRows, rowHeight, viewportH]);
 
   if (!totalRows) {
     return <div className={className}>{empty}</div>;
@@ -76,7 +110,13 @@ export function VirtualMktList<T>({
     <div
       ref={scrollerRef}
       className={className}
-      style={{ height, overflowY: "auto", position: "relative" }}
+      style={{
+        height: typeof height === "number" ? height : undefined,
+        flex: height === "fill" ? 1 : undefined,
+        minHeight: height === "fill" ? 0 : undefined,
+        overflowY: "auto",
+        position: "relative",
+      }}
       onScroll={onScroll}
     >
       <div style={{ height: total, position: "relative" }}>
