@@ -387,6 +387,9 @@ export default function AsharePage() {
   });
 
   useEffect(() => {
+    // 先清空，避免 seriesKey 已换、K 线仍是上只票时被图表尾巴 update 粘住
+    setKlines([]);
+    setKMeta({});
     void (async () => {
       try {
         await Promise.all([loadKlines(selected, activeKType), loadFive(selected)]);

@@ -171,6 +171,40 @@ function findKline(rows: Kline[], localSec: number): Kline | null {
   return best;
 }
 
+/** 主图价格轴：按 OHLC + 同轴 MA/BOLL 自适应，绝不强行从 0 起 */
+function priceScaleRange(
+  rows: Kline[],
+  flags: IndFlags,
+): { minValue: number; maxValue: number } | null {
+  if (!rows.length) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  const bump = (v: number) => {
+    if (!Number.isFinite(v)) return;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  };
+  for (const k of rows) {
+    bump(Number(k[2]));
+    bump(Number(k[3]));
+  }
+  if (flags.ma) {
+    for (const period of [7, 25, 99]) {
+      for (const pt of toMaLine(rows, period)) bump(pt.value);
+    }
+  }
+  if (flags.boll) {
+    const b = toBoll(rows);
+    for (const pt of b.mid) bump(pt.value);
+    for (const pt of b.upper) bump(pt.value);
+    for (const pt of b.lower) bump(pt.value);
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return null;
+  const span = max - min;
+  const pad = Math.max(span * 0.06, Math.abs(max) * 0.001, 0.02);
+  return { minValue: min - pad, maxValue: max + pad };
+}
+
 type Props = {
   klines: Kline[];
   symbol: string;
@@ -212,6 +246,8 @@ export function BinanceChart({
   const indRef = useRef<IndFlags>(IND_DEFAULT);
   const syncingRangeRef = useRef(false);
   const prevKeyRef = useRef<string | undefined>(undefined);
+  /** 换票/换周期后，下一次 setData 必须全量，避免同时间戳窗口误走 update 尾巴 */
+  const forceFullRef = useRef(false);
   const prevFirstTsRef = useRef<number | null>(null);
   const prevLastTsRef = useRef<number | null>(null);
   const prevLenRef = useRef(0);
@@ -338,21 +374,36 @@ export function BinanceChart({
       wickDownColor: pal.down,
       lastValueVisible: false,
       priceLineVisible: false,
+      // 主图唯一价格轴贡献者：按可见 OHLC/均线拟合，避免量能/基线 0 拉扁
+      autoscaleInfoProvider: () => {
+        const range = priceScaleRange(klinesRef.current, indRef.current);
+        return range ? { priceRange: range } : null;
+      },
     });
 
+    // 独立 overlay 刻度（勿用 right，否则量能基线 0 会把价格轴拉扁）
     const volume = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
-      priceScaleId: "",
+      priceScaleId: "vol",
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     volume.priceScale().applyOptions({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
+    // 防止误挂到 right 时仍污染价格轴
+    chart.priceScale("right").applyOptions({
+      autoScale: true,
+      scaleMargins: { top: 0.08, bottom: 0.22 },
+    });
 
+    // MA/BOLL 不参与右轴 autoscale（由蜡烛 provider 一并计入）
     const lineOpts = {
       lineWidth: 1 as const,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
     };
     const ma7 = chart.addLineSeries({ color: "#f0b90b", ...lineOpts });
     const ma25 = chart.addLineSeries({ color: "#d94cff", ...lineOpts });
@@ -365,6 +416,7 @@ export function BinanceChart({
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       lineStyle: LineStyle.Dashed,
+      autoscaleInfoProvider: () => null,
     });
     const bollLow = chart.addLineSeries({
       color: "#848e9c",
@@ -373,6 +425,7 @@ export function BinanceChart({
       lastValueVisible: false,
       crosshairMarkerVisible: false,
       lineStyle: LineStyle.Dashed,
+      autoscaleInfoProvider: () => null,
     });
 
     const stage = stageRef.current;
@@ -519,7 +572,9 @@ export function BinanceChart({
 
     const hist = macdChart.addHistogramSeries({
       priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
-      priceScaleId: "",
+      priceScaleId: "macd-hist",
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     hist.priceScale().applyOptions({
       scaleMargins: { top: 0.2, bottom: 0 },
@@ -588,6 +643,10 @@ export function BinanceChart({
     }
     const key = seriesKey ?? symbol;
     const keyChanged = prevKeyRef.current !== key;
+    if (keyChanged) {
+      // 父组件常先改 seriesKey、后到新 K 线；标记后一次必须全量，防同时间戳误 update
+      forceFullRef.current = true;
+    }
     const firstTs = Number(klines[0][0]);
     const lastTs = Number(klines[klines.length - 1][0]);
     const prevFirst = prevFirstTsRef.current;
@@ -595,11 +654,31 @@ export function BinanceChart({
     const prevLen = prevLenRef.current;
     const prepended =
       !keyChanged &&
+      !forceFullRef.current &&
       prevFirst != null &&
       firstTs < prevFirst &&
       klines.length > 0;
+
+    // 同时间窗换票时 firstTs 仍相等，但首根收盘价会差很多 → 禁止走尾巴 update
+    let sameSeries = true;
+    if (!keyChanged && !forceFullRef.current && prevFirst != null && prevFirst === firstTs) {
+      const existing = candleRef.current.data();
+      const firstBar = existing[0];
+      if (firstBar && "close" in firstBar) {
+        const chartClose = Number(firstBar.close);
+        const nextClose = Number(klines[0][4]);
+        const scale = Math.max(Math.abs(chartClose), Math.abs(nextClose), 1e-8);
+        if (Math.abs(chartClose - nextClose) > scale * 0.05) {
+          sameSeries = false;
+          forceFullRef.current = true;
+        }
+      }
+    }
+
     const canTailUpdate =
       !keyChanged &&
+      !forceFullRef.current &&
+      sameSeries &&
       !prepended &&
       prevFirst != null &&
       prevLast != null &&
@@ -656,7 +735,11 @@ export function BinanceChart({
         }
       }
     }
-    if (!usedTail) applyFull();
+    if (!usedTail) {
+      applyFull();
+      // 换 key 当帧常仍是旧票 K 线：保留 force，等下一包真正全量后再关
+      if (!keyChanged) forceFullRef.current = false;
+    }
 
     if (keyChanged) {
       chartRef.current?.timeScale().scrollToRealTime();
