@@ -2,7 +2,8 @@
 
 流水线说明：[docs/2026-10-15-agent-pipeline.md](../../docs/2026-10-15-agent-pipeline.md)  
 角色×Skills 高星目录：[docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)  
-编排 skill：`.agents/skills/equitylab-pipeline`
+编排 skill：`.agents/skills/equitylab-pipeline`  
+完成判据：`.agents/skills/equitylab-dod` · 模板 [templates/dod.md](../templates/dod.md) · [docs/2026-10-26-agent-dod-与数据面门禁.md](../../docs/2026-10-26-agent-dod-与数据面门禁.md)
 
 | # | 角色 | 文件 |
 |---|---|---|

@@ -41,6 +41,7 @@ Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python
 - 角色卡：[`.agents/team/`](.agents/team/README.md)  
 - 交接物落盘：`.agents/artifacts/`（模板在 `.agents/templates/`）  
 - 小修复可跳过规划/架构，但须冒烟；**门禁未过不得进入下一阶段**。
+- **变更分级、DoD、数据面门禁**见下文「生产级迭代」；清单模板 [`.agents/templates/dod.md`](.agents/templates/dod.md)；编排 skill **equitylab-pipeline** / **equitylab-dod**。
 
 ## docs 命名
 
@@ -86,7 +87,61 @@ YYYY-MM-DD-<标题>.md
    - 前端展示派生（MA/BOLL/MACD 等）只基于已从 qdb 拿到的序列，不另拉上游。  
 8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读仍经 market-data `/qdb/ws` 代理，但订阅逻辑用 TS 客户端。详见 [`docs/2026-10-20-qdb-client-design.md`](docs/2026-10-20-qdb-client-design.md)。  
 9. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。  
-10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。
+10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。  
+11. **生产级迭代（DoD / 分级 / 数据面）**：见下一节；未满足不得声称「功能完成」或进入部署。
+
+## 生产级迭代（强制）
+
+### 变更分级
+
+| 级别 | 典型 | 可跳过 | **不可跳过** |
+|---|---|---|---|
+| hotfix | 单点 bug、文案、明显回归 | 规划 / 架构 | 冒烟证据 +（建议）快速 Review |
+| feature | 新页 / API / 采集扩展 / 契约微调 | — | 规划摘要或验收条 + 开发 + 测试证据 + Review |
+| epic | 全市场、新交易所、跨多层重构 | — | 架构落盘 + 容量/延迟说明 + 回归包 + Review 阻断项清零 |
+
+用户未明确说「跳过流水线」时，**禁止**从编码直接跳到「做完了」。epic/feature 结束前加载 skill **equitylab-dod** 自检。
+
+### Definition of Done（缺一不可）
+
+声称完成前必须同时具备：
+
+1. **验收**：Planner 验收标准（或 hotfix 自拟 1–3 条）每条有命令输出或测试名。  
+2. **冒烟**：至少一条与本改动相关的可复现命令（优先 `scripts/smoke-*.sh` 若已有；否则 curl / 单测）。**仅 `health=200` 不算行情/业务完成。**  
+3. **文档**：改路由 / 端口 / env / 工具名 → 同步 `api` / `containers` / qdb 相关文与 `.env.example`。  
+4. **诚实边界**：未做完的能力（例：K 线仅种子池）须在 UI 或 docs 标明；禁止当全量宣传。  
+5. **运行态对齐**：改 `collector` / `research` / `market-data` / `frontend` 等镜像内代码后，必须 `docker compose up -d --build <svc>`（或等价 recreate）再验；禁止只改宿主机源码未重建就报绿。  
+6. **收尾句式**（对人简报必填）：`已做 / 未做 / 已知风险 / 复验命令`。
+
+清单落盘：`.agents/artifacts/YYYY-MM-DD-<topic>-dod.md`（拷贝 [`.agents/templates/dod.md`](.agents/templates/dod.md)）。
+
+### 数据面不变量（行情 / qdb）
+
+与 §7–§9 同时生效：
+
+1. **展示集 ⊆ 采集就绪集**：列表/行情 UI 展示的标的，须已被 collector 写入 qdb，或明确标注「仅目录、暂无报价」。禁止只扩前端种子不扩采集。  
+2. **读写顺序**：collector 写入就绪 → research / market-data 读通 → frontend；逆序不得报绿。  
+3. **符号**：A 股 `SSE` / `SZSE` / `BSE` + 6 位码；北交所 `4*`/`8*`/`92*` **先于**「9→SSE」；ashare 列表 **禁止** `BINANCE` / `ONDO` / 加密货币代码。  
+4. **图表**：换票须全量 `setData`（禁止旧序列挂新 `seriesKey`）；价格轴按 OHLC 自适应，**不得**默认从 0 起压扁走势。  
+5. **环境陷阱**：`COLLECTOR_SKIP_ASHARE=1`、`BINANCE_WS_WRITE_QUOTES=0` 等仅为排障应急；**不得**作为默认完成态。冒烟须断言日志（如 `ashare=N` 而非 `ashare=skip`）或 snapshots 非空。  
+6. **可观测**：数据面改动至少验证一条日志关键字或 docs/snapshots 计数字段（如 `ashare:codes` count、`write gate`）。
+
+细则与验收剧本：[docs/2026-10-26-agent-dod-与数据面门禁.md](docs/2026-10-26-agent-dod-与数据面门禁.md)。
+
+### 评审阻断项（Reviewer 直接 block）
+
+- 读路径外呼公开行情上游，或业务直打 `QDB_URL` `/v1/*`  
+- stub / demo 指标冒充生产  
+- 密钥或含真实 Key 的 `.env` 进提交  
+- 无验收/冒烟证据的 feature/epic「完成」  
+- 改 API/端口/工具名却未改契约文档  
+- ashare/行情列表混入非 A 股交易所代码且无说明  
+
+### 部署 / 回滚（DevOps）
+
+- 健康检查 **与** 本功能冒烟同轮通过才可宣称发布。  
+- 发布说明须含：**回滚 commit/镜像** + 是否需清 qdb 卷（脏 K 线 / 时区类）。  
+- 不默认 push；禁止打 Tag（同提交约定）。
 
 ## 本地运行（环境即真相）
 
@@ -129,3 +184,4 @@ Redis 宿主机端口默认 **16379**（见 `.env`）；容器内仍为 `redis:6
 | 写 skill / AGENTS | `writing-for-agents` |
 | 本仓落地改动 | `equitylab-dev` |
 | 按流水线推进功能 | `equitylab-pipeline` |
+| 完成判据 / 可否上线 | `equitylab-dod` |

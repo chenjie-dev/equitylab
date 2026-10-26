@@ -19,6 +19,7 @@
 | Skill | 用途 |
 |---|---|
 | [equitylab-pipeline](./equitylab-pipeline/SKILL.md) | **研发布流水线**：规划→架构→开发→测试→评审→部署→运维；调度 `.agents/team/` 角色 |
+| [equitylab-dod](./equitylab-dod/SKILL.md) | **完成判据**：变更分级、冒烟证据、数据面门禁；收尾强制自检 |
 | [equitylab-dev](./equitylab-dev/SKILL.md) | 改 gateway / orchestrator / research / market-data / frontend / Compose |
 
 角色卡：[../team/README.md](../team/README.md) · 流水线文档：[../../docs/2026-10-15-agent-pipeline.md](../../docs/2026-10-15-agent-pipeline.md)

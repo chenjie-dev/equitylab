@@ -37,6 +37,8 @@
 - [ ] Out of scope 非空  
 - [ ] 任务可分配到具体目录（`apps/*` / `services/*`）  
 - [ ] 未要求违反 `AGENTS.md` 硬约束  
+- [ ] 标明建议级别：hotfix | feature | epic（影响后续门禁）  
+- [ ] 验收标准可被 Test/DoD 直接勾选（避免空话）  
 
 ## 不做
 

@@ -47,10 +47,12 @@ curl -fsS -X POST http://localhost:3001/api/chat \
 - [ ] 验收标准每条有对应证据（命令输出或测试名）  
 - [ ] 回归最小集全绿  
 - [ ] flaky 已标注或隔离  
+- [ ] 行情/业务改动：**非仅** `health=200`；含目标 API 或 snapshots 字段摘录  
+- [ ] 报告可被 DoD 模板直接引用（`.agents/templates/dod.md`）  
 
 ## 不做
 
-扩大产品范围；在测试里硬编码真实 API Key。
+扩大产品范围；在测试里硬编码真实 API Key；用「服务起来了」代替验收证据。
 
 ## 推荐 skills
 

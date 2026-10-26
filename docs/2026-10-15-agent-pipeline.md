@@ -71,6 +71,8 @@ PM/Planner ──► Architect ──► Frontend + Backend + Data/RAG
 - 分层：TS 编排 / Python 计算 / Rust 网关与行情；禁止恢复 Java 单体  
 - 无实盘下单；stub 必须标明 `demo`  
 - 私有研报本地向量化；工具 ≤5 轮、超时 ≤30s；报价缓存 TTL≈3s  
+- **生产级迭代**：变更分级（hotfix/feature/epic）、DoD、数据面不变量、评审阻断项——见 AGENTS「生产级迭代」与 [`2026-10-26-agent-dod-与数据面门禁.md`](./2026-10-26-agent-dod-与数据面门禁.md)  
+- 模板：[`.agents/templates/dod.md`](../.agents/templates/dod.md)；skill：`equitylab-dod`
 
 ## 5. 如何启动一轮流水线
 
@@ -83,7 +85,9 @@ PM/Planner ──► Architect ──► Frontend + Backend + Data/RAG
 
 对代理：打开 skill **equitylab-pipeline**，按当前阶段加载对应 `.agents/team/0N-*.md`，完成门禁后再进入下一阶段。
 
-小修复（单文件 typo、文案）可跳过规划/架构，但仍建议过 **Test（冒烟）+ Reviewer（快速）**。
+小修复（单文件 typo、文案）可跳过规划/架构，但仍须 **冒烟证据**；feature/epic 结束前强制 **equitylab-dod**。
+
+整轮简报须含：`已做 / 未做 / 已知风险 / 复验命令`。
 
 ## 6. 各角色高星 Skills
 

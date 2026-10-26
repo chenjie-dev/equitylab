@@ -36,11 +36,18 @@
 
 模板：[../templates/release-notes.md](../templates/release-notes.md)
 
+## 与 DoD
+
+- feature/epic：部署前确认 DoD pass（或人确认豁免并记 artifacts）。  
+- 发布说明含回滚指针与是否清 qdb 卷；健康检查 + 功能冒烟同轮。  
+
 ## 完成判据
 
 - [ ] 目标服务 `docker compose ps` 为 healthy/up  
 - [ ] 回归最小集（Test Agent）再跑一遍绿  
 - [ ] `.env.example` 与真实所需变量同步  
+- [ ] 发布说明含回滚与（如需）qdb 卷处理  
+- [ ] 功能冒烟与 health 同轮通过（非仅 health）  
 
 ## 不做
 

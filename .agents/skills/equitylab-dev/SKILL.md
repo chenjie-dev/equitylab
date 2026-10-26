@@ -44,7 +44,9 @@ description: >-
 - **前缀代理**：网关对 `/api/market`、`/api/research` 剥前缀；`/api/chat` 保留完整路径。改路径时两端一起改并更新 `docs/2026-10-15-api.md`。  
 - **docs 命名**：`docs/` 下新建文档必须 `YYYY-MM-DD-<标题>.md`（创建日）；见根目录 `AGENTS.md`。  
 - **qdb 最新优先**：动 collector / `qdb_read` / ashare 读路径前，对照 `../qdb/docs/manual/server.md` 与 `limits.md`；发现契约变更则改代码并同步本仓 qdb 文档，禁止沿用过时路径。  
-- **qdb 只经客户端**：业务层禁止直连 `QDB_URL`；读写一律 `packages/qdb-*`（见 `AGENTS.md` 硬性约束 §8）。
+- **qdb 只经客户端**：业务层禁止直连 `QDB_URL`；读写一律 `packages/qdb-*`（见 `AGENTS.md` 硬性约束 §8）。  
+- **数据面顺序**：collector 写入就绪 → 读 API → UI；展示集 ⊆ 采集或标明「仅目录」。  
+- **重建再验**：改镜像内代码后必须 `docker compose up -d --build <service>`，禁止未 recreate 报绿。
 
 ## 验证（completion：至少一条相关冒烟变绿）
 
@@ -58,10 +60,14 @@ curl -s -X POST http://localhost:3000/api/chat \
   -d '{"message":"<与改动相关的中文问题>"}'
 ```
 
+行情改动另验 snapshots / ashare quotes（见 `docs/2026-10-26-agent-dod-与数据面门禁.md`）。**仅 health 不够。**
+
 仅改单服务时，可只重建该服务：`docker compose up -d --build <service>`。
 
 ## 收尾
 
 - 公共 API / 模块头注释按 `docs/2026-10-15-engineering.md` 补齐。  
+- feature/epic：走 skill **equitylab-dod**（或 pipeline 收尾）。  
 - 用户要求提交时走 skill `commit`。  
-- 大设计分歧先用 `grilling` / `grill-with-docs`，再实现。
+- 大设计分歧先用 `grilling` / `grill-with-docs`，再实现。  
+- 简报：`已做 / 未做 / 已知风险 / 复验命令`。
