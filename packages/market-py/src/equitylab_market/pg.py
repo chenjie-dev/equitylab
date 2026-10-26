@@ -1,9 +1,9 @@
-"""冷库写入：Postgres `market` schema（已闭合棒 / 日历 / 停牌 / 水位）。
+"""Postgres `market` schema 冷库写与覆盖查询（equitylab_market.pg）。
 
 边界（docs/2026-10-26-行情模块边界.md）：
-- 本模块只写冷数据；盘中热路径仍走 qdb，勿在此写未闭合棒。
+- 只写冷数据；盘中热路径仍走 qdb，勿在此写未闭合棒。
 - `source_code` 为 data_source（sina 等），不是产品 API 名。
-- DATABASE_URL 未配置或库不可达时 no-op，不阻断 qdb 采集。
+- DATABASE_URL 未配置或库不可达时 no-op。
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _connect():
             return _conn
         except Exception as exc:
             if not _warned:
-                print(f"pg_market: DATABASE_URL connect failed: {exc}", flush=True)
+                print(f"equitylab_market.pg: DATABASE_URL connect failed: {exc}", flush=True)
                 _warned = True
             return None
 

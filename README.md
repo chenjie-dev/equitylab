@@ -8,7 +8,8 @@
 ```text
 前端 (Next.js/TS) → Rust 网关 → TS 编排层 → Python 研究层 → 外部模型 API
                          ↘ Rust 行情服务（只读 qdb）
-采集：collector → qdb；存储：PostgreSQL + Redis + Qdrant + qdb
+采集族：collector（盘中→qdb）+ history-ingest（冷日线→market）
+存储：PostgreSQL（含 market）+ Redis + Qdrant + qdb
 ```
 
 | 层级 | 目录 | 技术 |
@@ -19,7 +20,9 @@
 | MCP | `apps/mcp-server` | TypeScript + MCP SDK（stdio） |
 | 网关 | `services/gateway` | Rust + Axum |
 | 行情 | `services/market-data` | Rust + Axum（币安 / RWA 读 qdb） |
-| 采集 | `services/collector` | Python（唯一回源 → qdb） |
+| 采集 | `services/collector` | Python（盘中回源 → qdb + 部分 market） |
+| 冷历史 | `services/history-ingest` | Python（日线缺口 → market） |
+| 共享包 | `packages/qdb-*`、`packages/market-py` | qdb / `equitylab_market` 客户端 |
 | 存储 | Compose 服务 | PostgreSQL / Redis / Qdrant / qdb |
 
 ## 快速启动

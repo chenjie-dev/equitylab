@@ -11,14 +11,12 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
-import pg_market
-import requests
+from equitylab_market import pg as pg_market
+from equitylab_market.sina import daily_klines as sina_daily_klines
+from equitylab_market.symbols import cn_equity_exchange, code6
 from equitylab_qdb import Client
 
-SH = ZoneInfo("Asia/Shanghai")
-UA = {"User-Agent": "equitylab-history-ingest", "Referer": "https://finance.sina.com.cn"}
 CODES_DOC_KEY = "ashare:codes"
 COVERAGE_DATASET = "bar_daily_coverage"
 SOURCE = "sina"
@@ -40,55 +38,6 @@ qdb = Client(timeout=15.0)
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
-
-
-def cn_equity_exchange(code: str) -> str:
-    digits = "".join(ch for ch in str(code) if ch.isdigit())
-    code6 = digits[-6:].zfill(6) if digits else ""
-    if code6.startswith(("4", "8")) or code6.startswith("92"):
-        return "BSE"
-    if code6.startswith(("5", "6", "9")):
-        return "SSE"
-    return "SZSE"
-
-
-def code6(raw: str) -> str | None:
-    digits = "".join(ch for ch in str(raw) if ch.isdigit())
-    if len(digits) < 6:
-        return None
-    out = digits[-6:].zfill(6)
-    return None if out == "000000" else out
-
-
-def sina_symbol(code: str) -> str:
-    c = code6(code) or "000000"
-    prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[cn_equity_exchange(c)]
-    return prefix + c
-
-
-def sina_daily_klines(code: str, limit: int) -> list[dict]:
-    r = requests.get(
-        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
-        params={"symbol": sina_symbol(code), "scale": 240, "ma": "no", "datalen": limit},
-        headers=UA,
-        timeout=25,
-    )
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list):
-        return []
-    return [
-        {
-            "day": str(item.get("day") or ""),
-            "open": item.get("open"),
-            "high": item.get("high"),
-            "low": item.get("low"),
-            "close": item.get("close"),
-            "volume": item.get("volume") or 0,
-        }
-        for item in data
-        if item.get("day")
-    ]
 
 
 def load_universe() -> list[dict[str, str]]:

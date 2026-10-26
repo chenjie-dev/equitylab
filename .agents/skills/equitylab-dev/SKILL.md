@@ -32,8 +32,10 @@ description: >-
 | 中国 A 股读面 | `apps/research/app/cn_equity`（`/cn-equity`；历史 `market` + 盘中 qdb） |
 | 限流、反代、鉴权 | `services/gateway` |
 | 币安/RWA Quote/Bars、`/qdb/ws` | `services/market-data`（只读 qdb；不读 A 股 `market`） |
-| 唯一回源 | `services/collector` → qdb（热）+ `market`（冷）；经 `equitylab_qdb` / `pg_market` |
+| 盘中回源 | `services/collector` → qdb + 部分 `market`；经 `equitylab_qdb` / `equitylab_market` |
+| 冷日线回补 | `services/history-ingest` → `market.bar_daily`；共享 `equitylab_market` |
 | qdb 客户端 | `packages/qdb-{py,ts,rs}` — 新用法先扩包 |
+| market 冷库客户端 | `packages/market-py`（`equitylab_market`）— 采集族写 PG 只走此包 |
 | 热行情库用法 | **权威**：`../qdb/docs/manual/*`；本仓落点：`docs/2026-10-20-qdb-行情库.md` + client-design |
 | 冷行情表 | `infra/postgres/migrations/*market*` + init 挂载（已有卷须手工迁移） |
 

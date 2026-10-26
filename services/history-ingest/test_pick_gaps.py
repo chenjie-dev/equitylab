@@ -1,23 +1,20 @@
-"""缺口排序纯逻辑（不连库）。"""
+"""缺口排序纯逻辑。"""
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT.parent / "collector"))
+# 源码可编辑安装路径（未 pip install 时）
+_SRC = Path(__file__).resolve().parents[1].parent / "packages" / "market-py" / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-# 避免 import main 时拉真实 equitylab_qdb / 连库
 sys.modules.setdefault("equitylab_qdb", MagicMock())
-sys.modules.setdefault("pg_market", MagicMock())
 
-spec = importlib.util.spec_from_file_location("history_ingest_main", ROOT / "main.py")
-assert spec and spec.loader
-hi = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(hi)
+import main as hi  # noqa: E402
+from equitylab_market.symbols import cn_equity_exchange  # noqa: E402
 
 
 def test_pick_gaps_orders_lowest_coverage_first():
@@ -38,5 +35,5 @@ def test_pick_gaps_orders_lowest_coverage_first():
 
 
 def test_cn_equity_exchange_bse():
-    assert hi.cn_equity_exchange("920088") == "BSE"
-    assert hi.cn_equity_exchange("600519") == "SSE"
+    assert cn_equity_exchange("920088") == "BSE"
+    assert cn_equity_exchange("600519") == "SSE"

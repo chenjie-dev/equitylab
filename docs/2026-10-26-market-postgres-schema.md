@@ -59,8 +59,7 @@
 
 ## 6. 写入与迁移
 
-- **collector**：`pg_market.py` 在种子 K 回填时写 `bar_*`、水位、日历；报价名含「停牌」时写 `suspend`。
-- **history-ingest**：持续扫描窗口内日线覆盖 &lt; `HISTORY_INGEST_MIN_BARS` 的标的，从新浪补 `bar_daily`（默认不写 qdb）。
+- **collector / history-ingest**：经 `packages/market-py`（`equitylab_market.pg` / `.sina`）写 `bar_*`、水位、日历；history-ingest 持续扫日线缺口。
 - **research**：`/cn-equity/klines` 历史优先读 PG，不足回落 qdb；盘中 realtime 仍 qdb。
 - **新卷**：`init.sql` + `02_market_schema.sql` 挂载执行。
 - **已有卷**：执行 `migrations/20261026_market_schema.sql`；可选将旧 `public.klines` 导入后 `DROP`。

@@ -106,7 +106,7 @@ def main() -> None:
     # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（ASHARE_KLINE_CODES）。
     # 粗填沪深北工作日日历（节假日由日线再确认）
     try:
-        import pg_market
+        from equitylab_market import pg as pg_market
 
         if pg_market.enabled():
             for ex in ("SSE", "SZSE", "BSE"):
@@ -227,14 +227,15 @@ def wait_qdb() -> None:
 def backfill(code: str) -> None:
     from retention import cutoff_ns
 
-    import pg_market
+    from equitylab_market import pg as pg_market
+    from equitylab_market.sina import klines as sina_klines_pkg
 
     exchange, code6 = split_symbol(code)
     symbol = f"{exchange}:{code6}"
     have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m")}
     have_1d = {int(row["ts"]) for row in get_klines(symbol, "1d")}
-    minute = sina_klines(code, 5, 500)
-    daily = sina_klines(code, 240, 300)
+    minute = sina_klines_pkg(code, scale_min=5, limit=500)
+    daily = sina_klines_pkg(code, scale_min=240, limit=300)
     # 历史棒同时落 Postgres market.*（冷库）；失败不阻断 qdb 回填
     try:
         stats = pg_market.ingest_sina_klines(
@@ -347,7 +348,7 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
         post("/v1/docs", {"items": depth_docs})
     # 名称含「停牌」时记一条当日 suspend（冷库）
     try:
-        import pg_market
+        from equitylab_market import pg as pg_market
 
         if pg_market.enabled():
             for row in parsed_rows:
@@ -380,28 +381,9 @@ def ohlc_trades(exchange: str, code: str, ts: int, bar: dict) -> list[dict]:
 
 
 def sina_klines(code: str, scale_min: int, limit: int) -> list[dict]:
-    r = requests.get(
-        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
-        params={"symbol": sina_symbol(code), "scale": scale_min, "ma": "no", "datalen": limit},
-        headers=UA,
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list):
-        return []
-    return [
-        {
-            "day": str(item.get("day") or ""),
-            "open": item.get("open"),
-            "high": item.get("high"),
-            "low": item.get("low"),
-            "close": item.get("close"),
-            "volume": item.get("volume") or 0,
-        }
-        for item in data
-        if item.get("day")
-    ]
+    from equitylab_market.sina import klines
+
+    return klines(code, scale_min=scale_min, limit=limit, timeout=20.0)
 
 
 def parse_sina(body: str) -> list[dict]:
@@ -501,33 +483,29 @@ def post(path: str, body: dict, *, priority: str = "high") -> None:
 
 
 def _ashare_code6(raw: str) -> str:
-    digits = "".join(ch for ch in str(raw) if ch.isdigit())
-    return digits[-6:].zfill(6) if digits else "000000"
+    from equitylab_market.symbols import code6
+
+    return code6(raw) or "000000"
 
 
 def ashare_exchange(code: str) -> str:
-    """6 位 A 股码 → qdb 交易所标签。
+    """6 位 A 股码 → qdb 交易所标签（委托 equitylab_market.symbols）。"""
+    from equitylab_market.symbols import cn_equity_exchange
 
-    北交所优先：4/8 开头（原新三板精选层等）或 92xxxx（北交所新号段）。
-    须先于「9→SSE」判断，否则 920088 会被误标为沪市。
-    """
-    code = _ashare_code6(code)
-    if code.startswith(("4", "8")) or code.startswith("92"):
-        return "BSE"
-    if code.startswith(("5", "6", "9")):
-        return "SSE"
-    return "SZSE"
+    return cn_equity_exchange(code)
 
 
 def sina_symbol(code: str) -> str:
-    code = _ashare_code6(code)
-    prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[ashare_exchange(code)]
-    return prefix + code
+    from equitylab_market.sina import sina_symbol as _sina_symbol
+
+    return _sina_symbol(code)
 
 
 def split_symbol(code: str) -> tuple[str, str]:
-    code = _ashare_code6(code)
-    return ashare_exchange(code), code
+    from equitylab_market.symbols import cn_equity_exchange, code6
+
+    c = code6(code) or "000000"
+    return cn_equity_exchange(c), c
 
 
 def bar_ts(day: str) -> int:
