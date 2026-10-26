@@ -66,6 +66,7 @@ def main() -> None:
         rotate_n = max(1, len(codes) - len(seed))
         per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - len(seed)))
         lag_s = (rotate_n / per_tick) * INTERVAL if codes else 0.0
+        pm.set_full_cycle_seconds(lag_s)
         print(
             f"collector cn_equity catalog count={doc['count']} source={doc['source']} "
             f"kline_backfill={len(kline_codes)} quote_full_cycle_s≈{lag_s:.0f} "
@@ -78,6 +79,11 @@ def main() -> None:
             name="collector-cn-equity-universe",
             daemon=True,
         ).start()
+    else:
+        pm.set_full_cycle_seconds(0.0)
+        pm.set_universe(0)
+
+    pm.start_freshness_worker(seed, cn_equity_exchange)
 
     # 币安：WS 推送写 qdb；A 股 REST 热路径（分批）；盘口/RWA/回填后台。
     print(
@@ -497,11 +503,28 @@ def post(path: str, body: dict, *, priority: str = "high") -> None:
     gate = get_gate()
     if gate is None:
         _post_raw(path, body)
+        _record_quotes_metric(path, body)
         return
     if priority == "sync":
         gate.post_sync(path, body)
+        _record_quotes_metric(path, body)
         return
     gate.enqueue(path, body, priority="low" if priority == "low" else "high")
+    _record_quotes_metric(path, body)
+
+
+def _record_quotes_metric(path: str, body: dict) -> None:
+    if not path.endswith("/quotes"):
+        return
+    items = body.get("items") if isinstance(body, dict) else None
+    if not isinstance(items, list) or not items:
+        return
+    try:
+        import prom_metrics as pm
+
+        pm.record_quotes(items)
+    except Exception:
+        pass
 
 
 def _cn_code6(raw: str) -> str:

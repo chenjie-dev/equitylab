@@ -45,12 +45,38 @@ Browser / curl
 | collector | `collector:9101` | `/metrics` |
 | history-ingest | `history-ingest:9102` | `/metrics` |
 
-数据面自定义指标示例：`equitylab_cn_equity_universe_size`、`equitylab_cn_equity_skip`、`equitylab_history_ingest_gaps_queued`、`equitylab_history_ingest_fill_total{status}`。
+### 行情数据面指标（新鲜度 + 覆盖）
+
+| 指标 | 来源 | 含义 |
+|---|---|---|
+| `equitylab_quote_last_success_unixtime{market}` | collector | 该市场最后成功写 quotes 的 unix 秒（`cn_equity` / `binance`） |
+| `equitylab_quotes_written_total{market}` | collector | 报价写入条数（吞吐用 `rate()`） |
+| `equitylab_write_gate_pending{kind}` | collector | `quotes` / `trades` / `docs` 待刷条数 |
+| `equitylab_write_gate_trade_drops_total` | collector | 成交队列溢出丢弃累计 |
+| `equitylab_cn_equity_full_cycle_seconds` | collector | 估测全表报价一轮滞后 |
+| `equitylab_snapshot_age_seconds{sample="seed"}` | collector | seed 集最大报价年龄（本进程 last-write） |
+| `equitylab_snapshot_stale_count{sample="seed"}` | collector | seed 中 age > `STALE_QUOTE_SEC`（默认 120）的个数；**休市可偏高** |
+| `equitylab_history_ingest_coverage_ratio` | history-ingest | `ok / universe`（0–1） |
+| `equitylab_market_bar_daily_rows` | history-ingest | `market.bar_daily` 总行数 |
+| `equitylab_cn_equity_universe_size` / `_skip` / `*_gaps_queued` / `*_fill_total` | 既有 | 宇宙、skip、缺口、fill |
+
+推荐 PromQL：
+
+```promql
+# 报价年龄（秒）
+time() - equitylab_quote_last_success_unixtime{market="cn_equity"}
+time() - equitylab_quote_last_success_unixtime{market="binance"}
+rate(equitylab_quotes_written_total[1m])
+equitylab_write_gate_pending
+equitylab_snapshot_stale_count{sample="seed"}
+equitylab_history_ingest_coverage_ratio
+equitylab_market_bar_daily_rows
+```
 
 ### Grafana 看板
 
 - **EquityLab Platform**（uid `equitylab-platform`）：targets up、QPS、p95、5xx
-- **EquityLab Market Data Plane**（uid `equitylab-market`）：宇宙规模、skip、WS、history-ingest 覆盖与 fill
+- **EquityLab Market**（uid `equitylab-market`）：三区 — Feed health / Freshness / Coverage
 
 预置 JSON：`infra/observability/grafana/dashboards/`。
 
@@ -83,6 +109,10 @@ curl -sD - -o /dev/null -X POST http://localhost:3000/api/chat \
 curl -s http://localhost:9091/-/ready
 curl -s 'http://localhost:9091/api/v1/targets' | python3 -c "import sys,json;d=json.load(sys.stdin);print([(t['labels'].get('job'), t['health']) for t in d['data']['activeTargets']])"
 curl -s 'http://localhost:9091/api/v1/query?query=equitylab_cn_equity_universe_size' | head -c 400
+
+# 行情新鲜度 / 覆盖（collector:9101 仅 compose 网内；经 Prometheus 查亦可）
+docker compose exec -T collector wget -qO- http://127.0.0.1:9101/metrics | rg 'last_success|stale_count|write_gate_pending|quotes_written'
+docker compose exec -T history-ingest wget -qO- http://127.0.0.1:9102/metrics | rg 'coverage_ratio|bar_daily_rows'
 
 # 各服务 /metrics（示例）
 curl -s http://localhost:3000/metrics | head

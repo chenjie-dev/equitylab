@@ -233,6 +233,10 @@ def main() -> None:
             pm.set_cover(
                 universe=len(universe), ok=ok_n, gaps=len(gaps), round_n=round_n
             )
+            try:
+                pm.set_bar_daily_rows(pg_market.count_bar_daily())
+            except Exception as exc:
+                print(f"history-ingest bar_daily_count failed: {exc}", flush=True)
             print(
                 f"history-ingest cover= round={round_n} universe={len(universe)} "
                 f"ok={ok_n} gaps_queued={len(gaps)} window_start={window_start}",

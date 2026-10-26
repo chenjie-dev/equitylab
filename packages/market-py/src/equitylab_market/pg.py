@@ -481,6 +481,19 @@ def daily_coverage_map(
     return out
 
 
+def count_bar_daily() -> int | None:
+    """整表 `market.bar_daily` 行数；库不可用时返回 None。"""
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*)::bigint FROM market.bar_daily")
+        row = cur.fetchone()
+    if not row:
+        return 0
+    return int(row[0] or 0)
+
+
 def daily_bar_count(
     exchange_code: str,
     secu_code: str,

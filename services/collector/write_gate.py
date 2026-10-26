@@ -117,6 +117,17 @@ class WriteGate:
             q.popleft()
             self._stats["trade_drop"] += 1
 
+    def pending_counts(self) -> dict[str, int]:
+        """供 Prometheus：队列积压与 trade_drop 累计。"""
+        with self._cv:
+            return {
+                "quotes": len(self._hi_quotes) + len(self._lo_quotes),
+                "trades": len(self._hi_trades) + len(self._lo_trades),
+                "docs": len(self._hi_docs) + len(self._lo_docs),
+                "trade_drop": int(self._stats.get("trade_drop") or 0),
+                "err": int(self._stats.get("err") or 0),
+            }
+
     def post_sync(self, path: str, body: dict[str, Any]) -> Any:
         """旁路门闸（GC / 回填）；短暂让 quotes 先走，超时仍写（币安会持续补 quotes）。"""
         deadline = time.monotonic() + 2.0
