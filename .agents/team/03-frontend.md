@@ -45,4 +45,4 @@
 | 必用 | `shadcn`、`ai-sdk` | shadcn-ui · **~126K★**；vercel/ai · **~27K★** |
 | 辅助 | `prototype`、`typescript-magician` | mattpocock / 本仓副本 |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

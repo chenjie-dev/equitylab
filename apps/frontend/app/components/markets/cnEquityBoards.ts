@@ -3,7 +3,7 @@
  * 北交所须先于「9→沪」；主板不含创业板 / 科创板 / 北交所。
  */
 
-export type AshareBoardId =
+export type CnEquityBoardId =
   | "all"
   | "hs_main"
   | "chinext"
@@ -12,7 +12,7 @@ export type AshareBoardId =
   | "sse"
   | "szse";
 
-export const ASHARE_BOARDS: { id: AshareBoardId; label: string }[] = [
+export const CN_EQUITY_BOARDS: { id: CnEquityBoardId; label: string }[] = [
   { id: "all", label: "全部A股" },
   { id: "hs_main", label: "沪深主板" },
   { id: "chinext", label: "创业板" },
@@ -69,10 +69,10 @@ export function isSzseMain(c: string): boolean {
  * @param exchange UI 交易所：SH / SZ / BJ（可空，则按号段推断）
  * @param board 板块 id
  */
-export function matchesAshareBoard(
+export function matchesCnEquityBoard(
   stockCode: string,
   exchange: string | undefined,
-  board: AshareBoardId,
+  board: CnEquityBoardId,
 ): boolean {
   if (board === "all") return true;
   const c = code6(stockCode);

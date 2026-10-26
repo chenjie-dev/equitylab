@@ -13,7 +13,7 @@ from app.cn_equity.service import service
 
 logger = logging.getLogger("equitylab.research.cn_equity")
 
-# 无前缀的端点集，供 /cn-equity 与兼容 /ashare 挂载
+# 无前缀的端点集，由 /cn-equity 挂载
 endpoints = APIRouter()
 
 

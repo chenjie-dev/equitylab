@@ -11,6 +11,6 @@
 
 - 访问 qdb **只走** `qdb-*` client；业务禁止直连 `QDB_URL` / 自拼 `/v1/*`。
 - 写 Postgres `market` schema **只走** `equitylab_market.pg`（collector / history-ingest）；读历史由 research `cn_equity.pg_client`。
-- 缺能力先改包再接业务（见根目录 `AGENTS.md` 与 [行情模块边界](../docs/2026-10-26-行情模块边界.md)）。
+- 缺能力先改包再接业务（见根目录 `AGENTS.md` 与 [行情模块边界](../docs/market/2026-10-26-行情模块边界.md)）。
 
 权威 qdb HTTP/WS：同级仓 `../qdb/docs/manual/`。

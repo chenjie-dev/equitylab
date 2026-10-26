@@ -1,6 +1,6 @@
 """Postgres `market` schema 冷库写与覆盖查询（equitylab_market.pg）。
 
-边界（docs/2026-10-26-行情模块边界.md）：
+边界（docs/market/2026-10-26-行情模块边界.md）：
 - 只写冷数据；盘中热路径仍走 qdb，勿在此写未闭合棒。
 - `source_code` 为 data_source（sina 等），不是产品 API 名。
 - DATABASE_URL 未配置或库不可达时 no-op。

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from main import ashare_exchange, parse_sina, sina_symbol, split_symbol
+from main import cn_equity_exchange, parse_sina, sina_symbol, split_symbol
 
 
-def test_ashare_exchange_bse_before_sse_nine() -> None:
-    assert ashare_exchange("600519") == "SSE"
-    assert ashare_exchange("000001") == "SZSE"
-    assert ashare_exchange("830879") == "BSE"
-    assert ashare_exchange("430047") == "BSE"
-    assert ashare_exchange("920088") == "BSE"
-    assert ashare_exchange("900901") == "SSE"
+def test_cn_equity_exchange_bse_before_sse_nine() -> None:
+    assert cn_equity_exchange("600519") == "SSE"
+    assert cn_equity_exchange("000001") == "SZSE"
+    assert cn_equity_exchange("830879") == "BSE"
+    assert cn_equity_exchange("430047") == "BSE"
+    assert cn_equity_exchange("920088") == "BSE"
+    assert cn_equity_exchange("900901") == "SSE"
 
 
 def test_sina_and_split_symbol() -> None:

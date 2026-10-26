@@ -27,7 +27,7 @@ pub fn registry() -> Value {
                 "mounts": ["/exchanges/binance", "/binance"],
                 "provider": "binance",
                 "rwa": "/exchanges/binance/rwa",
-                "docs": "docs/2026-10-16-binance-market.md"
+                "docs": "docs/market/2026-10-16-binance-market.md"
             }
         ],
         "note": "后续 OKX / Bybit 等在 exchanges/ 下按同构模块接入"

@@ -11,7 +11,7 @@
 ## 输入
 
 - PRD 中的研报/检索验收标准  
-- `docs/2026-10-15-architecture.md` RAG 节  
+- `docs/platform/2026-10-15-architecture.md` RAG 节  
 - `apps/research/app/rag/*`  
 - skills：`langchain-rag`、`qdrant-clients-sdk`
 
@@ -46,4 +46,4 @@
 | 必用 | `rag-architect` | jeffallan/claude-skills · **~12K★** |
 | 辅助 | `fastapi`、`research` | fastapi **~103K★**；mattpocock |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

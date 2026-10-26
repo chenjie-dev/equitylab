@@ -13,8 +13,8 @@ description: >-
 
 ## 权威文档
 
-- 流水线 SSOT：[`docs/2026-10-15-agent-pipeline.md`](../../../docs/2026-10-15-agent-pipeline.md)
-- DoD / 数据面：[`docs/2026-10-26-agent-dod-与数据面门禁.md`](../../../docs/2026-10-26-agent-dod-与数据面门禁.md)
+- 流水线 SSOT：[`docs/agents/2026-10-15-agent-pipeline.md`](../../../docs/agents/2026-10-15-agent-pipeline.md)
+- DoD / 数据面：[`docs/agents/2026-10-26-agent-dod-与数据面门禁.md`](../../../docs/agents/2026-10-26-agent-dod-与数据面门禁.md)
 - 角色卡目录：[`../../team/README.md`](../../team/README.md)
 - 硬约束：[`AGENTS.md`](../../../AGENTS.md)
 

@@ -1560,12 +1560,12 @@ code {
   color: var(--bn-text-secondary);
 }
 
-.bn-ashare-five {
+.bn-cn-equity-five {
   flex: 1;
   overflow: auto;
   min-height: 0;
 }
-.bn-ashare-five-pre {
+.bn-cn-equity-five-pre {
   margin: 0;
   padding: 10px 12px;
   font-size: 11px;

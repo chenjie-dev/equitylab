@@ -11,10 +11,10 @@ import requests
 from equitylab_qdb import Client, scale as qdb_scale
 from equitylab_qdb import PRICE_SCALE as SCALE
 
-import ashare_universe as ashare_u
+import cn_equity_universe as cn_u
 
 # 默认与 research `_SEED_CODES` / 前端 PRIORITY 对齐（沪深北 + ETF）；
-# 全市场：ASHARE_UNIVERSE=full（默认）拉新浪 hs_a → docs ashare:codes，报价 round-robin。
+# 全市场：CN_EQUITY_UNIVERSE=full（默认）拉新浪 hs_a → docs cn-equity:codes，报价 round-robin。
 INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "500")) / 1000
 UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.cn"}
 # 进程级 qdb 客户端（读写）；写纪律：仅本进程回源
@@ -31,52 +31,52 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 def main() -> None:
-    seed = ashare_u.seed_codes_from_env()
+    seed = cn_u.seed_codes_from_env()
     wait_qdb()
     # 单写者门闸：高优先现货/A 股，低优先 RWA，避免并发单条 POST 饿死 snapshots
     from write_gate import start_gate
 
     start_gate(_post_raw)
-    skip_ashare = _env_flag("COLLECTOR_SKIP_ASHARE", "0")
+    skip_cn_equity = _env_flag("COLLECTOR_SKIP_CN_EQUITY", "0")
 
     kline_codes: list[str] = list(seed)
-    rotator: ashare_u.QuoteRotator | None = None
+    rotator: cn_u.QuoteRotator | None = None
     codes: list[str] = list(seed)
 
-    if not skip_ashare:
+    if not skip_cn_equity:
         print(
-            f"collector ashare universe mode={ashare_u.universe_mode()} "
-            f"seed={len(seed)} batch={ashare_u.quote_batch_size()} "
+            f"collector cn_equity universe mode={cn_u.universe_mode()} "
+            f"seed={len(seed)} batch={cn_u.quote_batch_size()} "
             f"(resolving…)",
             flush=True,
         )
-        rows, doc = ashare_u.resolve_universe(seed=seed)
+        rows, doc = cn_u.resolve_universe(seed=seed)
         codes = [r["code"] for r in rows]
         kline_codes = list(doc.get("kline_codes") or seed)
-        post("/v1/docs", {"items": ashare_u.codes_doc_items(doc)})
-        rotator = ashare_u.QuoteRotator(codes, seed=seed)
+        post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
+        rotator = cn_u.QuoteRotator(codes, seed=seed)
         # 每批实际旋转量 ≈ min(batch, 100-seed)；估算全表一轮滞后
         rotate_n = max(1, len(codes) - len(seed))
-        per_tick = max(1, min(ashare_u.quote_batch_size(), ashare_u.SINA_HQ_BATCH_MAX - len(seed)))
+        per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - len(seed)))
         lag_s = (rotate_n / per_tick) * INTERVAL if codes else 0.0
         print(
-            f"collector ashare catalog count={doc['count']} source={doc['source']} "
+            f"collector cn_equity catalog count={doc['count']} source={doc['source']} "
             f"kline_backfill={len(kline_codes)} quote_full_cycle_s≈{lag_s:.0f} "
-            f"doc={ashare_u.CODES_DOC_KEY}",
+            f"doc={cn_u.CODES_DOC_KEY}",
             flush=True,
         )
         threading.Thread(
             target=_universe_refresh_worker,
             args=(seed, rotator),
-            name="collector-ashare-universe",
+            name="collector-cn-equity-universe",
             daemon=True,
         ).start()
 
     # 币安：WS 推送写 qdb；A 股 REST 热路径（分批）；盘口/RWA/回填后台。
     print(
         f"collector cadence interval_ms={int(INTERVAL * 1000)} "
-        f"ashare={'skip' if skip_ashare else len(codes)} "
-        f"(binance=ws→qdb; ashare={'off' if skip_ashare else 'rest batched'})",
+        f"cn_equity={'skip' if skip_cn_equity else len(codes)} "
+        f"(binance=ws→qdb; cn_equity={'off' if skip_cn_equity else 'rest batched'})",
         flush=True,
     )
     import markets
@@ -103,7 +103,7 @@ def main() -> None:
         print(f"retention gc start failed: {exc}", flush=True)
 
     # A 股历史回填必须在首轮 live poll 之前完成：qdb 对「早于当前未闭合桶」的
-    # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（ASHARE_KLINE_CODES）。
+    # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（CN_EQUITY_KLINE_CODES）。
     # 粗填沪深北工作日日历（节假日由日线再确认）
     try:
         from equitylab_market import pg as pg_market
@@ -115,9 +115,9 @@ def main() -> None:
     except Exception as exc:
         print(f"pg_market calendar seed failed: {exc}", flush=True)
 
-    if not skip_ashare and kline_codes:
+    if not skip_cn_equity and kline_codes:
         print(
-            f"collector ashare backfill {len(kline_codes)} symbols "
+            f"collector cn_equity backfill {len(kline_codes)} symbols "
             f"(blocking before live poll; full-universe klines deferred)",
             flush=True,
         )
@@ -126,9 +126,9 @@ def main() -> None:
                 backfill(code)
             except Exception as exc:
                 print(f"backfill {code} failed: {exc}", flush=True)
-        print("collector ashare backfill done", flush=True)
+        print("collector cn_equity backfill done", flush=True)
     else:
-        print("collector ashare backfill skipped (COLLECTOR_SKIP_ASHARE)", flush=True)
+        print("collector cn_equity backfill skipped (COLLECTOR_SKIP_CN_EQUITY)", flush=True)
 
     threading.Thread(
         target=_market_backfill_worker,
@@ -147,12 +147,12 @@ def main() -> None:
     cycle = 0
     while True:
         t0 = time.monotonic()
-        if not skip_ashare and rotator is not None:
+        if not skip_cn_equity and rotator is not None:
             try:
                 batch = rotator.next_batch()
                 poll_quotes(batch, last_vol)
             except Exception as exc:
-                print(f"ashare poll failed: {exc}", flush=True)
+                print(f"cn_equity poll failed: {exc}", flush=True)
         # WS 健康时 noop；断流才 REST 兜底
         try:
             markets.poll_quotes_hot()
@@ -167,8 +167,8 @@ def main() -> None:
                 pass
             n = len(rotator.codes) if rotator else 0
             print(
-                f"collector tick cycle={cycle} ashare_ms={elapsed_ms} "
-                f"ashare_n={n} binance_ws={'up' if ws_ok else 'down'}",
+                f"collector tick cycle={cycle} cn_equity_ms={elapsed_ms} "
+                f"cn_equity_n={n} binance_ws={'up' if ws_ok else 'down'}",
                 flush=True,
             )
         cycle += 1
@@ -177,22 +177,22 @@ def main() -> None:
             time.sleep(remain)
 
 
-def _universe_refresh_worker(seed: list[str], rotator: ashare_u.QuoteRotator) -> None:
-    """定期重拉 hs_a，刷新 ashare:codes 与内存 rotator（默认 6h）。"""
+def _universe_refresh_worker(seed: list[str], rotator: cn_u.QuoteRotator) -> None:
+    """定期重拉 hs_a，刷新 cn-equity:codes 与内存 rotator（默认 6h）。"""
     while True:
-        time.sleep(ashare_u.universe_refresh_sec())
-        if ashare_u.universe_mode() != "full":
+        time.sleep(cn_u.universe_refresh_sec())
+        if cn_u.universe_mode() != "full":
             continue
         try:
-            rows, doc = ashare_u.resolve_universe(seed=seed)
-            post("/v1/docs", {"items": ashare_u.codes_doc_items(doc)})
+            rows, doc = cn_u.resolve_universe(seed=seed)
+            post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
             rotator.set_codes([r["code"] for r in rows], seed=seed)
             print(
-                f"ashare universe refreshed count={doc['count']} source={doc['source']}",
+                f"cn_equity universe refreshed count={doc['count']} source={doc['source']}",
                 flush=True,
             )
         except Exception as exc:
-            print(f"ashare universe refresh failed: {exc}", flush=True)
+            print(f"cn_equity universe refresh failed: {exc}", flush=True)
 
 
 def _market_backfill_worker(markets: object) -> None:
@@ -312,7 +312,7 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
             symbol = f"{row['exchange']}:{row['code']}"
             depth_docs.append(
                 {
-                    "key": f"ashare:depth:{symbol}",
+                    "key": f"cn-equity:depth:{symbol}",
                     "value": {
                         "symbol": symbol,
                         "bids": bids,
@@ -482,17 +482,17 @@ def post(path: str, body: dict, *, priority: str = "high") -> None:
     gate.enqueue(path, body, priority="low" if priority == "low" else "high")
 
 
-def _ashare_code6(raw: str) -> str:
+def _cn_code6(raw: str) -> str:
     from equitylab_market.symbols import code6
 
     return code6(raw) or "000000"
 
 
-def ashare_exchange(code: str) -> str:
+def cn_equity_exchange(code: str) -> str:
     """6 位 A 股码 → qdb 交易所标签（委托 equitylab_market.symbols）。"""
-    from equitylab_market.symbols import cn_equity_exchange
+    from equitylab_market.symbols import cn_equity_exchange as _ex
 
-    return cn_equity_exchange(code)
+    return _ex(code)
 
 
 def sina_symbol(code: str) -> str:

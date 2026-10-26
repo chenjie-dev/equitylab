@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python requests；TS 原生 fetch + WebSocket + React hook；Rust reqwest。
 
-**Spec:** `docs/2026-10-20-qdb-client-design.md`
+**Spec:** `docs/market/2026-10-20-qdb-client-design.md`
 
 ## Tasks
 

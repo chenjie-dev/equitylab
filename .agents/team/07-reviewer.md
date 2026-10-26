@@ -50,4 +50,4 @@
 | 必用 | `differential-review`、`semgrep` | trailofbits/skills · **~7.6K★** |
 | 辅助 | `diagnosing-bugs`、`writing-for-agents` | mattpocock |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

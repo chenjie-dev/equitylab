@@ -1,9 +1,9 @@
-"""Regression: ashare list_codes must never surface BINANCE/ONDO symbols."""
+"""Regression: cn-equity list_codes must never surface BINANCE/ONDO symbols."""
 
 from __future__ import annotations
 
-from app.ashare.qdb_client import ashare_exchange, qdb_symbol
-from app.ashare.service import AshareService
+from app.cn_equity.qdb_client import cn_equity_exchange, qdb_symbol
+from app.cn_equity.service import CnEquityService
 
 
 def test_codes_router_limit_covers_full_universe():
@@ -14,22 +14,20 @@ def test_codes_router_limit_covers_full_universe():
     text = src.read_text(encoding="utf-8")
     assert "le=12000" in text
     assert "limit=10000" in text or "= 10000" in text
-    # 旧前缀仍挂同一端点集
-    ashare_src = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
-    assert "cn_equity" in ashare_src.read_text(encoding="utf-8")
-    assert "prefix=\"/ashare\"" in ashare_src.read_text(encoding="utf-8") or "prefix='/ashare'" in ashare_src.read_text(encoding="utf-8")
+    ashare = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
+    assert not ashare.exists()
 
 
-def test_ashare_exchange_maps_bse_before_sse_nine():
-    assert ashare_exchange("600519") == "SSE"
-    assert ashare_exchange("000001") == "SZSE"
-    assert ashare_exchange("510300") == "SSE"
-    assert ashare_exchange("830879") == "BSE"
-    assert ashare_exchange("835185") == "BSE"
-    assert ashare_exchange("430047") == "BSE"
+def test_cn_equity_exchange_maps_bse_before_sse_nine():
+    assert cn_equity_exchange("600519") == "SSE"
+    assert cn_equity_exchange("000001") == "SZSE"
+    assert cn_equity_exchange("510300") == "SSE"
+    assert cn_equity_exchange("830879") == "BSE"
+    assert cn_equity_exchange("835185") == "BSE"
+    assert cn_equity_exchange("430047") == "BSE"
     # 92xxxx 是北交所新号段；不得因「9→SSE」误标沪市
-    assert ashare_exchange("920088") == "BSE"
-    assert ashare_exchange("900901") == "SSE"  # 沪 B
+    assert cn_equity_exchange("920088") == "BSE"
+    assert cn_equity_exchange("900901") == "SSE"  # 沪 B
     assert qdb_symbol("830879") == "BSE:830879"
     assert qdb_symbol("920088") == "BSE:920088"
 
@@ -83,15 +81,15 @@ def test_list_codes_excludes_binance_and_ondo(monkeypatch):
         "source": "qdb",
     }
     monkeypatch.setattr(
-        "app.ashare.qdb_client.snapshots_all",
+        "app.cn_equity.qdb_client.snapshots_all",
         lambda: mixed,
     )
     monkeypatch.setattr(
-        "app.ashare.qdb_client.codes_catalog",
+        "app.cn_equity.qdb_client.codes_catalog",
         lambda: None,
     )
 
-    svc = AshareService()
+    svc = CnEquityService()
     out = svc.list_codes(limit=8000)
     codes = {r["stock_code"]: r for r in out["data"]}
 
@@ -112,9 +110,9 @@ def test_list_codes_excludes_binance_and_ondo(monkeypatch):
         assert not str(r["stock_code"]).endswith("USDT")
 
 
-def test_list_codes_prefers_ashare_codes_catalog(monkeypatch):
+def test_list_codes_prefers_cn_equity_codes_catalog(monkeypatch):
     monkeypatch.setattr(
-        "app.ashare.qdb_client.codes_catalog",
+        "app.cn_equity.qdb_client.codes_catalog",
         lambda: {
             "universe": "full",
             "count": 3,
@@ -130,13 +128,13 @@ def test_list_codes_prefers_ashare_codes_catalog(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "app.ashare.qdb_client.snapshots_all",
+        "app.cn_equity.qdb_client.snapshots_all",
         lambda: {"data": [], "source": "qdb"},
     )
-    svc = AshareService()
+    svc = CnEquityService()
     out = svc.list_codes(limit=8000)
     codes = {r["stock_code"]: r for r in out["data"]}
-    assert out["source"] == "qdb:ashare:codes"
+    assert out["source"] == "qdb:cn-equity:codes"
     assert out["meta"]["universe"] == "full"
     assert "600519" in codes and codes["600519"]["exchange"] == "SH"
     assert "920088" in codes and codes["920088"]["exchange"] == "BJ"

@@ -116,4 +116,4 @@ websocat 'ws://localhost:3002/qdb/ws'
 - 仅现货公开数据；不做合约/期权、签名账户、下单（与官方「仅市场数据 URL」范围一致）。
 - `historicalTrades` 等需 Key 的接口不保证可用。
 - 双均线回测默认仍可用 mock；要对加密货币回测时把 Provider 切到 `binance` 并传 `BTCUSDT` 等符号。
-- 接口变更以 [币安开发者文档中心](https://developers.binance.com/zh-CN/docs/introduction) 为准，改代理路径时同步更新本页与 `docs/2026-10-15-api.md`。
+- 接口变更以 [币安开发者文档中心](https://developers.binance.com/zh-CN/docs/introduction) 为准，改代理路径时同步更新本页与 `docs/platform/2026-10-15-api.md`。

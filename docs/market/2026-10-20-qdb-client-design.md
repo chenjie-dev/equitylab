@@ -56,7 +56,7 @@ packages/
 | `qdb-ts` | `apps/frontend`（含 React hook `useSnapshot`） |
 | `qdb-rs` | `services/market-data` |
 
-共享说明（非代码）：`packages/README.md` 指向本设计 + qdb 手册；契约变更时三包与 `docs/2026-10-20-qdb-行情库.md` 同步改。
+共享说明（非代码）：`packages/README.md` 指向本设计 + qdb 手册；契约变更时三包与 `docs/market/2026-10-20-qdb-行情库.md` 同步改。
 
 ## 接口草图（三语言同形）
 
@@ -87,17 +87,17 @@ Python：同步 `requests` 客户端即可（collector / research 现状）；WS
 
 1. ~~落地三包骨架 + 最小读写冒烟（对本地 qdb）~~
 2. ~~collector → `qdb-py`（写 quotes/trades/docs + wait）~~
-3. ~~research `ashare/qdb_client.py` → 依赖 `qdb-py`（保留 ashare 行映射在 research）~~
+3. ~~research `cn_equity/qdb_client.py` → 依赖 `qdb-py`（行映射留在 research）~~
 4. ~~market-data → `qdb-rs`（`qdb_read` / `qdb_ws`；上游 URL 由 crate `ws_url`）~~
 5. ~~frontend → `@equitylab/qdb`（`useQdbSnapshot` / `useQdbKlines` / `useQdbSnapshots`）~~
-6. 手册对齐时同步 `docs/2026-10-20-qdb-行情库.md`、containers、本设计（就地改）
+6. 手册对齐时同步 `docs/market/2026-10-20-qdb-行情库.md`、containers、本设计（就地改）
 
 ## 验证
 
 ```bash
 # 包级：对 Compose qdb
 curl -s http://localhost:9090/v1/snapshots | head -c 200
-# 迁移后：collector 仍写、前端 /qdb/ws 仍有 row、research /ashare/quotes 仍 200
+# 迁移后：collector 仍写、前端 /qdb/ws 仍有 row、research /cn-equity/quotes 仍 200
 ```
 
 ## Builder 可自决

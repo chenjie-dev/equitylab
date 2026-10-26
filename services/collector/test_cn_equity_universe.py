@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ashare_universe import (
+from cn_equity_universe import (
     QuoteRotator,
     SINA_HQ_BATCH_MAX,
     build_codes_doc,

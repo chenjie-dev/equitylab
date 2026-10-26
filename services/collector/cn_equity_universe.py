@@ -1,4 +1,4 @@
-"""A 股全市场代码表：新浪 Market_Center → qdb docs `ashare:codes`。
+"""A 股全市场代码表：新浪 Market_Center → qdb docs `cn-equity:codes`。
 
 仅 collector 回源。读路径（research list_codes）只读该 docs + snapshots。
 `hs_a` 含沪/深/北（bj*）；ETF 等不在 hs_a 的标的由 seed 合并补入。
@@ -21,7 +21,7 @@ DEFAULT_SEED = (
     "600030,002415"
 )
 
-CODES_DOC_KEY = "ashare:codes"
+CODES_DOC_KEY = "cn-equity:codes"
 _SINA_LIST = (
     "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
     "Market_Center.getHQNodeData"
@@ -48,22 +48,22 @@ def seed_codes_from_env() -> list[str]:
 
 def universe_mode() -> str:
     """full = 新浪 hs_a + seed；seed = 仅 COLLECTOR_CODES / 默认种子。"""
-    mode = (os.environ.get("ASHARE_UNIVERSE") or "full").strip().lower()
+    mode = (os.environ.get("CN_EQUITY_UNIVERSE") or "full").strip().lower()
     return "seed" if mode in ("seed", "hot", "priority") else "full"
 
 
 def quote_batch_size() -> int:
-    n = int(os.environ.get("ASHARE_QUOTE_BATCH", "80"))
+    n = int(os.environ.get("CN_EQUITY_QUOTE_BATCH", "80"))
     return max(1, min(SINA_HQ_BATCH_MAX, n))
 
 
 def universe_refresh_sec() -> float:
-    return max(300.0, float(os.environ.get("ASHARE_UNIVERSE_REFRESH_SEC", "21600")))
+    return max(300.0, float(os.environ.get("CN_EQUITY_UNIVERSE_REFRESH_SEC", "21600")))
 
 
 def kline_backfill_codes(seed: list[str], universe: list[str]) -> list[str]:
-    """全宇宙时默认只回填 seed；ASHARE_KLINE_CODES=all 才回填全表（很重）。"""
-    raw = (os.environ.get("ASHARE_KLINE_CODES") or "").strip().lower()
+    """全宇宙时默认只回填 seed；CN_EQUITY_KLINE_CODES=all 才回填全表（很重）。"""
+    raw = (os.environ.get("CN_EQUITY_KLINE_CODES") or "").strip().lower()
     if raw in ("all", "*"):
         return list(universe)
     if raw in ("none", "off", "0"):
@@ -95,13 +95,13 @@ def _normalize_code_list(raw: str | list[str]) -> list[str]:
     return out
 
 
-def _ashare_code6(raw: str) -> str:
+def _code6(raw: str) -> str:
     digits = "".join(ch for ch in str(raw) if ch.isdigit())
     return digits[-6:].zfill(6) if digits else "000000"
 
 
-def ashare_exchange(code: str) -> str:
-    code = _ashare_code6(code)
+def cn_equity_exchange(code: str) -> str:
+    code = _code6(code)
     if code.startswith(("4", "8")) or code.startswith("92"):
         return "BSE"
     if code.startswith(("5", "6", "9")):
@@ -110,8 +110,8 @@ def ashare_exchange(code: str) -> str:
 
 
 def sina_symbol(code: str) -> str:
-    code = _ashare_code6(code)
-    prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[ashare_exchange(code)]
+    code = _code6(code)
+    prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}[cn_equity_exchange(code)]
     return prefix + code
 
 
@@ -176,7 +176,7 @@ def fetch_hs_a_universe(
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            code = _ashare_code6(str(row.get("code") or ""))
+            code = _code6(str(row.get("code") or ""))
             if code == "000000":
                 continue
             sym = str(row.get("symbol") or "")
@@ -187,7 +187,7 @@ def fetch_hs_a_universe(
             elif sym.startswith("sz"):
                 exchange = "SZSE"
             else:
-                exchange = ashare_exchange(code)
+                exchange = cn_equity_exchange(code)
             by_code[code] = {
                 "code": code,
                 "name": str(row.get("name") or ""),
@@ -216,7 +216,7 @@ def merge_seed_rows(
         by[code] = {
             "code": code,
             "name": names.get(code, ""),
-            "exchange": ashare_exchange(code),
+            "exchange": cn_equity_exchange(code),
             "sina": sina_symbol(code),
         }
     # seed 置前，其余按代码序
@@ -244,9 +244,9 @@ def build_codes_doc(
         "kline_codes": list(kline_codes),
         "quote_batch": quote_batch_size(),
         "note": (
-            "quotes: round-robin ASHARE_QUOTE_BATCH over full list "
+            "quotes: round-robin CN_EQUITY_QUOTE_BATCH over full list "
             "(lag ≈ N/batch*interval); "
-            "klines: only kline_codes (seed/priority) unless ASHARE_KLINE_CODES=all"
+            "klines: only kline_codes (seed/priority) unless CN_EQUITY_KLINE_CODES=all"
         ),
         "codes": [
             {
@@ -269,7 +269,7 @@ def resolve_universe(
     seed: list[str] | None = None,
     seed_names: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """按 ASHARE_UNIVERSE 解析代码表，并构造待写入的 docs value。"""
+    """按 CN_EQUITY_UNIVERSE 解析代码表，并构造待写入的 docs value。"""
     seed = list(seed or seed_codes_from_env())
     mode = universe_mode()
     source = "seed"
@@ -282,7 +282,7 @@ def resolve_universe(
             rows = merge_seed_rows(fetched, seed, names=seed_names)
             source = "sina:hs_a+seed"
         except Exception as exc:
-            print(f"ashare universe fetch failed, fallback seed: {exc}", flush=True)
+            print(f"cn_equity universe fetch failed, fallback seed: {exc}", flush=True)
             rows = merge_seed_rows([], seed, names=seed_names)
             source = f"seed(fallback:{exc.__class__.__name__})"
             mode = "seed"

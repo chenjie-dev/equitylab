@@ -1,6 +1,6 @@
 """授权回源边车：持续扫描 Postgres market 日线覆盖，缺口从新浪补近半年。
 
-边界（docs/2026-10-26-行情模块边界.md）：
+边界（docs/market/2026-10-26-行情模块边界.md）：
 - 本进程可访问上游；只写 market（冷），默认不写 qdb trades。
 - 与盘中 collector 解耦，避免拖垮报价热循环。
 """
@@ -17,7 +17,7 @@ from equitylab_market.sina import daily_klines as sina_daily_klines
 from equitylab_market.symbols import cn_equity_exchange, code6
 from equitylab_qdb import Client
 
-CODES_DOC_KEY = "ashare:codes"
+CODES_DOC_KEY = "cn-equity:codes"
 COVERAGE_DATASET = "bar_daily_coverage"
 SOURCE = "sina"
 
@@ -41,7 +41,7 @@ def _env_flag(name: str, default: str = "0") -> bool:
 
 
 def load_universe() -> list[dict[str, str]]:
-    """从 qdb ashare:codes 取全表；失败则用 PG security。"""
+    """从 qdb cn-equity:codes 取全表；失败则用 PG security。"""
     rows: list[dict[str, str]] = []
     try:
         body = qdb.get_doc(CODES_DOC_KEY)

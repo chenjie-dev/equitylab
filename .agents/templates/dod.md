@@ -41,7 +41,7 @@
 | 读路径 API 非空/非错 | | |
 | UI 关键路径 | | |
 | 展示集 ⊆ 采集或已标明「仅目录」 | | |
-| 无 BINANCE/ONDO 混入 ashare | | |
+| 无 BINANCE/ONDO 混入 cn-equity | | |
 | 环境非 skip/关 quotes 完成态 | | |
 
 ## 运行态

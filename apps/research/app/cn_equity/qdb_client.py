@@ -25,10 +25,6 @@ def cn_equity_exchange(code: str) -> str:
     return "SZSE"
 
 
-# 旧名兼容
-ashare_exchange = cn_equity_exchange
-
-
 def qdb_symbol(code: str) -> str:
     digits = "".join(ch for ch in str(code) if ch.isdigit())
     code6 = digits[-6:].zfill(6) if digits else ""
@@ -97,9 +93,9 @@ def _quote_row(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def depth_doc(code: str) -> dict[str, Any] | None:
-    """读 collector 写入的 `ashare:depth:{EX}:{code}` 五档 docs。"""
+    """读 collector 写入的 `cn-equity:depth:{EX}:{code}` 五档 docs。"""
     symbol = qdb_symbol(code)
-    body = _client.get_doc(f"ashare:depth:{symbol}")
+    body = _client.get_doc(f"cn-equity:depth:{symbol}")
     if not body:
         return None
     # GET /v1/docs 可能直接返回 value，或包一层 {key,value}
@@ -111,8 +107,8 @@ def depth_doc(code: str) -> dict[str, Any] | None:
 
 
 def codes_catalog() -> dict[str, Any] | None:
-    """读 collector 写入的全市场代码表 `ashare:codes`。"""
-    body = _client.get_doc("ashare:codes")
+    """读 collector 写入的全市场代码表 `cn-equity:codes`。"""
+    body = _client.get_doc("cn-equity:codes")
     if not body:
         return None
     if isinstance(body, dict) and isinstance(body.get("codes"), list):

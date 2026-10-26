@@ -62,4 +62,4 @@
 | 必用 | `devops-engineer` | jeffallan/claude-skills · **~12K★** |
 | 辅助 | `equitylab-dev`、`commit` | 本仓；提交仅用户要求时 |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

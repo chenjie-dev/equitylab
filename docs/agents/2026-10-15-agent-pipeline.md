@@ -93,6 +93,6 @@ PM/Planner ──► Architect ──► Frontend + Backend + Data/RAG
 
 每个角色对应的 GitHub 高 star / skills.sh 高安装量技能见：
 
-**[docs/2026-10-15-role-skills.md](./2026-10-15-role-skills.md)**
+**[docs/agents/2026-10-15-role-skills.md](./2026-10-15-role-skills.md)**
 
 角色卡内「推荐 skills」表与该文档同步；优先用已安装到 `.agents/skills/` 的副本。

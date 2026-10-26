@@ -24,7 +24,6 @@ KTYPE_MAP = {
 
 # qdb snapshots 含 BINANCE / ONDO 等；A 股列表只认沪/深/北（含 ETF 如 510300）
 _CN_EQUITY_EXCHANGES = frozenset({"SSE", "SZSE", "BSE"})
-_ASHARE_EXCHANGES = _CN_EQUITY_EXCHANGES  # 旧名
 _EX_UI = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}
 
 
@@ -39,11 +38,9 @@ def _cn_code6(raw: str) -> str | None:
     return digits
 
 
-_ashare_code6 = _cn_code6
 
-
-# 列表种子（热门 + ETF）；全市场以 collector 写入的 qdb docs `ashare:codes` 为准。
-# ASHARE_UNIVERSE=full 时 list_codes 优先读该 catalog，再与 snapshots 合并名称。
+# 列表种子（热门 + ETF）；全市场以 collector 写入的 qdb docs `cn-equity:codes` 为准。
+# CN_EQUITY_UNIVERSE=full 时 list_codes 优先读该 catalog，再与 snapshots 合并名称。
 _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "600519", "short_name": "贵州茅台", "exchange": "SH", "symbol": "600519.SH"},
     {"stock_code": "000001", "short_name": "平安银行", "exchange": "SZ", "symbol": "000001.SZ"},
@@ -104,7 +101,7 @@ class CnEquityService:
             by_code = {row["stock_code"]: dict(row) for row in _SEED_CODES}
             catalog = codes_catalog()
             if catalog and catalog.get("codes"):
-                source = "qdb:ashare:codes"
+                source = "qdb:cn-equity:codes"
                 meta = {
                     "universe": catalog.get("universe"),
                     "catalog_count": catalog.get("count"),
@@ -372,7 +369,7 @@ class CnEquityService:
         return payload
 
     def five(self, stock_code: str) -> dict[str, Any]:
-        """五档买卖：优先 `ashare:depth:*` docs；否则用快照买一/卖一并标明档位不足。"""
+        """五档买卖：优先 `cn-equity:depth:*` docs；否则用快照买一/卖一并标明档位不足。"""
         from app.cn_equity.qdb_client import depth_doc, snapshots
 
         code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
@@ -387,16 +384,16 @@ class CnEquityService:
             bids = _normalize_levels(depth.get("bids"))
             asks = _normalize_levels(depth.get("asks"))
             levels = max(len(bids), len(asks))
-            note = "qdb docs ashare:depth（新浪五档）"
+            note = "qdb docs cn-equity:depth（新浪五档）"
         if not bids and not asks and quote:
             if quote.get("bid") is not None:
                 bids = [{"price": quote["bid"], "volume": None}]
             if quote.get("ask") is not None:
                 asks = [{"price": quote["ask"], "volume": None}]
             levels = max(len(bids), len(asks))
-            note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 ashare:depth"
+            note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 cn-equity:depth"
         if not note:
-            note = "无盘口数据；等 collector 补 ashare:depth 或 quotes bid/ask"
+            note = "无盘口数据；等 collector 补 cn-equity:depth 或 quotes bid/ask"
         return {
             "stock_code": code,
             "bids": bids,
@@ -699,4 +696,3 @@ def _realtime_bar_from_snap(
 
 # 单例，供 router 使用
 service = CnEquityService()
-AshareService = CnEquityService  # 旧名兼容

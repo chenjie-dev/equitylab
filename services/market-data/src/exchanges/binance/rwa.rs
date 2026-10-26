@@ -44,8 +44,8 @@ async fn catalog() -> Json<Value> {
         "auth": "none",
         "source": "qdb",
         "docs": [
-            "docs/2026-10-16-binance-market.md#代币化美股-ondo-rwa",
-            "docs/2026-10-20-qdb-行情库.md"
+            "docs/market/2026-10-16-binance-market.md#代币化美股-ondo-rwa",
+            "docs/market/2026-10-20-qdb-行情库.md"
         ],
         "endpoints": [
             "GET .../rwa/stocks?type=1&preferChainId=56",

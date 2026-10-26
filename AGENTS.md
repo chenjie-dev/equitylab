@@ -13,7 +13,7 @@ EquityLab 是面向量化研究的 **多语言 AI Agent 平台**（非 Java 单�
 Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python)
                               ↘ Market-Data (Rust)
 存储：PostgreSQL（含 `market` 冷行情）+ Redis + Qdrant + qdb（热行情）；模型走外部 API（无本地 vLLM）
-行情：授权采集族 collector（盘中）+ history-ingest（冷日线）→ qdb/`market`；读路径零上游；边界见 docs/2026-10-26-行情模块边界.md
+行情：授权采集族 collector（盘中）+ history-ingest（冷日线）→ qdb/`market`；读路径零上游；边界见 docs/market/2026-10-26-行情模块边界.md
 ```
 
 目录约定：`apps/*` 应用、`services/*` 边车（含 `collector`）、`packages/qdb-{py,ts,rs}` qdb 客户端、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
@@ -37,7 +37,7 @@ Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python
 | Reviewer / Critic | 质量评审 | 代码审查、安全与规范检查、风险提示 |
 | DevOps | 部署与运维 | CI/CD、镜像、发布、监控、告警 |
 
-- 流水线说明：[docs/2026-10-15-agent-pipeline.md](docs/2026-10-15-agent-pipeline.md)  
+- 流水线说明：[docs/agents/2026-10-15-agent-pipeline.md](docs/agents/2026-10-15-agent-pipeline.md)  
 - 角色卡：[`.agents/team/`](.agents/team/README.md)  
 - 交接物落盘：`.agents/artifacts/`（模板在 `.agents/templates/`）  
 - 小修复可跳过规划/架构，但须冒烟；**门禁未过不得进入下一阶段**。
@@ -49,28 +49,30 @@ Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python
 
 ```text
 YYYY-MM-DD-<标题>.md
+# 或按主题分子目录（文件名仍带日期前缀）
+docs/<topic>/YYYY-MM-DD-<标题>.md   # 例：market/ platform/ agents/
 ```
 
 - 日期用文档**创建日**；不要用修改日改写已有前缀  
 - 重大改版可**新建**带新创建日的文件，并更新索引中的链接；勿偷偷改旧文件名日期  
 - `docs/scripts/` 下的脚本（若有）不要求日期前缀  
 - 新建或移动文档后，同步更新仓库内所有引用路径  
-- 当前索引：[docs/2026-10-15-文档索引.md](docs/2026-10-15-文档索引.md)
+- 当前索引：[docs/2026-10-26-文档索引.md](docs/2026-10-26-文档索引.md)
 
 ## 必读指针（按需加载）
 
 | 何时 | 打开 |
 |---|---|
-| 改架构 / Agent / RAG / 行情分层 | [`docs/2026-10-15-architecture.md`](docs/2026-10-15-architecture.md) |
-| 改行情模块职责 / 热冷 / 命名禁令 | [`docs/2026-10-26-行情模块边界.md`](docs/2026-10-26-行情模块边界.md)（SSOT） |
-| 改 HTTP 契约或联调路径 | [`docs/2026-10-15-api.md`](docs/2026-10-15-api.md) |
-| Compose / 端口 / 环境变量 / 排障 | [`docs/2026-10-15-containers.md`](docs/2026-10-15-containers.md) |
-| 改 qdb 读写 / collector / 行情符号 | 先读同级 **`../qdb/docs/manual/index.md`**，再看 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 与 [`docs/2026-10-20-qdb-client-design.md`](docs/2026-10-20-qdb-client-design.md)；协议改动优先落 `packages/qdb-*` |
-| 改 `market` 表 / A 股历史 | [`docs/2026-10-26-market-postgres-schema.md`](docs/2026-10-26-market-postgres-schema.md) + [`docs/2026-10-26-cn-equity.md`](docs/2026-10-26-cn-equity.md) |
-| 日志 / TraceId / Loki Grafana | [`docs/2026-10-16-observability.md`](docs/2026-10-16-observability.md) |
-| 版本与「明确不做」 | [`docs/2026-10-15-tech-stack.md`](docs/2026-10-15-tech-stack.md) |
-| 文档与注释规范 | [`docs/2026-10-15-engineering.md`](docs/2026-10-15-engineering.md) |
-| 多智能体流水线 | [`docs/2026-10-15-agent-pipeline.md`](docs/2026-10-15-agent-pipeline.md) |
+| 改架构 / Agent / RAG / 行情分层 | [`docs/platform/2026-10-15-architecture.md`](docs/platform/2026-10-15-architecture.md) |
+| 改行情模块职责 / 热冷 / 命名禁令 | [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md)（SSOT） |
+| 改 HTTP 契约或联调路径 | [`docs/platform/2026-10-15-api.md`](docs/platform/2026-10-15-api.md) |
+| Compose / 端口 / 环境变量 / 排障 | [`docs/platform/2026-10-15-containers.md`](docs/platform/2026-10-15-containers.md) |
+| 改 qdb 读写 / collector / 行情符号 | 先读同级 **`../qdb/docs/manual/index.md`**，再看 [`docs/market/2026-10-20-qdb-行情库.md`](docs/market/2026-10-20-qdb-行情库.md) 与 [`docs/market/2026-10-20-qdb-client-design.md`](docs/market/2026-10-20-qdb-client-design.md)；协议改动优先落 `packages/qdb-*` |
+| 改 `market` 表 / A 股历史 | [`docs/market/2026-10-26-market-postgres-schema.md`](docs/market/2026-10-26-market-postgres-schema.md) + [`docs/market/2026-10-26-cn-equity.md`](docs/market/2026-10-26-cn-equity.md) |
+| 日志 / TraceId / Loki Grafana | [`docs/platform/2026-10-16-observability.md`](docs/platform/2026-10-16-observability.md) |
+| 版本与「明确不做」 | [`docs/platform/2026-10-15-tech-stack.md`](docs/platform/2026-10-15-tech-stack.md) |
+| 文档与注释规范 | [`docs/platform/2026-10-15-engineering.md`](docs/platform/2026-10-15-engineering.md) |
+| 多智能体流水线 | [`docs/agents/2026-10-15-agent-pipeline.md`](docs/agents/2026-10-15-agent-pipeline.md) |
 | 领域术语（无实现细节） | [`CONTEXT.md`](CONTEXT.md) |
 
 ## 硬性约束
@@ -81,16 +83,16 @@ YYYY-MM-DD-<标题>.md
 4. **因子 / 回测**在研究层确定性引擎执行；模型只做规划与解释。不要把 IC/回测指标假装成已接 alphalens 的真实结果——stub 须标明 `demo` / MVP。  
 5. **工具循环**：编排层最多 5 轮、单工具超时 ≤30s（立项约定）。  
 6. **报价缓存** TTL≈3s；盘中 WebSocket 推送不进 MCP（后续独立进程）。  
-7. **行情热冷分离 + 读路径零上游**（细则 [`docs/2026-10-26-行情模块边界.md`](docs/2026-10-26-行情模块边界.md)）： 
+7. **行情热冷分离 + 读路径零上游**（细则 [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md)）： 
    - **授权回源**：`services/collector`（盘中 → qdb + 部分 `market`）与 `services/history-ingest`（冷日线缺口 → `market.bar_daily`）；其它服务禁止访问公开上游。 
    - **所有读路径**零外部行情 HTTP/WS：盘中/订阅/短窗 → qdb（经 `packages/qdb-*` 或 market-data `/qdb/ws`）；A 股已闭合历史 → research `/cn-equity` 读 `market`（可回落 qdb，须标明 `source`）。缺数据 → 空/503，等 collector 补，**禁止回源**。 
-   - **命名**：产品面用 `cn-equity`；`sina`/`adata`/`binance` 只作 `data_source`；`ashare` 仅兼容别名。 
+   - **命名**：产品面用 `cn-equity`；`sina`/`adata`/`binance` 只作 `data_source`；禁止产品路由/包名再用 `ashare`。 
    - market-data **不得**再代理上游（如 `/binance/v3/{*}`、`/binance/ws`、RWA bapi）；**不**承担 A 股 `market` 历史读。 
    - Compose 内 `QDB_FEED=0`（不用 qdb 内置采集）。 
    - 前端展示派生（MA/BOLL/MACD 等）只基于已取回序列，不另拉上游。 
-8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读仍经 market-data `/qdb/ws` 代理，但订阅逻辑用 TS 客户端。详见 [`docs/2026-10-20-qdb-client-design.md`](docs/2026-10-20-qdb-client-design.md)。 
-9. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/2026-10-20-qdb-行情库.md`](docs/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。
-10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/YYYY-MM-DD-api.md`（当前为 `2026-10-15-api.md`）与相关注释。  
+8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读仍经 market-data `/qdb/ws` 代理，但订阅逻辑用 TS 客户端。详见 [`docs/market/2026-10-20-qdb-client-design.md`](docs/market/2026-10-20-qdb-client-design.md)。 
+9. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/market/2026-10-20-qdb-行情库.md`](docs/market/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。
+10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/platform/YYYY-MM-DD-api.md`（当前为 `docs/platform/2026-10-15-api.md`）与相关注释。  
 11. **生产级迭代（DoD / 分级 / 数据面）**：见下一节；未满足不得声称「功能完成」或进入部署。
 
 ## 生产级迭代（强制）
@@ -120,17 +122,17 @@ YYYY-MM-DD-<标题>.md
 
 ### 数据面不变量（行情 / qdb / market）
 
-与 §7–§9 及 [`docs/2026-10-26-行情模块边界.md`](docs/2026-10-26-行情模块边界.md) 同时生效：
+与 §7–§9 及 [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md) 同时生效：
 
 1. **展示集 ⊆ 采集就绪集**：列表/行情 UI 展示的标的，须已被 collector 写入 qdb（及所需历史的 `market`），或明确标注「仅目录、暂无报价」。禁止只扩前端种子不扩采集。 
 2. **读写顺序**：collector 写入就绪 → research / market-data 读通 → frontend；逆序不得报绿。 
 3. **符号**：A 股 `SSE` / `SZSE` / `BSE` + 6 位码；北交所 `4*`/`8*`/`92*` **先于**「9→SSE」；cn-equity 列表 **禁止** `BINANCE` / `ONDO` / 加密货币代码。 
 4. **图表**：换票须全量 `setData`（禁止旧序列挂新 `seriesKey`）；价格轴按 OHLC 自适应，**不得**默认从 0 起压扁走势。 
-5. **环境陷阱**：`COLLECTOR_SKIP_ASHARE=1`、`BINANCE_WS_WRITE_QUOTES=0` 等仅为排障应急；**不得**作为默认完成态。冒烟须断言日志（如 `ashare=N` 而非 `ashare=skip`）或 snapshots / `market.bar_*` 非空。 
-6. **可观测**：数据面改动至少验证一条日志关键字或 docs/snapshots / PG 计数字段（如 `ashare:codes` count、`pg_market`、`write gate`）。 
+5. **环境陷阱**：`COLLECTOR_SKIP_CN_EQUITY=1`、`BINANCE_WS_WRITE_QUOTES=0` 等仅为排障应急；**不得**作为默认完成态。冒烟须断言日志（如 `cn_equity=N` 而非 `cn_equity=skip`）或 snapshots / `market.bar_*` 非空。 
+6. **可观测**：数据面改动至少验证一条日志关键字或 docs/snapshots / PG 计数字段（如 `cn-equity:codes` count、`pg_market`、`write gate`）。 
 7. **热冷不串权**：research 不得把 realtime 写进 `market`；collector 以外不得写 `market`；market-data 不读 A 股 `market` 历史。
 
-细则与验收剧本：[docs/2026-10-26-agent-dod-与数据面门禁.md](docs/2026-10-26-agent-dod-与数据面门禁.md)。
+细则与验收剧本：[docs/agents/2026-10-26-agent-dod-与数据面门禁.md](docs/agents/2026-10-26-agent-dod-与数据面门禁.md)。
 
 ### 评审阻断项（Reviewer 直接 block）
 
@@ -139,7 +141,7 @@ YYYY-MM-DD-<标题>.md
 - 密钥或含真实 Key 的 `.env` 进提交  
 - 无验收/冒烟证据的 feature/epic「完成」  
 - 改 API/端口/工具名却未改契约文档  
-- cn-equity（或兼容 ashare）列表混入非 A 股交易所代码且无说明；或读路径外呼 / 新产品名使用 adata/ashare  
+- cn-equity 列表混入非 A 股交易所代码且无说明；或读路径外呼 / 新产品名使用 adata/ashare  
 
 ### 部署 / 回滚（DevOps）
 
@@ -155,11 +157,11 @@ docker compose up -d --build
 curl -s http://localhost:3000/health
 ```
 
-Redis 宿主机端口默认 **16379**（见 `.env`）；容器内仍为 `redis:6379`。排障见 `docs/2026-10-15-containers.md`。
+Redis 宿主机端口默认 **16379**（见 `.env`）；容器内仍为 `redis:6379`。排障见 `docs/platform/2026-10-15-containers.md`。
 
 ## 注释与文档
 
-- 公共 API / 模块边界写清职责与不变量（见 `docs/2026-10-15-engineering.md`）。  
+- 公共 API / 模块边界写清职责与不变量（见 `docs/platform/2026-10-15-engineering.md`）。  
 - 不复述下一行字面意思；stub 明确标注后续落点。
 
 ## 提交（/commit、提交）

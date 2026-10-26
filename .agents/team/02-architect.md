@@ -11,9 +11,9 @@
 ## 输入
 
 - Planner 产出的 PRD / 任务清单  
-- [`docs/2026-10-15-architecture.md`](../../docs/2026-10-15-architecture.md)  
-- [`docs/2026-10-15-api.md`](../../docs/2026-10-15-api.md)  
-- [`docs/2026-10-15-tech-stack.md`](../../docs/2026-10-15-tech-stack.md)
+- [`docs/platform/2026-10-15-architecture.md`](../../docs/platform/2026-10-15-architecture.md)  
+- [`docs/platform/2026-10-15-api.md`](../../docs/platform/2026-10-15-api.md)  
+- [`docs/platform/2026-10-15-tech-stack.md`](../../docs/platform/2026-10-15-tech-stack.md)
 
 ## 步骤
 
@@ -52,4 +52,4 @@
 | 辅助 | `langgraph-fundamentals` | langchain-ai · 编排图 |
 | 辅助 | `writing-plans` | obra/superpowers · **~299K★** |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

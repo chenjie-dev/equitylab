@@ -12,7 +12,7 @@
 
 - 用户目标（一句话 + 约束）
 - [`CONTEXT.md`](../../CONTEXT.md)、[`AGENTS.md`](../../AGENTS.md)「明确不做」
-- 可选：现有 `docs/2026-10-15-architecture.md`
+- 可选：现有 `docs/platform/2026-10-15-architecture.md`
 
 ## 步骤
 
@@ -53,4 +53,4 @@
 | 必用 | `grill-me` / `grill-with-docs` / `grilling` | mattpocock · **~292K★**（已有） |
 | 辅助 | `domain-modeling`、`writing-for-agents` | mattpocock |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

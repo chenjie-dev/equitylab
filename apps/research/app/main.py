@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.observability import TraceMiddleware, setup_logging
-from app.routers import ashare, backtests, cn_equity, factors, health, rag
+from app.routers import backtests, cn_equity, factors, health, rag
 
 setup_logging()
 logger = logging.getLogger("equitylab.research")
@@ -39,7 +39,6 @@ def create_app() -> FastAPI:
     application.include_router(factors.router)
     application.include_router(backtests.router)
     application.include_router(cn_equity.router)
-    application.include_router(ashare.router)  # 旧前缀兼容
     return application
 
 

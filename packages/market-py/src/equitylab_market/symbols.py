@@ -23,7 +23,3 @@ def cn_equity_exchange(code: str) -> str:
     if c.startswith(("5", "6", "9")):
         return "SSE"
     return "SZSE"
-
-
-# 旧名兼容（collector 曾用 ashare_exchange）
-ashare_exchange = cn_equity_exchange

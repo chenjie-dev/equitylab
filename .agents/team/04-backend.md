@@ -50,4 +50,4 @@
 | 必用 | `redis-core`、`supabase-postgres-best-practices` | redis 官方；supabase |
 | 辅助 | `multi-stage-dockerfile` | awesome-copilot **~40K★** |
 
-详见 [docs/2026-10-15-role-skills.md](../../docs/2026-10-15-role-skills.md)。
+详见 [docs/agents/2026-10-15-role-skills.md](../../docs/agents/2026-10-15-role-skills.md)。

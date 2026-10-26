@@ -49,13 +49,13 @@
 
 ## 5. API 命名
 
-| 现状（废弃方向） | 目标 |
+| 路径 | 说明 |
 |---|---|
-| `/ashare/*` | `/cn-equity/*` |
-| `/api/ashare/*` | `/api/cn-equity/*` |
-| `/markets/ashare` | `/markets/cn` |
+| `/cn-equity/*` | Research 产品面 |
+| `/api/cn-equity/*` | BFF / Gateway |
+| `/markets/cn` | 前端 |
 
-旧路径可保留兼容代理一段时间。`meta.source` 可报 `sina` / `qdb` / `postgres`。
+旧 `ashare` 路径已删除。`meta.source` 可报 `sina` / `qdb` / `postgres`。
 
 ## 6. 写入与迁移
 

@@ -23,9 +23,9 @@ import {
   usePriceFlash,
 } from "../../components/markets/usePriceFlash";
 import {
-  ASHARE_BOARDS,
-  type AshareBoardId,
-  matchesAshareBoard,
+  CN_EQUITY_BOARDS,
+  type CnEquityBoardId,
+  matchesCnEquityBoard,
 } from "../../components/markets/cnEquityBoards";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
 import { useQdbSnapshot } from "../../components/markets/useQdbSnapshot";
@@ -44,7 +44,7 @@ function cnEquityQdbSymbol(code: string): string {
 
 /**
  * 热门置顶（与 collector seed / K 线回填集对齐）。
- * 全市场代码来自 qdb `ashare:codes`（数千）；列表报价 round-robin 有滞后。
+ * 全市场代码来自 qdb `cn-equity:codes`（数千）；列表报价 round-robin 有滞后。
  * K 线历史默认仅 seed/priority 有回填，其余可能只有盘中快照合成。
  */
 const PRIORITY = [
@@ -166,9 +166,9 @@ function mapCandles(
     ]);
 }
 
-export default function AsharePage() {
+export default function CnEquityPage() {
   const [query, setQuery] = useState("");
-  const [board, setBoard] = useState<AshareBoardId>("all");
+  const [board, setBoard] = useState<CnEquityBoardId>("all");
   const [codes, setCodes] = useState<CodeRow[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState("600519");
@@ -195,7 +195,7 @@ export default function AsharePage() {
 
   const activeKType = chartTab === "1d" ? "1d" : chartTab === "intraday" ? "intraday" : otherK;
 
-  // 滚动会高频回调；合并到 rAF，减少 quotes 分块打爆网关（ashare 虽已豁免限流，仍降抖）
+  // 滚动会高频回调；合并到 rAF，减少 quotes 分块打爆网关（cn-equity 虽已豁免限流，仍降抖）
   const rangeRaf = useRef<number | null>(null);
   const onVisibleRange = useCallback((start: number, end: number) => {
     if (rangeRaf.current != null) cancelAnimationFrame(rangeRaf.current);
@@ -364,7 +364,7 @@ export default function AsharePage() {
     const q = query.trim().toUpperCase();
     const priorityIdx = new Map(PRIORITY.map((c, i) => [c, i]));
     let list = codes.filter((c) =>
-      matchesAshareBoard(c.stock_code, c.exchange, board),
+      matchesCnEquityBoard(c.stock_code, c.exchange, board),
     );
     if (q) {
       list = list.filter(
@@ -592,7 +592,7 @@ export default function AsharePage() {
             </span>
           </div>
           <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
-            {ASHARE_BOARDS.map((b) => (
+            {CN_EQUITY_BOARDS.map((b) => (
               <button
                 key={b.id}
                 type="button"
@@ -629,7 +629,7 @@ export default function AsharePage() {
             onVisibleRange={onVisibleRange}
             empty={<p className="bn-empty">无匹配标的</p>}
             renderRow={(c) => (
-              <AshareMktRow
+              <CnEquityMktRow
                 row={c}
                 quote={quotes[c.stock_code]}
                 active={c.stock_code === selected}
@@ -758,7 +758,7 @@ export default function AsharePage() {
             </div>
             <p className="bn-demo-hint ths-five-note">
               {five.note ||
-                "盘口来自 qdb；完整五档依赖 collector 写入 ashare:depth。"}
+                "盘口来自 qdb；完整五档依赖 collector 写入 cn-equity:depth。"}
             </p>
           </div>
         </aside>
@@ -778,7 +778,7 @@ export default function AsharePage() {
   );
 }
 
-function AshareMktRow({
+function CnEquityMktRow({
   row,
   quote,
   active,

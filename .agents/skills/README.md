@@ -1,6 +1,6 @@
 # EquityLab Agent Skills
 
-仓库级硬约定：[../../AGENTS.md](../../AGENTS.md)。推荐目录：[../../docs/2026-10-15-agent-skills-catalog.md](../../docs/2026-10-15-agent-skills-catalog.md)。  
+仓库级硬约定：[../../AGENTS.md](../../AGENTS.md)。推荐目录：[../../docs/agents/2026-10-15-agent-skills-catalog.md](../../docs/agents/2026-10-15-agent-skills-catalog.md)。  
 锁文件：根目录 [`skills-lock.json`](../../skills-lock.json)（`npx skills` 安装记录）。
 
 ## 来源说明
@@ -22,7 +22,7 @@
 | [equitylab-dod](./equitylab-dod/SKILL.md) | **完成判据**：变更分级、冒烟证据、数据面门禁；收尾强制自检 |
 | [equitylab-dev](./equitylab-dev/SKILL.md) | 改 gateway / orchestrator / research / market-data / frontend / Compose |
 
-角色卡：[../team/README.md](../team/README.md) · 流水线文档：[../../docs/2026-10-15-agent-pipeline.md](../../docs/2026-10-15-agent-pipeline.md)
+角色卡：[../team/README.md](../team/README.md) · 流水线文档：[../../docs/agents/2026-10-15-agent-pipeline.md](../../docs/agents/2026-10-15-agent-pipeline.md)
 
 ### 文档与领域
 

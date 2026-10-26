@@ -59,16 +59,16 @@ curl -s -X POST http://localhost:3000/api/chat \
 
 | 文档 | 内容 |
 |---|---|
-| [文档索引](docs/2026-10-15-文档索引.md) | `docs/` 入口（文件名均带日期前缀） |
-| [技术栈与版本](docs/2026-10-15-tech-stack.md) | 依赖基线与明确不做项 |
-| [架构与 Agent](docs/2026-10-15-architecture.md) | 链路、工具、RAG、模型路由 |
-| [API 参考](docs/2026-10-15-api.md) | HTTP 契约与示例 |
-| [容器组与端口](docs/2026-10-15-containers.md) | Compose、环境变量、排障 |
-| [qdb 行情库](docs/2026-10-20-qdb-行情库.md) | 本仓落点；最新契约见同级 `../qdb/docs/manual/` |
-| [工程约定](docs/2026-10-15-engineering.md) | **文档与代码注释规范** |
-| [立项改造说明](docs/2026-10-15-migration.md) | 去 Java 记录 |
-| [Agent Skills 目录](docs/2026-10-15-agent-skills-catalog.md) | 栈相关高热 skills 推荐 |
-| [多智能体流水线](docs/2026-10-15-agent-pipeline.md) | 规划→架构→开发→测试→评审→部署→运维 |
+| [文档索引](docs/2026-10-26-文档索引.md) | `docs/` 入口（文件名均带日期前缀） |
+| [技术栈与版本](docs/platform/2026-10-15-tech-stack.md) | 依赖基线与明确不做项 |
+| [架构与 Agent](docs/platform/2026-10-15-architecture.md) | 链路、工具、RAG、模型路由 |
+| [API 参考](docs/platform/2026-10-15-api.md) | HTTP 契约与示例 |
+| [容器组与端口](docs/platform/2026-10-15-containers.md) | Compose、环境变量、排障 |
+| [qdb 行情库](docs/market/2026-10-20-qdb-行情库.md) | 本仓落点；最新契约见同级 `../qdb/docs/manual/` |
+| [工程约定](docs/platform/2026-10-15-engineering.md) | **文档与代码注释规范** |
+| [立项改造说明](docs/platform/2026-10-15-migration.md) | 去 Java 记录 |
+| [Agent Skills 目录](docs/agents/2026-10-15-agent-skills-catalog.md) | 栈相关高热 skills 推荐 |
+| [多智能体流水线](docs/agents/2026-10-15-agent-pipeline.md) | 规划→架构→开发→测试→评审→部署→运维 |
 | [AGENTS.md](AGENTS.md) | 编码 Agent 硬性约定 |
 | [CONTEXT.md](CONTEXT.md) | 领域术语 |
 | [.agents/skills](.agents/skills/README.md) | 开发用 Agent Skills |
@@ -79,7 +79,7 @@ curl -s -X POST http://localhost:3000/api/chat \
 1. 私有研报本地向量化（Qdrant），不外泄原文到不可信渠道。  
 2. 因子/回测在 Python 确定性引擎执行，模型只做规划与解释。  
 3. 行情经 collector → qdb；业务层只读；Redis 边路缓存 + 网关限流；盘中 WS 不进 MCP。  
-4. 多模型路由按任务复杂度控成本（见 `docs/2026-10-15-architecture.md`）。
+4. 多模型路由按任务复杂度控成本（见 `docs/platform/2026-10-15-architecture.md`）。
 
 ## MVP 已落地 / 后续
 
