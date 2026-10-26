@@ -111,7 +111,7 @@ docker compose down
 | `/v1/klines` 一直挂起 | 引擎锁死（旧进程） | `docker compose restart qdb`（必要时先 `stop collector`） |
 | collector 解析不了 `qdb` | 容器网络陈旧 | `docker compose up -d --force-recreate collector` |
 | Prometheus target DOWN / Grafana 无指标 | 服务未 rebuild / scrape 端口错 | `docker compose up -d --build prometheus grafana gateway research market-data orchestrator collector history-ingest`；`curl localhost:9091/api/v1/targets` 看 `health`；采集族须有 `METRICS_PORT` 且日志含 `metrics listening` |
-| 盘口发僵 / 报价滞后 | write_gate 积压或轮询过慢；休市也会抬高发僵数 | Grafana **EquityLab 行情 → 新鲜度**：看「A 股报价年龄」「种子发僵只数」；「写队列积压」持续高则 recreate collector；盘中期望年龄大体 < 数分钟、非跳过时发僵≈0（休市可偏高） |
+| 盘口发僵 / 报价滞后 | write_gate 积压或轮询过慢；休市也会抬高发僵数 | Grafana **EquityLab 行情 → 核心运行态**：看「A 股/币安盘口」是否在动、「报价写队列」是否红；休市 A 股「停滞」可忽略。深挖打开折叠「排障 · 新鲜度」。盘中期望在动、队列绿；队列持续红则 recreate collector |
 
 ## Schema 初始化
 

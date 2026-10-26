@@ -8,62 +8,66 @@
   "panels": [
     {
       "type": "row",
-      "title": "1 · 源健康（进程是否活着、写入是否堵）",
+      "title": "核心运行态（技术负责人一眼看）",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
       "collapsed": false,
       "panels": []
     },
     {
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 1 },
+      "options": {
+        "mode": "markdown",
+        "content": "**三问**：热盘口在不在动 · 写路径堵不堵 · 冷日线补到哪了。  \n**读法**：优先看本行六格颜色。A 股「停滞」在**休市/周末**属正常；币安几乎 7×24，长期「停滞」才要查。下方折叠区给排障深挖。"
+      }
+    },
+    {
       "type": "stat",
-      "title": "采集器存活",
-      "description": "collector 进程心跳。绿=正在跑；红=进程挂了或 metrics 未起来。",
-      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
+      "title": "采集链路",
+      "description": "collector + history-ingest 是否都在心跳。双活=两条写入链路都活；半挂/全挂立刻查容器。",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "equitylab_collector_up", "refId": "A" }],
+      "targets": [
+        {
+          "expr": "(equitylab_collector_up or vector(0)) + (equitylab_history_ingest_up or vector(0))",
+          "refId": "A"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
+              { "color": "yellow", "value": 1 },
+              { "color": "green", "value": 2 }
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "全挂" },
+                "1": { "text": "半挂" },
+                "2": { "text": "双活" }
+              }
+            }
           ]
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
     },
     {
       "type": "stat",
-      "title": "历史回补存活",
-      "description": "history-ingest 进程心跳。负责把 A 股日线缺口写入 Postgres market.bar_daily。",
-      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "equitylab_history_ingest_up", "refId": "A" }],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          },
-          "mappings": [
-            { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
-          ]
-        }
-      },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "A 股采集开关",
-      "description": "COLLECTOR_SKIP_CN_EQUITY。绿「采集中」=正在拉 A 股；红「已跳过」=排障应急关掉了，行情页会空。",
-      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
+      "title": "A 股采集",
+      "description": "是否在拉 A 股报价。已跳过=排障开关 COLLECTOR_SKIP_CN_EQUITY=1，行情页会空，生产默认不应出现。",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "equitylab_cn_equity_skip", "refId": "A" }],
       "fieldConfig": {
@@ -76,19 +80,34 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "采集中" }, "1": { "text": "已跳过" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "开着" },
+                "1": { "text": "已跳过" }
+              }
+            }
           ]
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
     },
     {
       "type": "stat",
-      "title": "币安 WS",
-      "description": "币安现货 WebSocket 是否健康。红=断流，现货盘口会停更。",
-      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 1 },
+      "title": "A 股盘口",
+      "description": "最近 3 分钟内是否写过 A 股报价。在动=热路径通；停滞=盘中要查采集/写队列，休市停滞可忽略。",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "equitylab_binance_ws_up", "refId": "A" }],
+      "targets": [
+        {
+          "expr": "(time() - equitylab_quote_last_success_unixtime{market=\"cn_equity\"}) < 180",
+          "refId": "A"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
           "thresholds": {
@@ -99,168 +118,31 @@
             ]
           },
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "断流" }, "1": { "text": "通" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "停滞" },
+                "1": { "text": "在动" }
+              }
+            }
           ]
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
     },
     {
       "type": "stat",
-      "title": "qdb 写失败/秒",
-      "description": "写 qdb 失败速率。持续 >0 说明引擎忙、网络断或鉴权问题，盘口会发僵。",
-      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 1 },
+      "title": "币安盘口",
+      "description": "最近 60 秒内是否写过币安报价。几乎全天应「在动」；长期「停滞」查 Binance WS。",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(equitylab_qdb_write_errors_total[5m])",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "timeseries",
-      "title": "写队列积压（write_gate）",
-      "description": "待刷入 qdb 的条数。quotes=报价、trades=成交、docs=文档。quotes 长期很高 → 盘口滞后。",
-      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_write_gate_pending",
-          "legendFormat": "{{kind}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "成交队列丢弃累计",
-      "description": "成交缓冲溢出被丢掉的条数（累计）。上升说明 trades 写不过来；报价路径一般不受影响。",
-      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_write_gate_trade_drops_total",
-          "legendFormat": "成交丢弃",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "qdb 写失败速率",
-      "description": "与左侧「写失败/秒」同源，看趋势是否在恶化。",
-      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "rate(equitylab_qdb_write_errors_total[5m])",
-          "legendFormat": "失败/秒",
-          "refId": "A"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "2 · 新鲜度（盘口是否在动；休市时发僵属正常）",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "stat",
-      "title": "A 股报价年龄",
-      "description": "距上次成功写入 A 股报价过了多久（秒）。盘中宜 < 数分钟；休市会持续变大，属正常。",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "time() - equitylab_quote_last_success_unixtime{market=\"cn_equity\"}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 120 },
-              { "color": "red", "value": 300 }
-            ]
-          }
-        }
-      },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "币安报价年龄",
-      "description": "距上次成功写入币安报价过了多久（秒）。币安几乎 7×24，年龄长期很大说明 WS 断了。",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "time() - equitylab_quote_last_success_unixtime{market=\"binance\"}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 30 },
-              { "color": "red", "value": 120 }
-            ]
-          }
-        }
-      },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "种子盘口最大年龄",
-      "description": "种子标的（CN_EQUITY_SEED）里最旧的一只距上次写入多久。反映「核心票」是否在更新。",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_snapshot_age_seconds{sample=\"seed\"}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 120 },
-              { "color": "red", "value": 300 }
-            ]
-          }
-        }
-      },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "种子发僵只数",
-      "description": "种子集中超过 STALE_QUOTE_SEC（默认 120 秒）未更新的只数。盘中非 skip 时宜≈0；休市偏高正常。",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_snapshot_stale_count{sample=\"seed\"}",
+          "expr": "(time() - equitylab_quote_last_success_unixtime{market=\"binance\"}) < 60",
           "refId": "A"
         }
       ],
@@ -269,87 +151,63 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "停滞" },
+                "1": { "text": "在动" }
+              }
+            }
+          ]
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "报价写队列",
+      "description": "write_gate 里待刷的报价条数。绿=畅通；黄=积压；红=严重堵，盘口会滞后。",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 3 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "equitylab_write_gate_pending{kind=\"quotes\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 3 }
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
             ]
           }
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "全表一轮约需",
-      "description": "按当前宇宙与批次估算：扫完一遍全部 A 股报价大约要多少秒。越大=边缘票越「旧」。",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_cn_equity_full_cycle_seconds",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "s" } },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "A 股宇宙规模",
-      "description": "collector 正在轮询的 A 股标的数（含沪深北）。为 0 且「已跳过」时说明未开 A 股采集。",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_cn_equity_universe_size",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "timeseries",
-      "title": "报价写入吞吐",
-      "description": "每秒写入 qdb 的报价条数（按市场）。跌到接近 0 且非休市 → 采集/写路径异常。",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "rate(equitylab_quotes_written_total[1m])",
-          "legendFormat": "{{market}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ops" } },
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "A 股单轮轮询耗时",
-      "description": "一轮 REST 拉价平均耗时（秒）。突然变大可能是上游慢或本机代理问题。",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "rate(equitylab_cn_equity_poll_seconds_sum[5m]) / rate(equitylab_cn_equity_poll_seconds_count[5m])",
-          "legendFormat": "平均耗时",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
-    },
-    {
-      "type": "row",
-      "title": "3 · 覆盖缺口（冷日线是否补齐）",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
-      "collapsed": false,
-      "panels": []
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      }
     },
     {
       "type": "stat",
       "title": "日线覆盖率",
-      "description": "窗口内达标标的 / 宇宙。越接近 100% 越好；回补初期会从低往上爬。",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 23 },
+      "description": "冷库 A 股日线达标比例（达标只数/宇宙）。越接近 100% 历史越齐；回补初期会偏低。",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -372,113 +230,488 @@
           }
         }
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
-    },
-    {
-      "type": "stat",
-      "title": "已达标只数",
-      "description": "窗口内日线条数 ≥ MIN_BARS 的标的数量。",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_history_ingest_coverage_ok",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "回补宇宙",
-      "description": "本轮 history-ingest 要覆盖的标的总数（通常≈全 A）。",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_history_ingest_universe",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "本轮缺口队列",
-      "description": "本轮排队去拉上游补日线的缺口数。为 0 且覆盖率高 = 暂时补齐。",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_history_ingest_gaps_queued",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "日线总行数",
-      "description": "Postgres market.bar_daily 全表行数。应随回补单调增加（不会因读路径而变）。",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_market_bar_daily_rows",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "stat",
-      "title": "回补轮次",
-      "description": "history-ingest 已跑完的覆盖轮数。重启会从 1 重新计。",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_history_ingest_round",
-          "refId": "A"
-        }
-      ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
-    },
-    {
-      "type": "timeseries",
-      "title": "回补结果速率（按状态）",
-      "description": "每秒填缺口次数，按 status 分。ok/written 上升健康；fail 持续升高需看日志。",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "rate(equitylab_history_ingest_fill_total[5m])",
-          "legendFormat": "{{status}}",
-          "refId": "A"
-        }
-      ],
-      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
-    },
-    {
-      "type": "timeseries",
-      "title": "日线覆盖率趋势",
-      "description": "覆盖率随时间变化。健康形态是逐步爬升后在高位横盘。",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        {
-          "expr": "equitylab_history_ingest_coverage_ratio",
-          "legendFormat": "覆盖率",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1
-        }
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
       }
+    },
+    {
+      "type": "row",
+      "title": "排障 · 源健康（进程 / 写入）",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "采集器存活",
+          "description": "collector 进程心跳。绿=正在跑；红=进程挂了或 metrics 未起来。",
+          "gridPos": { "h": 4, "w": 3, "x": 0, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "equitylab_collector_up", "refId": "A" }],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              },
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
+              ]
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "历史回补存活",
+          "description": "history-ingest 进程心跳。负责把 A 股日线缺口写入 Postgres market.bar_daily。",
+          "gridPos": { "h": 4, "w": 3, "x": 3, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "equitylab_history_ingest_up", "refId": "A" }],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              },
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "宕机" }, "1": { "text": "正常" } } }
+              ]
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "A 股采集开关",
+          "description": "COLLECTOR_SKIP_CN_EQUITY。绿「采集中」=正在拉 A 股；红「已跳过」=排障应急关掉了。",
+          "gridPos": { "h": 4, "w": 3, "x": 6, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "equitylab_cn_equity_skip", "refId": "A" }],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              },
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "采集中" }, "1": { "text": "已跳过" } } }
+              ]
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "币安 WS",
+          "description": "币安现货 WebSocket 是否健康。红=断流，现货盘口会停更。",
+          "gridPos": { "h": 4, "w": 3, "x": 9, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [{ "expr": "equitylab_binance_ws_up", "refId": "A" }],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              },
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "断流" }, "1": { "text": "通" } } }
+              ]
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "qdb 写失败/秒",
+          "description": "写 qdb 失败速率。持续 >0 说明引擎忙、网络断或鉴权问题。",
+          "gridPos": { "h": 4, "w": 3, "x": 12, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(equitylab_qdb_write_errors_total[5m])",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "timeseries",
+          "title": "写队列积压（write_gate）",
+          "description": "待刷入 qdb 的条数。quotes=报价、trades=成交、docs=文档。",
+          "gridPos": { "h": 8, "w": 9, "x": 15, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_write_gate_pending",
+              "legendFormat": "{{kind}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "成交队列丢弃累计",
+          "description": "成交缓冲溢出被丢掉的条数（累计）。",
+          "gridPos": { "h": 4, "w": 12, "x": 0, "y": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_write_gate_trade_drops_total",
+              "legendFormat": "成交丢弃",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "short" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "qdb 写失败速率",
+          "description": "写失败趋势是否在恶化。",
+          "gridPos": { "h": 4, "w": 3, "x": 12, "y": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(equitylab_qdb_write_errors_total[5m])",
+              "legendFormat": "失败/秒",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "排障 · 新鲜度（盘口是否在动）",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "A 股报价年龄",
+          "description": "距上次成功写入 A 股报价过了多久（秒）。盘中宜 < 数分钟；休市会变大，属正常。",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "time() - equitylab_quote_last_success_unixtime{market=\"cn_equity\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 120 },
+                  { "color": "red", "value": 300 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "币安报价年龄",
+          "description": "距上次成功写入币安报价过了多久（秒）。",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "time() - equitylab_quote_last_success_unixtime{market=\"binance\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 30 },
+                  { "color": "red", "value": 120 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "种子盘口最大年龄",
+          "description": "种子标的里最旧一只距上次写入多久。",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_snapshot_age_seconds{sample=\"seed\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 120 },
+                  { "color": "red", "value": 300 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "种子发僵只数",
+          "description": "种子中超过 STALE_QUOTE_SEC（默认 120s）未更新的只数。休市偏高正常。",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_snapshot_stale_count{sample=\"seed\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 3 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "全表一轮约需",
+          "description": "扫完一遍全部 A 股报价大约要多少秒。",
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_cn_equity_full_cycle_seconds",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "stat",
+          "title": "A 股宇宙规模",
+          "description": "collector 正在轮询的 A 股标的数。",
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_cn_equity_universe_size",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "timeseries",
+          "title": "报价写入吞吐",
+          "description": "每秒写入 qdb 的报价条数（按市场）。",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(equitylab_quotes_written_total[1m])",
+              "legendFormat": "{{market}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ops" } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "A 股单轮轮询耗时",
+          "description": "一轮 REST 拉价平均耗时（秒）。",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(equitylab_cn_equity_poll_seconds_sum[5m]) / rate(equitylab_cn_equity_poll_seconds_count[5m])",
+              "legendFormat": "平均耗时",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "排障 · 覆盖缺口（冷日线）",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "日线覆盖率",
+          "description": "窗口内达标标的 / 宇宙。",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_coverage_ratio",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 0.5 },
+                  { "color": "green", "value": 0.9 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+        },
+        {
+          "type": "stat",
+          "title": "已达标只数",
+          "description": "窗口内日线条数 ≥ MIN_BARS 的标的数量。",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_coverage_ok",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "stat",
+          "title": "回补宇宙",
+          "description": "本轮要覆盖的标的总数。",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_universe",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "stat",
+          "title": "本轮缺口队列",
+          "description": "本轮排队补日线的缺口数。",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_gaps_queued",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "stat",
+          "title": "日线总行数",
+          "description": "Postgres market.bar_daily 全表行数。",
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_market_bar_daily_rows",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "stat",
+          "title": "回补轮次",
+          "description": "history-ingest 已跑完的覆盖轮数。",
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_round",
+              "refId": "A"
+            }
+          ],
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+        },
+        {
+          "type": "timeseries",
+          "title": "回补结果速率（按状态）",
+          "description": "每秒填缺口次数，按 status 分。",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(equitylab_history_ingest_fill_total[5m])",
+              "legendFormat": "{{status}}",
+              "refId": "A"
+            }
+          ],
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "日线覆盖率趋势",
+          "description": "覆盖率随时间变化。健康形态是逐步爬升后在高位横盘。",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "equitylab_history_ingest_coverage_ratio",
+              "legendFormat": "覆盖率",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            }
+          }
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
@@ -486,8 +719,8 @@
   "templating": { "list": [] },
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
-  "timezone": "browser",
+  "timezone": "Asia/Shanghai",
   "title": "EquityLab 行情",
   "uid": "equitylab-market",
-  "version": 3
+  "version": 4
 }

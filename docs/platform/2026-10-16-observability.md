@@ -78,7 +78,9 @@ equitylab_market_bar_daily_rows                     # 日线总行数
 ### Grafana 看板
 
 - **EquityLab 平台**（uid `equitylab-platform`）：抓取存活、QPS、p95、5xx（面板标题与悬停说明为中文）
-- **EquityLab 行情**（uid `equitylab-market`）：三区 — **源健康** / **新鲜度** / **覆盖缺口**（面板悬停有中文释义）
+- **EquityLab 行情**（uid `equitylab-market`）：
+  - **核心运行态**（默认展开）：采集链路 / A 股采集开关 / A 股·币安盘口是否在动 / 报价写队列 / 日线覆盖率 — 技术负责人一眼三问（热盘口、写堵、冷覆盖）
+  - **排障折叠区**：源健康、新鲜度、覆盖缺口（默认折叠，点开深挖）
 
 预置 JSON：`infra/observability/grafana/dashboards/`。
 
