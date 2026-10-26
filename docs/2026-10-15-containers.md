@@ -22,7 +22,7 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 
 卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`。
 
-qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。`collector` 是**唯一**可回源公开行情的服务：A 股、币安现货、Ondo 代币化美股经 `packages/qdb-rs` 写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层与 market-data **读路径零外呼**，只读 `http://qdb:9090`（经客户端包）；前端订阅读经 market-data `/qdb/ws`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。`collector` 是**唯一**可回源公开行情的服务：A 股、币安现货、Ondo 代币化美股经 `packages/qdb-py`（`equitylab_qdb`）写入 `POST /v1/quotes`、`POST /v1/trades`、`POST /v1/docs`。研究层（`qdb-py`）与 market-data（`qdb-rs`）**读路径零外呼**，只读 `http://qdb:9090`（经客户端包）；前端订阅读经 market-data `/qdb/ws` + `@equitylab/qdb`。用法与排障：[2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)。升级或改读写前先读同级 `../qdb/docs/manual/index.md`，保持与 qdb 最新手册一致。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 

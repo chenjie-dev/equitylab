@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * A 股只读行情台（adata）。
+ * A 股只读行情台（只读 qdb；采集由 collector 回源）。
  * BFF：/api/ashare/* → Gateway /api/research/ashare/*
  */
 
@@ -454,7 +454,7 @@ export default function AsharePage() {
               </dl>
             )}
             <p className="bn-demo-hint">
-              K 线按 Wind 语义拆分：历史走公开源，实时报价从 qdb 读取。
+              K 线与报价均只读 qdb（collector 回源写入；WS 订当前标的 snapshots）。
             </p>
           </div>
         </aside>

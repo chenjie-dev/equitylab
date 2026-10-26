@@ -16,11 +16,12 @@
 
 ## Goals
 
-- 读：`GET /v1/snapshots`、`/v1/klines`、`/v1/docs`；`GET /v1/ws`（SELECT … SUBSCRIBE）
-- 写：`POST /v1/quotes`、`/v1/trades`、`/v1/docs`（含 wait/ready 探测）
+- 读：`GET /v1/snapshots`、`/v1/klines`（含 `limit` / `endTime`）、`/v1/docs`；`GET /v1/ws`（SELECT … SUBSCRIBE）
+- 写：`POST /v1/quotes`（`last` + 可选 `bid_px`/`ask_px`）、`/v1/trades`、`/v1/docs`（含 wait/ready 探测）
 - 三语言公共表面尽量同名：`Client`、`wait_ready`、`snapshots`、`klines`、`get_doc` / `put_docs`、`post_quotes`、`post_trades`、`subscribe`
 - 配置只认 `QDB_URL`（缺省 Compose 内 `http://qdb:9090`）；浏览器订阅读再认 `QDB_WS_PROXY`（缺省 `ws://localhost:3002/qdb/ws`）
 - 价格整数 `last` / `bid_px` / `ask_px`：包内提供 `PRICE_SCALE=10000` 与 `scale` / `unscale` 工具
+- **不封装**（本仓未用）：`GET /v1/changes`、集群/复制（`/v1/replicate`、`/v1/info`…）；需要时再扩包
 
 ## Non-goals
 
@@ -63,12 +64,13 @@ packages/
 Client(base_url = env QDB_URL)
   wait_ready(timeout) -> bool
   snapshots(symbols?: string[]) -> Snapshot[]
-  klines(symbol, period) -> Kline[]
+  klines(symbol, period, limit?, endTimeMs?) -> Kline[]   # HTTP 窗口读
   get_doc(key) -> json | null
   put_docs(items: {key, value}[]) -> written
   post_quotes(items) -> written   # last/bid_px/ask_px 为 scale 整数或提供 helper
   post_trades(items) -> written
   subscribe(sql, handlers) -> close()   # Node/浏览器：浏览器默认连 QDB_WS_PROXY
+  # Rust 另：ws_url() → qdb GET /v1/ws；klines_window(...)
 ```
 
 TS 另导出：
@@ -83,12 +85,12 @@ Python：同步 `requests` 客户端即可（collector / research 现状）；WS
 
 ## 迁移顺序
 
-1. 落地三包骨架 + 最小读写冒烟（对本地 qdb）
-2. collector → `qdb-py`（写 quotes/trades/docs + wait）
-3. research `ashare/qdb_client.py` → 依赖 `qdb-py`（保留 ashare 行映射在 research）
-4. market-data → `qdb-rs`（替换 `qdb_read`；WS 代理仍用本服务，上游 URL 由 crate 辅助生成）
-5. frontend → `@equitylab/qdb`（替换 `useQdbSnapshot`）
-6. 更新 `docs/2026-10-20-qdb-行情库.md`、containers、AGENTS 指针
+1. ~~落地三包骨架 + 最小读写冒烟（对本地 qdb）~~
+2. ~~collector → `qdb-py`（写 quotes/trades/docs + wait）~~
+3. ~~research `ashare/qdb_client.py` → 依赖 `qdb-py`（保留 ashare 行映射在 research）~~
+4. ~~market-data → `qdb-rs`（`qdb_read` / `qdb_ws`；上游 URL 由 crate `ws_url`）~~
+5. ~~frontend → `@equitylab/qdb`（`useQdbSnapshot` / `useQdbKlines` / `useQdbSnapshots`）~~
+6. 手册对齐时同步 `docs/2026-10-20-qdb-行情库.md`、containers、本设计（就地改）
 
 ## 验证
 

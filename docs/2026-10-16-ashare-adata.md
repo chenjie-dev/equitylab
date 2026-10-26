@@ -51,8 +51,9 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 
 ## 边界
 
-- 代码、报价、K 线、五档和分时都只读 `QDB_URL`。不在研究层回源。
-- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中。
+- 代码、报价、K 线、五档和分时都只读 `QDB_URL`（经 `equitylab_qdb`）。不在研究层回源。
+- K 线 HTTP **窗口读**（`limit` / 可选 `endTime`，手册上限 5000）；勿一次拉全历史。
+- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中。
 - 非交易所官方低延迟 feed；实时合成非 Wind 终端授权数据。
 - 不做交易、账户、融资融券。
 - 分钟 K 历史深度受 collector 回填窗口限制。

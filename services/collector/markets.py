@@ -402,12 +402,16 @@ def _poll_binance_tickers() -> None:
             continue
         docs.append({"key": f"binance:ticker:{symbol}", "value": row})
         price = float(row.get("lastPrice") or 0)
+        bid = float(row.get("bidPrice") or 0)
+        ask = float(row.get("askPrice") or 0)
         quotes.append(
             {
                 "exchange": "BINANCE",
                 "code": symbol,
                 "ts_ns": now_ns,
                 "last": scale(price),
+                "bid_px": scale(bid) if bid else 0,
+                "ask_px": scale(ask) if ask else 0,
                 "name": symbol,
                 "open": float(row.get("openPrice") or 0),
                 "high": float(row.get("highPrice") or 0),

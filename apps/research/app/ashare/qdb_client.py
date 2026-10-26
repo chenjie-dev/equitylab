@@ -16,8 +16,15 @@ def qdb_symbol(code: str) -> str:
     return f"{exchange}:{code6}"
 
 
-def klines(symbol: str, period: str) -> list[dict[str, Any]]:
-    return _client.klines(symbol, period)
+def klines(
+    symbol: str,
+    period: str,
+    *,
+    limit: int | None = None,
+    end_time_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """窗口读；对齐 qdb `GET /v1/klines` 的 `limit` / `endTime`（手册上限 5000）。"""
+    return _client.klines(symbol, period, limit=limit, end_time_ms=end_time_ms)
 
 
 def snapshots_all() -> dict[str, Any]:

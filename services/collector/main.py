@@ -198,6 +198,9 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
                 "code": row["code"],
                 "ts_ns": now_ns,
                 "last": scale(row["price"]),
+                # qdb QuoteIn：bid_px/ask_px 为 scale 整数（第 1 档）
+                "bid_px": scale(row["bid"]) if row.get("bid") else 0,
+                "ask_px": scale(row["ask"]) if row.get("ask") else 0,
                 "name": row["name"],
                 "open": row["open"],
                 "high": row["high"],
@@ -288,6 +291,9 @@ def parse_sina(body: str) -> list[dict]:
         parts = payload.split(",")
         if len(parts) < 10 or not parts[3]:
             continue
+        # 新浪：6/7 竞买卖价；11/21 为买一/卖一价（更准，缺省回落到 6/7）
+        bid = num(parts[11]) if len(parts) > 11 and parts[11] else num(parts[6])
+        ask = num(parts[21]) if len(parts) > 21 and parts[21] else num(parts[7])
         rows.append(
             {
                 "exchange": exchange,
@@ -298,6 +304,8 @@ def parse_sina(body: str) -> list[dict]:
                 "price": num(parts[3]),
                 "high": num(parts[4]),
                 "low": num(parts[5]),
+                "bid": bid,
+                "ask": ask,
                 "volume": num(parts[8]),
                 "amount": num(parts[9]),
             }
@@ -305,8 +313,9 @@ def parse_sina(body: str) -> list[dict]:
     return rows
 
 
-def get_klines(symbol: str, period: str) -> list[dict]:
-    return qdb.klines(symbol, period)
+def get_klines(symbol: str, period: str, *, limit: int = 5000) -> list[dict]:
+    """回填去重用；默认窗口对齐 qdb `limit` 上限 5000。"""
+    return qdb.klines(symbol, period, limit=limit)
 
 
 def _post_raw(path: str, body: dict) -> None:

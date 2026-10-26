@@ -319,7 +319,7 @@ class AshareService:
 
 
 def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]]:
-    """K 线只从 qdb 读。周/月由日线归并，30 分由 15 分两两归并。"""
+    """K 线只从 qdb 读（窗口 limit）。周/月由日线归并，30 分由 15 分两两归并。"""
     from datetime import datetime, timezone
 
     from app.ashare.qdb_client import klines as qdb_klines
@@ -328,8 +328,12 @@ def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]
     period = {"1w": "1d", "1M": "1d", "30m": "15m", "60m": "1h", "1h": "1h"}.get(k_type, k_type)
     if period not in ("1d", "5m", "15m", "1h"):
         period = "1d"
+    # 折叠会吞原生桶；多取一点，且不超过 qdb HTTP 上限 5000
+    fold = {"30m": 2, "1w": 7, "1M": 31}.get(k_type, 1)
+    want = max(1, int(limit) if limit > 0 else 300)
+    raw_limit = min(5000, want * fold + fold)
     candles: list[dict[str, Any]] = []
-    for row in qdb_klines(qdb_symbol(code), period):
+    for row in qdb_klines(qdb_symbol(code), period, limit=raw_limit):
         ts = row.get("ts")
         if ts is None:
             continue
