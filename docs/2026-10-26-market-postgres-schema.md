@@ -1,27 +1,23 @@
 # 历史行情 PostgreSQL 域模型（聚源语义对齐）
 
-> 创建日：2026-10-26。配套 SQL：[`infra/postgres/migrations/20261026_market_schema.sql`](../infra/postgres/migrations/20261026_market_schema.sql)、[`infra/postgres/init.sql`](../infra/postgres/init.sql)。
+> 创建日：2026-10-26。配套 SQL：[`infra/postgres/migrations/20261026_market_schema.sql`](../infra/postgres/migrations/20261026_market_schema.sql)、[`infra/postgres/init.sql`](../infra/postgres/init.sql)。  
+> **模块职责与禁令**以 [行情模块边界](./2026-10-26-行情模块边界.md) 为准；本文只定义 **冷库表结构**。
 
 ## 1. 目标
 
-- 历史 K 线、复权因子、交易日历、停牌落 **Postgres `market` schema**。
+- 历史 K 线、复权因子、交易日历、停牌落 **Postgres `market` schema**（冷权威）。
 - 语义对齐聚源常用表：`SecuMain` / `QT_DailyQuote` / `QT_AdjustingFactor` / `QT_TradingDayNew` / `QT_Suspend`。
 - **新浪 / adata 等只是 `data_source`**；业务 API 与路由用 **中国 A 股市场段** 名 `cn-equity`，不出现 ashare/adata 作资源名。
 
-## 2. 与 qdb 的边界
+## 2. 本 schema 边界
 
-| 层 | 职责 |
+| 属于 `market` | 不属于 `market` |
 |---|---|
-| **qdb** | 盘中快照、未闭合棒、订阅、短窗引擎 K 线（热路径） |
-| **Postgres `market`** | 已闭合历史棒、日历、停牌、复权因子（冷/回测/翻历史） |
+| 已闭合 `bar_daily` / `bar_minute` | 盘中未闭合棒、WebSocket 会话（→ qdb） |
+| `adjust_factor` / `trading_calendar` / `suspend` | 币安/RWA 盘中流（→ qdb；读经 market-data） |
+| `security` / `data_source` / `ingest_watermark` | 研报向量、会话审计（其它表/库） |
 
-```text
-上游（sina / binance / …）
-  → collector（唯一回源）
-      → qdb（quotes / trades / docs）
-      → Postgres market.*（history bars / calendar / suspend）
-  → research `/cn-equity`：history 优先 PG，realtime 仍 qdb，merged 拼接
-```
+写入默认 **仅 collector**；读取 A 股历史经 **research `/cn-equity`**。详见 [模块边界 §3.4](./2026-10-26-行情模块边界.md)。
 
 ## 3. 聚源对照
 

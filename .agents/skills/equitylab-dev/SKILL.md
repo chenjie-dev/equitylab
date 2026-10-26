@@ -18,7 +18,9 @@ description: >-
    - 行为 / Agent / 工具 → `docs/2026-10-15-architecture.md`（或索引中的最新架构文）  
    - HTTP 路径 / 请求体 → `docs/2026-10-15-api.md`  
    - 端口 / Compose / env → `docs/2026-10-15-containers.md`  
-   - 行情 / qdb → **先**同级 `../qdb/docs/manual/index.md`，再 `docs/2026-10-20-qdb-行情库.md` 与 `docs/2026-10-20-qdb-client-design.md`；业务访问 qdb **只经** `packages/qdb-*`  
+   - 行情模块职责 / 热冷 / 命名 → **`docs/2026-10-26-行情模块边界.md`（SSOT）**  
+   - 行情 / qdb 协议 → **先**同级 `../qdb/docs/manual/index.md`，再 `docs/2026-10-20-qdb-行情库.md` 与 `docs/2026-10-20-qdb-client-design.md`；业务访问 qdb **只经** `packages/qdb-*`  
+   - A 股历史表 → `docs/2026-10-26-market-postgres-schema.md`；产品面 → `docs/2026-10-26-cn-equity.md`  
 
 3. 确认改动落在哪一层，**只改该层及必要契约**：
 
@@ -27,17 +29,18 @@ description: >-
 | 对话 UI | `apps/frontend` |
 | 意图路由、TOOL_REGISTRY、轮次/超时 | `apps/orchestrator` |
 | RAG / 因子 / 回测 | `apps/research` |
+| 中国 A 股读面 | `apps/research/app/cn_equity`（`/cn-equity`；历史 `market` + 盘中 qdb） |
 | 限流、反代、鉴权 | `services/gateway` |
-| Quote/Bars、Provider、缓存 | `services/market-data`（币安/RWA 读 qdb） |
-| 采集写入 qdb | `services/collector`（经 `equitylab_qdb`，禁止业务直连 `/v1/*`） |
+| 币安/RWA Quote/Bars、`/qdb/ws` | `services/market-data`（只读 qdb；不读 A 股 `market`） |
+| 唯一回源 | `services/collector` → qdb（热）+ `market`（冷）；经 `equitylab_qdb` / `pg_market` |
 | qdb 客户端 | `packages/qdb-{py,ts,rs}` — 新用法先扩包 |
-| 行情库用法 | **权威**：`../qdb/docs/manual/*`；本仓落点：`docs/2026-10-20-qdb-行情库.md` + client-design |
-| 表结构引导 | `infra/postgres/init.sql`（已有卷不会自动重跑） |
+| 热行情库用法 | **权威**：`../qdb/docs/manual/*`；本仓落点：`docs/2026-10-20-qdb-行情库.md` + client-design |
+| 冷行情表 | `infra/postgres/migrations/*market*` + init 挂载（已有卷须手工迁移） |
 
 ## 实现规则
 
 - **深模块**：行情只经 `MarketDataProvider`；新数据源加 Provider，不改 handler 业务分支堆叠（见 skill `codebase-design`）。  
-- **读路径零外呼**：除 `services/collector` 外，禁止直查公开行情上游（币安 REST/WS、新浪、RWA bapi、AlphaFeed 等）；一律经 `packages/qdb-*` 读 qdb，或经 market-data 已 qdb 化的 REST / `/qdb/ws`（见根目录 `AGENTS.md` §7）。缺数据空/503，**禁止**在读 handler 里回源。实现时不要复活 `/v3` 透传、`/binance/ws` 上游代理、或 research 里的 sina/adata 直拉。  
+- **读路径零上游 + 热冷不串权**：除 `services/collector` 外禁止直查公开上游；盘中走 qdb，A 股历史走 `market`（经 `/cn-equity`）。见 `docs/2026-10-26-行情模块边界.md` 与 `AGENTS.md` §7。缺数据空/503。不要复活上游透传，或把 sina/adata 当成产品模块名。  
 - **工具三要素**：`name` + `description` + Zod/schema + `run`；编排层不得绕过注册表直打下游（调试除外）。  
 - **Stub 诚实**：演示 IC/回测/RAG 必须带 `demo` / mode=stub 或等价标注；禁止写成已生产可用。  
 - **缓存与限流**：报价写缓存默认 TTL 3s；网关限流按 IP 滑动窗口——改默认值时更新 `.env.example` 与 `docs/2026-10-15-containers.md`。  

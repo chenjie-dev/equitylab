@@ -10,7 +10,7 @@ EquityLab 面向量化研究与投资分析：用自然语言完成研报问答�
 |---|---|
 | 私有研报不外泄 | 向量化进 Qdrant；外呼模型只传必要上下文（后续加固） |
 | 因子/回测依赖 Python | `apps/research` 确定性引擎；模型只做规划与解释 |
-| 高频行情 | collector → qdb；Market-Data / Research 只读；网关限流；Redis TTL≈3s 作边路缓存 |
+| 高频行情 | collector → qdb（热）+ Postgres `market`（冷）；读路径零上游；网关限流；Redis TTL≈3s 作边路缓存。边界见 [行情模块边界](./2026-10-26-行情模块边界.md) |
 | 成本控制 | 多模型路由（规划）；无 Key 时仍可跑工具链 |
 
 **明确不做**：本地 vLLM；真实券商下单；Java 业务单体。
@@ -29,9 +29,9 @@ Gateway (Rust / Axum)  ──鉴权·限流·反代（MVP：限流+反代）
         │
         └──────────────► Market-Data / Research（路径前缀代理）
 
-存储：PostgreSQL（会话/审计） + Redis（报价边路缓存） + Qdrant（研报向量） + qdb（行情库）
+存储：PostgreSQL（会话/审计 + **`market` 冷行情**） + Redis（报价边路缓存） + Qdrant（研报向量） + qdb（**热**行情库）
 模型：外部 API（OpenAI / Claude / DeepSeek / Azure / 火山），无本地推理层
-采集：`services/collector` 唯一回源 → qdb；详见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)
+采集：`services/collector` 唯一回源 → qdb + `market`；模块边界 [2026-10-26-行情模块边界.md](./2026-10-26-行情模块边界.md)；qdb 协议 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)
 ```
 
 ### 典型请求链路
@@ -51,9 +51,10 @@ Gateway (Rust / Axum)  ──鉴权·限流·反代（MVP：限流+反代）
 | 编排层 | `apps/orchestrator` | TypeScript + Express | Agent 粗路由、工具注册、超时与轮次控制 |
 | 研究层 | `apps/research` | Python 3.12 + FastAPI | RAG / 因子 / 回测（当前 stub） |
 | 网关 | `services/gateway` | Rust + Axum | 统一入口、限流、反代 |
-| 行情 | `services/market-data` | Rust + Axum | Quote/Bars、币安/RWA 只读 qdb、边路缓存 |
-| 采集 | `services/collector` | Python | 公开源写入 qdb（唯一回源） |
-| 存储 | Compose | PG / Redis / Qdrant / qdb | 结构化、缓存、向量、行情库 |
+| 行情（非 A 股） | `services/market-data` | Rust + Axum | 币安/RWA 只读 qdb、`/qdb/ws`、边路缓存；不读 A 股 `market` |
+| A 股产品面 | `apps/research` `/cn-equity` | Python | 历史读 `market`、盘中读 qdb；见 [cn-equity](./2026-10-26-cn-equity.md) |
+| 采集 | `services/collector` | Python | 唯一回源：写 qdb + 写 `market` |
+| 存储 | Compose | PG / Redis / Qdrant / qdb | 结构化+冷行情、缓存、向量、热行情 |
 
 ## 4. Agent 与 Function Call
 

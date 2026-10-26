@@ -1,4 +1,8 @@
-"""中国 A 股行情（cn-equity）——只读；历史优先 Postgres，盘中读 qdb。"""
+"""中国 A 股产品读面（cn-equity）。
+
+边界：历史 → Postgres `market`；盘中 → qdb；禁止回源上游。
+非采集源名（sina/adata）。详见 docs/2026-10-26-行情模块边界.md。
+"""
 
 from .service import CnEquityService, AshareService
 

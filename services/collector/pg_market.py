@@ -1,7 +1,9 @@
-"""将已闭合历史棒 / 日历 / 停牌 / 水位写入 Postgres `market` schema。
+"""冷库写入：Postgres `market` schema（已闭合棒 / 日历 / 停牌 / 水位）。
 
-qdb 仍是盘中热路径；本模块只写冷数据。无source` 登记为 sina 等 data_source，
-不是业务 API 名。DATABASE_URL 未配置或库不可达时全部 no-op（不影响 qdb 采集）。
+边界（docs/2026-10-26-行情模块边界.md）：
+- 本模块只写冷数据；盘中热路径仍走 qdb，勿在此写未闭合棒。
+- `source_code` 为 data_source（sina 等），不是产品 API 名。
+- DATABASE_URL 未配置或库不可达时 no-op，不阻断 qdb 采集。
 """
 
 from __future__ import annotations
