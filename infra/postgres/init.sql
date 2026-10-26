@@ -1,26 +1,10 @@
 -- EquityLab MVP schema bootstrap
 --
 -- 仅在 Postgres 数据卷首次初始化时由 docker-entrypoint-initdb.d 执行。
--- 已有卷时修改本文件不会自动重跑，需手工迁移或重建 volume。
+-- 已有卷时修改本文件不会自动重跑，需手工执行 migrations/ 或重建 volume。
 --
--- 命名与索引约定参考 supabase-postgres-best-practices：
---   snake_case、显式主键、查询路径上的二级索引、表/列 COMMENT。
-
-CREATE TABLE IF NOT EXISTS klines (
-    symbol   VARCHAR(20)  NOT NULL,
-    period   VARCHAR(10)  NOT NULL,
-    datetime VARCHAR(32)  NOT NULL,
-    open     NUMERIC(12, 4),
-    high     NUMERIC(12, 4),
-    low      NUMERIC(12, 4),
-    close    NUMERIC(12, 4),
-    volume   BIGINT,
-    amount   NUMERIC(18, 2),
-    PRIMARY KEY (symbol, period, datetime)
-);
-
-CREATE INDEX IF NOT EXISTS idx_klines_symbol_period
-    ON klines (symbol, period);
+-- 行情历史表见同目录挂载的 02_market_schema.sql（market schema）。
+-- 命名约定：snake_case、显式主键、查询路径二级索引、COMMENT。
 
 CREATE TABLE IF NOT EXISTS audit_events (
     id         BIGSERIAL PRIMARY KEY,
@@ -47,7 +31,9 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_created
     ON chat_sessions (user_id, created_at DESC);
 
-COMMENT ON TABLE klines IS '历史 OHLCV；主键 (symbol, period, datetime)';
 COMMENT ON TABLE audit_events IS '审计日志；detail 存 JSON 载荷';
 COMMENT ON TABLE chat_sessions IS '聊天会话元数据';
 COMMENT ON COLUMN audit_events.detail IS '结构化审计载荷（JSONB，便于按 key 查询）';
+
+-- public.klines 已废弃：历史 OHLCV 见 market.bar_daily / market.bar_minute
+-- （docs/2026-10-26-market-postgres-schema.md）

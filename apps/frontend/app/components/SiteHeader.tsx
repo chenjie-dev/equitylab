@@ -8,7 +8,7 @@ import { HotTickerStrip } from "./markets/HotTickerStrip";
 const NAV = [
   { href: "/markets", label: "现货" },
   { href: "/markets/stocks", label: "代币化美股" },
-  { href: "/markets/ashare", label: "A股" },
+  { href: "/markets/cn", label: "A股" },
   { href: "/chat", label: "对话" },
   { href: "/backtest", label: "回测" },
 ];

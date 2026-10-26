@@ -1,5 +1,6 @@
 /**
- * BFF：浏览器 → `/api/ashare/*` → Gateway `/api/research/ashare/*`。
+ * 兼容旧 BFF：`/api/ashare/*` → Gateway `/api/research/ashare/*`（同 cn-equity）。
+ * 新代码请用 `/api/cn-equity/*`。
  */
 
 import { NextRequest, NextResponse } from "next/server";

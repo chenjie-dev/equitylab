@@ -10,10 +10,14 @@ def test_codes_router_limit_covers_full_universe():
     """前端 limit=10000 不得被 FastAPI le 卡成 422。"""
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
+    src = Path(__file__).resolve().parents[1] / "app" / "routers" / "cn_equity.py"
     text = src.read_text(encoding="utf-8")
     assert "le=12000" in text
-    assert "limit=10000" in text or '= 10000' in text
+    assert "limit=10000" in text or "= 10000" in text
+    # 旧前缀仍挂同一端点集
+    ashare_src = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
+    assert "cn_equity" in ashare_src.read_text(encoding="utf-8")
+    assert "prefix=\"/ashare\"" in ashare_src.read_text(encoding="utf-8") or "prefix='/ashare'" in ashare_src.read_text(encoding="utf-8")
 
 
 def test_ashare_exchange_maps_bse_before_sse_nine():

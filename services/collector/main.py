@@ -104,6 +104,17 @@ def main() -> None:
 
     # A 股历史回填必须在首轮 live poll 之前完成：qdb 对「早于当前未闭合桶」的
     # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（ASHARE_KLINE_CODES）。
+    # 粗填沪深北工作日日历（节假日由日线再确认）
+    try:
+        import pg_market
+
+        if pg_market.enabled():
+            for ex in ("SSE", "SZSE", "BSE"):
+                n = pg_market.seed_calendar_weekdays(ex)
+                print(f"pg_market calendar seed {ex} rows≈{n}", flush=True)
+    except Exception as exc:
+        print(f"pg_market calendar seed failed: {exc}", flush=True)
+
     if not skip_ashare and kline_codes:
         print(
             f"collector ashare backfill {len(kline_codes)} symbols "
@@ -216,12 +227,26 @@ def wait_qdb() -> None:
 def backfill(code: str) -> None:
     from retention import cutoff_ns
 
-    exchange, _ = split_symbol(code)
-    symbol = f"{exchange}:{code.zfill(6)}"
+    import pg_market
+
+    exchange, code6 = split_symbol(code)
+    symbol = f"{exchange}:{code6}"
     have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m")}
     have_1d = {int(row["ts"]) for row in get_klines(symbol, "1d")}
     minute = sina_klines(code, 5, 500)
     daily = sina_klines(code, 240, 300)
+    # 历史棒同时落 Postgres market.*（冷库）；失败不阻断 qdb 回填
+    try:
+        stats = pg_market.ingest_sina_klines(
+            exchange, code6, daily=daily, minute=minute, minute_period="5m"
+        )
+        if stats["daily"] or stats["minute"]:
+            print(
+                f"pg_market {symbol} daily={stats['daily']} minute={stats['minute']}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"pg_market {symbol} failed: {exc}", flush=True)
     covered = {bar["day"][:10] for bar in minute}
     cut = cutoff_ns()
     events: list[tuple[int, dict, str]] = []
@@ -257,7 +282,9 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
     trades = []
     depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
+    parsed_rows: list[dict] = []
     for row in parse_sina(text):
+        parsed_rows.append(row)
         quotes.append(
             {
                 "exchange": row["exchange"],
@@ -318,6 +345,21 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
         post("/v1/trades", {"items": trades})
     if depth_docs:
         post("/v1/docs", {"items": depth_docs})
+    # 名称含「停牌」时记一条当日 suspend（冷库）
+    try:
+        import pg_market
+
+        if pg_market.enabled():
+            for row in parsed_rows:
+                pg_market.maybe_mark_suspend_from_quote(
+                    row["exchange"],
+                    row["code"],
+                    name=str(row.get("name") or ""),
+                    volume=row.get("volume"),
+                    price=row.get("price"),
+                )
+    except Exception:
+        pass
 
 
 def ohlc_trades(exchange: str, code: str, ts: int, bar: dict) -> list[dict]:

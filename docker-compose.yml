@@ -17,7 +17,8 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - equitylab_pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./infra/postgres/migrations/20261026_market_schema.sql:/docker-entrypoint-initdb.d/02_market_schema.sql:ro
     networks: [equitylab]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -79,6 +80,7 @@ services:
     restart: unless-stopped
     environment:
       QDB_URL: http://qdb:9090
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
       # seed / 热门（K 线回填默认集）；全市场见 ASHARE_UNIVERSE
       COLLECTOR_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,600030,002415}
       COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
@@ -122,6 +124,8 @@ services:
       BINANCE_WS_DOC_FLUSH_MS: ${BINANCE_WS_DOC_FLUSH_MS:-200}
     depends_on:
       qdb:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks: [equitylab]
 

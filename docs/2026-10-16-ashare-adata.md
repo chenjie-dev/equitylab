@@ -1,6 +1,6 @@
-# A 股公开行情（读 qdb）
+# A 股公开行情（读 qdb）【旧名文档】
 
-> 创建日：2026-10-16。读路径只查 qdb；回源在 `services/collector`。本仓落点见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**契约以同级 `../qdb/docs/manual/` 最新手册为准**，过时则先对齐再改本文。只读，无下单。
+> 创建日：2026-10-16。**产品名已改为 cn-equity**，请优先阅读 [2026-10-26-cn-equity.md](./2026-10-26-cn-equity.md) 与 [行情 PG 域模型](./2026-10-26-market-postgres-schema.md)。下文路径 `/ashare` 仍兼容。读路径只查 qdb（历史将读 PG）；回源在 `services/collector`。本仓落点见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**契约以同级 `../qdb/docs/manual/` 最新手册为准**。只读，无下单。
 
 ## 落点
 

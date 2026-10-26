@@ -1,5 +1,5 @@
-"""A 股公开行情（adata）——只读，无交易。"""
+"""兼容包名 `app.ashare` → 请改用 `app.cn_equity`。"""
 
-from .service import AshareService
+from app.cn_equity.service import AshareService, CnEquityService
 
-__all__ = ["AshareService"]
+__all__ = ["AshareService", "CnEquityService"]
