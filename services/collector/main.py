@@ -11,10 +11,14 @@ import requests
 from equitylab_qdb import Client, scale as qdb_scale
 from equitylab_qdb import PRICE_SCALE as SCALE
 
-CODES = os.environ.get(
-    "COLLECTOR_CODES",
-    "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185",
+# 默认与 research `_SEED_CODES` / 前端 PRIORITY 对齐（沪深北 + ETF）；
+# 扩大列表：设 QDB_FEED_CODES 或 COLLECTOR_CODES（Compose 透传前者）。
+_DEFAULT_ASHARE_CODES = (
+    "600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,"
+    "830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,"
+    "600030,002415"
 )
+CODES = os.environ.get("COLLECTOR_CODES", _DEFAULT_ASHARE_CODES)
 INTERVAL = float(os.environ.get("COLLECTOR_INTERVAL_MS", "500")) / 1000
 UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.cn"}
 # 进程级 qdb 客户端（读写）；写纪律：仅本进程回源

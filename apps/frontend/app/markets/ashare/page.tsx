@@ -36,6 +36,7 @@ function ashareQdbSymbol(code: string): string {
   return `${ex}:${c}`;
 }
 
+/** 与 research `_SEED_CODES` / collector 默认 COLLECTOR_CODES 对齐（排序置顶）。 */
 const PRIORITY = [
   "600519",
   "000001",
@@ -54,7 +55,15 @@ const PRIORITY = [
   "601899",
   "300059",
   "002475",
+  "600276",
+  "000333",
+  "601166",
+  "600030",
+  "002415",
 ] as const;
+
+/** research `/ashare/quotes` 单次最多约 80；分块拉全列表。 */
+const QUOTE_CHUNK = 60;
 
 /** 主 Tab：分时 | 日K | 其他周期 */
 type ChartTab = "intraday" | "1d" | "other";
@@ -196,19 +205,23 @@ export default function AsharePage() {
   }, []);
 
   const loadQuotes = useCallback(async (list: string[]) => {
-    if (!list.length) return;
-    const res = await fetch(
-      `/api/ashare/quotes?codes=${encodeURIComponent(list.join(","))}`,
-    );
-    if (!res.ok) return;
-    const body = (await res.json()) as { data?: Quote[] };
-    setQuotes((prev) => {
-      const next = { ...prev };
-      for (const q of body.data ?? []) {
-        next[q.stock_code] = { ...prev[q.stock_code], ...q };
-      }
-      return next;
-    });
+    const unique = [...new Set(list.map((c) => c.replace(/\D/g, "").slice(-6)).filter(Boolean))];
+    if (!unique.length) return;
+    for (let i = 0; i < unique.length; i += QUOTE_CHUNK) {
+      const chunk = unique.slice(i, i + QUOTE_CHUNK);
+      const res = await fetch(
+        `/api/ashare/quotes?codes=${encodeURIComponent(chunk.join(","))}`,
+      );
+      if (!res.ok) continue;
+      const body = (await res.json()) as { data?: Quote[] };
+      setQuotes((prev) => {
+        const next = { ...prev };
+        for (const q of body.data ?? []) {
+          next[q.stock_code] = { ...prev[q.stock_code], ...q };
+        }
+        return next;
+      });
+    }
   }, []);
 
   const loadKlines = useCallback(async (code: string, kt: string) => {
@@ -329,25 +342,22 @@ export default function AsharePage() {
   );
   useListKeyboard(listIds, selected, setSelected, Boolean(listIds.length));
 
+  // 拉取当前展示列表全部报价（分块），不只 PRIORITY / 前几行
   useEffect(() => {
-    if (!codes.length) return;
-    const want = new Set<string>([...PRIORITY, selected]);
-    if (query.trim()) {
-      for (const c of filtered.slice(0, 40)) want.add(c.stock_code);
-    }
-    void loadQuotes([...want]);
+    if (!displayList.length) return;
+    const want = displayList.map((c) => c.stock_code);
+    if (selected && !want.includes(selected)) want.push(selected);
+    void loadQuotes(want);
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [codes, selected, query, filtered, loadQuotes]);
+  }, [displayList, selected, loadQuotes]);
 
   useEffect(() => {
     if (tick === 0) return;
-    const want = new Set<string>([...PRIORITY, selected]);
-    if (query.trim()) {
-      for (const c of filtered.slice(0, 40)) want.add(c.stock_code);
-    }
-    void loadQuotes([...want]);
-  }, [tick, selected, query, filtered, loadQuotes]);
+    const want = displayList.map((c) => c.stock_code);
+    if (selected && !want.includes(selected)) want.push(selected);
+    void loadQuotes(want);
+  }, [tick, displayList, selected, loadQuotes]);
 
   useQdbSnapshot(selected ? ashareQdbSymbol(selected) : null, (row) => {
     const price = row.last;

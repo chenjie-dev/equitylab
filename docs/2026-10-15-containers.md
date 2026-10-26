@@ -37,7 +37,7 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector |
 | `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
-| `QDB_FEED_CODES` / `COLLECTOR_CODES` | 茅台等 | A 股采集列表 |
+| `QDB_FEED_CODES` / `COLLECTOR_CODES` | seed≈22（茅台/宁德/北交所等） | A 股采集；与 `/markets/ashare` seed 对齐，扩大写 `.env` 后 recreate collector |
 | `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股报价热路径间隔；币安实时走 WS→qdb |
 | 客户端包 | `packages/qdb-{py,ts,rs}` | Compose 构建 context 为仓库根以 `COPY packages/` |
 | `NEXT_PUBLIC_MARKET_WS_URL` | `ws://localhost:3002` | 前端订 qdb（经 `/qdb/ws`） |

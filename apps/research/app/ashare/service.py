@@ -38,6 +38,8 @@ def _ashare_code6(raw: str) -> str | None:
     return digits
 
 
+# 列表种子：须与 collector 默认 COLLECTOR_CODES / Compose QDB_FEED_CODES 对齐，
+# 否则 UI 会列出无 qdb 快照的行。扩大宇宙：改三处默认 + 设 QDB_FEED_CODES。
 _SEED_CODES: list[dict[str, Any]] = [
     {"stock_code": "600519", "short_name": "贵州茅台", "exchange": "SH", "symbol": "600519.SH"},
     {"stock_code": "000001", "short_name": "平安银行", "exchange": "SZ", "symbol": "000001.SZ"},

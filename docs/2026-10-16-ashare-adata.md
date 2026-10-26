@@ -53,7 +53,7 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 
 - 代码、报价、K 线、五档和分时都只读 `QDB_URL`（经 `equitylab_qdb`）。不在研究层回源。
 - K 线 HTTP **窗口读**（`limit` / 可选 `endTime`，手册上限 5000）；勿一次拉全历史。
-- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）；五档写入 docs 键 `ashare:depth:{SSE\|SZSE\|BSE}:{code}`。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中（默认含北交所如 `830879`）。
+- 回源在 `services/collector`（新浪等公开源）：快照与 K 线写入 qdb（quotes 含 `bid_px`/`ask_px` 第 1 档）；五档写入 docs 键 `ashare:depth:{SSE\|SZSE\|BSE}:{code}`。代码需在 `QDB_FEED_CODES` / `COLLECTOR_CODES` 中（默认与 research `_SEED_CODES` 约 22 只对齐，含北交所如 `830879`；列表更长时扩 `.env`）。
 - 北交所：qdb `BSE:6位码`（如 `BSE:830879` / `BSE:920088`），新浪 `bj` 前缀；`list_codes` 展示 `830879.BJ`。仍排除 BINANCE/ONDO。
 - **启动**：A 股历史 trades 在首轮 live poll **之前**同步直写（qdb `late_tick`：早于未闭合桶的成交不进 K 线）。`bar_ts` 用北京时间。write_gate quotes 按标的只留最新。
 - UI：`/markets/ashare` 为同花顺启发的左列表 / 右图+五档布局（红涨绿跌）。
