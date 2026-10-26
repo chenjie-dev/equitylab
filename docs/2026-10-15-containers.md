@@ -85,7 +85,8 @@ docker compose down
 | market-data 日志 Redis warn | 启动瞬间 Redis 未就绪或 URL 错 | 检查 `REDIS_URL=redis://redis:6379`；无缓存仍可返回报价 |
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
 | 行情空 / 只有几根 K 线 | collector 未写 docs，或引擎 late-tick | Spot 看 `binance:kline:*`；`logs collector`；见 [qdb 排障](./2026-10-20-qdb-行情库.md) |
-| `/v1/klines` 超时、图表 Loading | ashare/全量 backfill/过密 trades 占住引擎锁 | `.env`：`COLLECTOR_SKIP_ASHARE=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；**保持** `BINANCE_WS_WRITE_QUOTES=1`（write_gate 已抬优先）；先 `stop collector` 再 `restart qdb` |
+| A 股 `/markets/ashare` 或 `SSE:600519` 快照一直空 | `.env` 留着 `COLLECTOR_SKIP_ASHARE=1`（排障应急未关回） | 设 `COLLECTOR_SKIP_ASHARE=0`（或删掉该行，compose 默认 0）；`docker compose up -d --force-recreate collector`；日志应有 `ashare=N` 而非 `ashare=skip`；再 curl `http://localhost:9090/v1/snapshots?symbols=SSE:600519` |
+| `/v1/klines` 超时、图表 Loading | ashare/全量 backfill/过密 trades 占住引擎锁 | `.env`：**临时** `COLLECTOR_SKIP_ASHARE=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；**保持** `BINANCE_WS_WRITE_QUOTES=1`（write_gate 已抬优先）；先 `stop collector` 再 `restart qdb`；引擎恢复后**务必**把 `COLLECTOR_SKIP_ASHARE` 改回 `0`，否则 A 股会一直空 |
 | 现货报价很慢 / snapshots 空 | `BINANCE_WS_WRITE_QUOTES=0` 或 RWA 抢写 | 打开 `WRITE_QUOTES=1`；确认日志有 `qdb write gate`；`RWA_WORKERS≤8`、`RWA_BOARD_FLUSH_SEC≥1`；recreate collector |
 | Stocks 页「暂无标的」/ quote 503 | `www.binance.com` 超时或 `RWA_WORKERS=0` | 宿主机 Clash 等代理测通 bapi 后设 `COLLECTOR_RWA_PROXY=http://host.docker.internal:7897`、`RWA_WORKERS=4`，recreate collector；现货仍可用 `COLLECTOR_HTTPS_PROXY=…:18080` |
 | 行情台卡顿 / 请求过多 | 后台轮询过密、全量 board | 前端已：可见性停表、Stocks 虚拟列表、board `?tickers=` 热路径、K 线 `update` 尾刷；勿把盘口轮询压到 &lt;3s |

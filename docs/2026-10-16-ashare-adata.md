@@ -57,3 +57,10 @@ curl -s 'http://localhost:3000/api/research/ashare/klines/600519?k_type=1d&view=
 - 非交易所官方低延迟 feed；实时合成非 Wind 终端授权数据。
 - 不做交易、账户、融资融券。
 - 分钟 K 历史深度受 collector 回填窗口限制。
+
+## 排障：报价 / 快照一直空
+
+1. 查 `.env`：`COLLECTOR_SKIP_ASHARE=1` 会关掉 A 股 REST 热路径与 backfill（compose 默认 `0`）。日常开发保持 `0` 或未设置。  
+2. `docker logs equitylab-collector`：正常应见 `ashare=N (… rest hot-path)`；若是 `ashare=skip` / `ashare backfill skipped`，按上条改 env 后 `docker compose up -d --force-recreate collector`。  
+3. 冒烟：`curl -s 'http://localhost:9090/v1/snapshots?symbols=SSE:600519'` 应有 `data`；再打 `GET /api/research/ashare/quotes?codes=600519`。  
+4. 读路径无新浪：若 qdb 有数而 research 空，查 `QDB_URL` / 符号映射（`600519` → `SSE:600519`），勿在 research 回源。
