@@ -177,6 +177,8 @@ type Props = {
   seriesKey?: string;
   onNeedHistory?: () => void;
   loading?: boolean;
+  /** 仍显示上一标的/周期 K 线，等待新数据时半透明 */
+  stale?: boolean;
   palette?: ChartPalette;
 };
 
@@ -186,6 +188,7 @@ export function BinanceChart({
   seriesKey,
   onNeedHistory,
   loading = false,
+  stale = false,
   palette = "wind",
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -744,7 +747,9 @@ export function BinanceChart({
       : null;
 
   return (
-    <div className={`bn-chart-root${ind.macd ? " has-macd" : ""}`}>
+    <div
+      className={`bn-chart-root${ind.macd ? " has-macd" : ""}${stale || (loading && klines.length > 0) ? " is-stale" : ""}`}
+    >
       <div className="bn-ohlc-bar">
         <span className="bn-ohlc-pair">{pair}</span>
         <div className="bn-ind-bar" role="toolbar" aria-label="技术指标">

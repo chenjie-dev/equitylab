@@ -17,12 +17,19 @@ import {
   BinanceChart,
   type Kline,
 } from "../../components/markets/BinanceChart";
+import {
+  getCachedKlines,
+  klineCacheKey,
+  prefetchKlines,
+  setCachedKlines,
+} from "../../components/markets/klineCache";
 import { useListKeyboard } from "../../components/markets/useListKeyboard";
 import { flashClass, usePriceFlash } from "../../components/markets/usePriceFlash";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
 import { useVisibilityPolling } from "../../components/markets/useVisibilityPolling";
 
-const KLINE_PAGE = 200;
+/** 首屏偏小加快切票；左滑再补 */
+const KLINE_PAGE = 120;
 /** 与 collector RWA docs 硬顶对齐，超出丢最旧 */
 const KLINE_MAX_BARS = 300;
 const KLINE_TAIL = 8;
@@ -140,6 +147,8 @@ export default function TokenizedStocksPage() {
   const [selected, setSelected] = useState<string>("");
   const [interval, setIntervalTf] = useState<Interval>("1h");
   const [klines, setKlines] = useState<Kline[]>([]);
+  const [chartKey, setChartKey] = useState("");
+  const [klineLoading, setKlineLoading] = useState(false);
   const [market, setMarket] = useState<MarketStatus | null>(null);
   const [detail, setDetail] = useState<Dynamic | null>(null);
   const [tokenMeta, setTokenMeta] = useState<StockToken | null>(null);
@@ -147,6 +156,8 @@ export default function TokenizedStocksPage() {
   const [feedEmpty, setFeedEmpty] = useState(false);
   const [historyDone, setHistoryDone] = useState(false);
   const historyLoadingRef = useRef(false);
+  const klineAbortRef = useRef<AbortController | null>(null);
+  const switchGenRef = useRef(0);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const boardTick = useVisibilityPolling(20_000);
@@ -256,6 +267,7 @@ export default function TokenizedStocksPage() {
       tf: Interval,
       limit: number,
       endTime?: number,
+      signal?: AbortSignal,
     ) => {
       const q = new URLSearchParams({
         chainId,
@@ -264,22 +276,84 @@ export default function TokenizedStocksPage() {
         limit: String(limit),
       });
       if (endTime != null) q.set("endTime", String(endTime));
-      const res = await fetch(`/api/market/binance/rwa/klines?${q}`);
-      if (!res.ok) return [] as Kline[];
-      const body = (await res.json()) as {
-        data?: { klineInfos?: unknown[][] };
-      };
-      return mapInfos(body.data?.klineInfos ?? []);
+      try {
+        const res = await fetch(`/api/market/binance/rwa/klines?${q}`, {
+          signal,
+        });
+        if (!res.ok) return [] as Kline[];
+        const body = (await res.json()) as {
+          data?: { klineInfos?: unknown[][] };
+        };
+        return mapInfos(body.data?.klineInfos ?? []);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") throw e;
+        return [] as Kline[];
+      }
     },
     [],
   );
 
+  const prefetchTicker = useCallback(
+    (token: StockToken) => {
+      const id = `${token.chainId}:${token.contractAddress}`;
+      const key = klineCacheKey("rwa", id, interval);
+      prefetchKlines(key, (signal) =>
+        fetchRwaKlines(
+          token.chainId,
+          token.contractAddress,
+          interval,
+          KLINE_PAGE,
+          undefined,
+          signal,
+        ),
+      );
+    },
+    [interval, fetchRwaKlines],
+  );
+
+  /** 缓存命中立刻上图；未命中保留旧图直至新数据 */
   const loadKlines = useCallback(
-    async (chainId: string, contract: string, tf: Interval) => {
+    async (
+      chainId: string,
+      contract: string,
+      tf: Interval,
+      displayKey: string,
+    ) => {
+      klineAbortRef.current?.abort();
+      const ac = new AbortController();
+      klineAbortRef.current = ac;
+      const gen = ++switchGenRef.current;
+      const id = `${chainId}:${contract}`;
+      const cacheKey = klineCacheKey("rwa", id, tf);
       setHistoryDone(false);
-      const mapped = await fetchRwaKlines(chainId, contract, tf, KLINE_PAGE);
-      setKlines(retainKlines(mapped));
-      if (mapped.length < KLINE_PAGE) setHistoryDone(true);
+
+      const cached = getCachedKlines(cacheKey);
+      if (cached?.length) {
+        setKlines(cached);
+        setChartKey(displayKey);
+      }
+      setKlineLoading(true);
+
+      try {
+        const mapped = await fetchRwaKlines(
+          chainId,
+          contract,
+          tf,
+          KLINE_PAGE,
+          undefined,
+          ac.signal,
+        );
+        if (gen !== switchGenRef.current) return;
+        const retained = retainKlines(mapped);
+        if (retained.length) setCachedKlines(cacheKey, retained);
+        setKlines(retained);
+        setChartKey(displayKey);
+        if (mapped.length < KLINE_PAGE) setHistoryDone(true);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+      } finally {
+        if (gen === switchGenRef.current) setKlineLoading(false);
+      }
     },
     [fetchRwaKlines],
   );
@@ -395,19 +469,38 @@ export default function TokenizedStocksPage() {
       setDetail(null);
       setTokenMeta(null);
       setKlines([]);
+      setChartKey("");
       return;
     }
+    const fromUniverse = universe.find((t) => t.ticker === selected);
+    if (fromUniverse) setTokenMeta(fromUniverse);
+    const displayKey = `${selected}:${interval}`;
     void (async () => {
       try {
-        const q = await loadDetail(selected);
+        // universe 已有 chain/contract → 与详情并行拉 K 线，避免瀑布
+        const klinesP = fromUniverse
+          ? loadKlines(
+              fromUniverse.chainId,
+              fromUniverse.contractAddress,
+              interval,
+              displayKey,
+            )
+          : Promise.resolve();
+        const [q] = await Promise.all([loadDetail(selected), klinesP]);
         if (!q) return;
-        await loadKlines(q.chainId, q.contractAddress, interval);
+        if (
+          !fromUniverse ||
+          q.chainId !== fromUniverse.chainId ||
+          q.contractAddress !== fromUniverse.contractAddress
+        ) {
+          await loadKlines(q.chainId, q.contractAddress, interval, displayKey);
+        }
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [selected, interval, loadDetail, loadKlines]);
+  }, [selected, interval, universe, loadDetail, loadKlines]);
 
   const ti = detail?.tokenInfo;
   const si = detail?.stockInfo;
@@ -547,6 +640,7 @@ export default function TokenizedStocksPage() {
                 pct={quotes[token.ticker]?.tokenInfo?.priceChangePct24h}
                 active={token.ticker === selected}
                 onPick={() => setSelected(token.ticker)}
+                onPrefetch={() => prefetchTicker(token)}
               />
             )}
           />
@@ -572,7 +666,9 @@ export default function TokenizedStocksPage() {
           <BinanceChart
             klines={klines}
             symbol={`${selected}on`}
-            seriesKey={`${selected}:${interval}`}
+            seriesKey={chartKey || `${selected}:${interval}`}
+            loading={klineLoading}
+            stale={klineLoading && chartKey !== `${selected}:${interval}`}
             palette="wind"
             onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
           />
@@ -677,12 +773,14 @@ function StockMktRow({
   pct: pctRaw,
   active,
   onPick,
+  onPrefetch,
 }: {
   token: StockToken;
   price?: string;
   pct?: string;
   active: boolean;
   onPick: () => void;
+  onPrefetch: () => void;
 }) {
   const pct = Number(pctRaw ?? NaN);
   const flash = usePriceFlash(price);
@@ -691,6 +789,8 @@ function StockMktRow({
       type="button"
       className={active ? "bn-mkt-row-stock active" : "bn-mkt-row-stock"}
       onClick={onPick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
     >
       <span className="bn-mkt-pair">
         {token.ticker}

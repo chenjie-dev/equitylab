@@ -4,11 +4,16 @@
  * 引擎 klines 订阅读（collector trades → 引擎 → SUBSCRIBE）。
  * 历史首屏仍读 docs（`binance:kline:*`，不进 WS）；本 hook 只推送原生 period 的尾部更新。
  * 折叠周期（3m/30m/…）无原生桶时由调用方继续 docs 轮询。
+ *
+ * 协议：一条 WS = 一条 SUBSCRIBE；切票须换连接。模块级复用 Client 配置，
+ * 先建新订再关旧订，缩短空窗（仍各一条 WS，不复用同一 socket）。
  */
 
 import { useEffect, useRef } from "react";
 import { Client, unscale } from "@equitylab/qdb";
 import type { Kline } from "./chartIndicators";
+
+const sharedClient = new Client();
 
 /** 与 market-data map_interval 一致：仅 1:1 原生周期可订 */
 const NATIVE: Record<string, string> = {
@@ -73,12 +78,11 @@ export function useQdbKlines(
     const symbol = qdbSymbol?.trim();
     if (!symbol || !period) return;
     const safe = symbol.replace(/'/g, "");
-    const client = new Client();
     const sql =
       `SELECT ts, open, high, low, close, volume ` +
       `FROM klines WHERE symbol = '${safe}' AND period = '${period}' SUBSCRIBE`;
 
-    return client.subscribe(sql, {
+    return sharedClient.subscribe(sql, {
       onError: (message) => console.warn("qdb klines ws", safe, message),
       onSnapshot: (columns, rows) => {
         // 快照可能很长；只取最后一根作尾刷新，历史仍靠 docs

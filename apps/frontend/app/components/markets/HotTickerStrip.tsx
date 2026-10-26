@@ -7,9 +7,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+  fetchSpotKlines,
+  klineCacheKey,
+  prefetchKlines,
+} from "./klineCache";
 import { flashClass, usePriceFlash } from "./usePriceFlash";
 import { useQdbSnapshots } from "./useQdbSnapshots";
 import { useVisibilityPolling } from "./useVisibilityPolling";
+
+/** 与 spot 页默认周期一致，悬停预取首屏 K 线 */
+const PREFETCH_INTERVAL = "15m";
+const PREFETCH_LIMIT = 120;
 
 export const HOT_SYMBOLS = [
   "BTCUSDT",
@@ -47,10 +56,12 @@ function HotChip({
   row,
   active,
   onPick,
+  onPrefetch,
 }: {
   row: HotRow;
   active: boolean;
   onPick: () => void;
+  onPrefetch: () => void;
 }) {
   const pct = Number(row.priceChangePercent);
   const up = pct >= 0;
@@ -60,6 +71,8 @@ function HotChip({
       type="button"
       className={active ? "bn-hot-chip active" : "bn-hot-chip"}
       onClick={onPick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
     >
       <span className="bn-hot-pair">{pairLabel(row.symbol)}</span>
       <span className={`bn-mono ${flashClass(flash)}`}>
@@ -133,6 +146,13 @@ export function HotTickerStrip() {
     );
   });
 
+  const prefetch = useCallback((sym: string) => {
+    const key = klineCacheKey("spot", sym, PREFETCH_INTERVAL);
+    prefetchKlines(key, (signal) =>
+      fetchSpotKlines(sym, PREFETCH_INTERVAL, PREFETCH_LIMIT, signal),
+    );
+  }, []);
+
   if (!onSpot) return null;
 
   const pick = (sym: string) => {
@@ -156,6 +176,7 @@ export function HotTickerStrip() {
           row={row}
           active={row.symbol === selected}
           onPick={() => pick(row.symbol)}
+          onPrefetch={() => prefetch(row.symbol)}
         />
       ))}
     </div>

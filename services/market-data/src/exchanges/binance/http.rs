@@ -7,6 +7,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use futures_util::future::join_all;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
@@ -96,15 +97,17 @@ pub async fn ticker_price(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let symbols = ticker_symbols(&q);
-    let mut rows = Vec::new();
-    for symbol in symbols {
-        if let Some(row) = crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await {
-            rows.push(json!({
-                "symbol": symbol,
-                "price": row.get("lastPrice").cloned().unwrap_or(json!("0")),
-            }));
-        }
-    }
+    let futs = symbols.into_iter().map(|symbol| async move {
+        crate::qdb_read::doc(&format!("binance:ticker:{symbol}"))
+            .await
+            .map(|row| {
+                json!({
+                    "symbol": symbol,
+                    "price": row.get("lastPrice").cloned().unwrap_or(json!("0")),
+                })
+            })
+    });
+    let rows: Vec<Value> = join_all(futs).await.into_iter().flatten().collect();
     if q.contains_key("symbol") {
         return Ok(Json(rows.into_iter().next().unwrap_or(Value::Null)));
     }
@@ -152,12 +155,11 @@ pub async fn ticker_24hr(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let symbols = ticker_symbols(&q);
-    let mut rows = Vec::new();
-    for symbol in symbols {
-        if let Some(row) = crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await {
-            rows.push(row);
-        }
-    }
+    // 多标的 docs 并行读，避免 watchlist 串行拉长列表首屏
+    let futs = symbols.into_iter().map(|symbol| async move {
+        crate::qdb_read::doc(&format!("binance:ticker:{symbol}")).await
+    });
+    let rows: Vec<Value> = join_all(futs).await.into_iter().flatten().collect();
     if q.contains_key("symbol") {
         return Ok(Json(rows.into_iter().next().unwrap_or(Value::Null)));
     }

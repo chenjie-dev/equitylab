@@ -23,6 +23,13 @@ import { DepthChart } from "../components/markets/DepthChart";
 import { HOT_SYMBOLS } from "../components/markets/HotTickerStrip";
 import { useListKeyboard } from "../components/markets/useListKeyboard";
 import { flashClass, usePriceFlash } from "../components/markets/usePriceFlash";
+import {
+  fetchSpotKlines,
+  getCachedKlines,
+  klineCacheKey,
+  prefetchKlines,
+  setCachedKlines,
+} from "../components/markets/klineCache";
 import { useQdbKlines } from "../components/markets/useQdbKlines";
 import { useQdbSnapshots } from "../components/markets/useQdbSnapshots";
 import { useVisibilityPolling } from "../components/markets/useVisibilityPolling";
@@ -167,6 +174,8 @@ function MarketsPageInner() {
   const [depth, setDepth] = useState<Depth | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [klines, setKlines] = useState<Kline[]>([]);
+  /** 图表实际展示的 seriesKey；切票未到新数据前保持旧 key，避免错图/闪白 */
+  const [chartKey, setChartKey] = useState(() => `${symbol}:15m`);
   const [bid, setBid] = useState<number | null>(null);
   const [ask, setAsk] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -181,7 +190,12 @@ function MarketsPageInner() {
   const [klineLoading, setKlineLoading] = useState(false);
   const historyLoadingRef = useRef(false);
   const klineAbortRef = useRef<AbortController | null>(null);
+  const bookAbortRef = useRef<AbortController | null>(null);
   const switchGenRef = useRef(0);
+  const chartKeyRef = useRef(chartKey);
+  chartKeyRef.current = chartKey;
+  const wantKeyRef = useRef(`${symbol}:${interval}`);
+  wantKeyRef.current = `${symbol}:${interval}`;
   // 盘口/24h 字段读 qdb docs（经 market-data）；最新价走 snapshots 订阅。不可见停表
   const bookTick = useVisibilityPolling(5_000);
   const listTick = useVisibilityPolling(30_000);
@@ -268,6 +282,8 @@ function MarketsPageInner() {
     symbol ? `BINANCE:${symbol}` : null,
     interval,
     (bar) => {
+      // 切票未换上新图时忽略，避免把新标的尾部并进旧图
+      if (chartKeyRef.current !== wantKeyRef.current) return;
       startTransition(() => {
         setKlines((prev) => {
           if (!prev.length) return prev;
@@ -287,66 +303,92 @@ function MarketsPageInner() {
   );
 
   const loadBook = useCallback(async (sym: string) => {
+    bookAbortRef.current?.abort();
+    const ac = new AbortController();
+    bookAbortRef.current = ac;
     try {
       const [dRes, trRes] = await Promise.all([
-        fetch(`/api/market/binance/depth?symbol=${sym}&limit=20`),
-        fetch(`/api/market/binance/trades?symbol=${sym}&limit=40`),
+        fetch(`/api/market/binance/depth?symbol=${sym}&limit=20`, {
+          signal: ac.signal,
+        }),
+        fetch(`/api/market/binance/trades?symbol=${sym}&limit=40`, {
+          signal: ac.signal,
+        }),
       ]);
       if (!dRes.ok) throw new Error(`depth ${dRes.status}`);
       if (!trRes.ok) throw new Error(`trades ${trRes.status}`);
-      const depthBody = (await dRes.json()) as Depth;
-      const tradesBody = (await trRes.json()) as Trade[];
+      const [depthBody, tradesBody] = await Promise.all([
+        dRes.json() as Promise<Depth>,
+        trRes.json() as Promise<Trade[]>,
+      ]);
+      if (ac.signal.aborted) return;
       startTransition(() => {
         setDepth(depthBody);
         setTrades(tradesBody);
         setError(null);
       });
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
   const fetchKlines = useCallback(
-    async (
+    (
       sym: string,
       tf: Interval,
       limit: number,
       endTime?: number,
       signal?: AbortSignal,
-    ) => {
-      const q = new URLSearchParams({
-        symbol: sym,
-        interval: tf,
-        limit: String(limit),
-      });
-      if (endTime != null) q.set("endTime", String(endTime));
-      try {
-        const kRes = await fetch(`/api/market/binance/klines?${q}`, { signal });
-        if (!kRes.ok) return [] as Kline[];
-        const body = (await kRes.json()) as unknown;
-        return Array.isArray(body) ? (body as Kline[]) : [];
-      } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") throw e;
-        return [] as Kline[];
-      }
-    },
+    ) => fetchSpotKlines(sym, tf, limit, signal, endTime),
     [],
   );
 
-  /** 换标的/周期：立刻清空旧图 + 取消 inflight，只拉最近一页 */
+  const prefetchSymbol = useCallback(
+    (sym: string) => {
+      if (!isWatchSymbol(sym)) return;
+      const key = klineCacheKey("spot", sym, interval);
+      prefetchKlines(key, (signal) =>
+        fetchSpotKlines(sym, interval, KLINE_PAGE, signal),
+      );
+    },
+    [interval],
+  );
+
+  /**
+   * 换标的/周期：缓存命中立刻上图；未命中保留旧图（stale）直至新数据到达。
+   * 取消 inflight，只拉最近一页。
+   */
   const loadKlines = useCallback(
     async (sym: string, tf: Interval) => {
       klineAbortRef.current?.abort();
       const ac = new AbortController();
       klineAbortRef.current = ac;
       const gen = ++switchGenRef.current;
+      const wantKey = `${sym}:${tf}`;
+      const cacheKey = klineCacheKey("spot", sym, tf);
       setHistoryDone(false);
+
+      const cached = getCachedKlines(cacheKey);
+      if (cached?.length) {
+        setKlines(cached);
+        setChartKey(wantKey);
+      }
       setKlineLoading(true);
-      setKlines([]);
+
       try {
-        const rows = await fetchKlines(sym, tf, KLINE_PAGE, undefined, ac.signal);
+        const rows = await fetchKlines(
+          sym,
+          tf,
+          KLINE_PAGE,
+          undefined,
+          ac.signal,
+        );
         if (gen !== switchGenRef.current) return;
-        setKlines(retainKlines(rows));
+        const retained = retainKlines(rows);
+        if (retained.length) setCachedKlines(cacheKey, retained);
+        setKlines(retained);
+        setChartKey(wantKey);
         if (rows.length < KLINE_PAGE) setHistoryDone(true);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
@@ -384,6 +426,9 @@ function MarketsPageInner() {
           ...prev,
         ]);
         if (merged.length >= KLINE_MAX_BARS) setHistoryDone(true);
+        // 只缓存尾部一页，避免左滑历史撑爆 LRU
+        const tail = merged.slice(Math.max(0, merged.length - KLINE_PAGE));
+        setCachedKlines(klineCacheKey("spot", symbol, interval), tail);
         return merged;
       });
       if (older.length < KLINE_PAGE) setHistoryDone(true);
@@ -625,6 +670,7 @@ function MarketsPageInner() {
                 fav={favs.has(t.symbol)}
                 onFav={() => toggleFav(t.symbol)}
                 onPick={() => setSymbol(t.symbol)}
+                onPrefetch={() => prefetchSymbol(t.symbol)}
               />
             ))}
             {!filteredList.length ? (
@@ -653,8 +699,9 @@ function MarketsPageInner() {
           <BinanceChart
             klines={klines}
             symbol={symbol}
-            seriesKey={`${symbol}:${interval}`}
+            seriesKey={chartKey}
             loading={klineLoading}
+            stale={klineLoading && chartKey !== `${symbol}:${interval}`}
             palette="wind"
             onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
           />
@@ -806,17 +853,23 @@ function SpotMktRow({
   fav,
   onFav,
   onPick,
+  onPrefetch,
 }: {
   t: Ticker;
   active: boolean;
   fav: boolean;
   onFav: () => void;
   onPick: () => void;
+  onPrefetch: () => void;
 }) {
   const pct = Number(t.priceChangePercent);
   const flash = usePriceFlash(t.lastPrice);
   return (
-    <div className={active ? "bn-mkt-row active" : "bn-mkt-row"}>
+    <div
+      className={active ? "bn-mkt-row active" : "bn-mkt-row"}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
+    >
       <button
         type="button"
         className={fav ? "bn-star-sm on" : "bn-star-sm"}
