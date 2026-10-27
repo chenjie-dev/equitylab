@@ -278,12 +278,15 @@ services:
       ORCHESTRATOR_URL: http://orchestrator:8001
       RESEARCH_URL: http://research:8002
       MARKET_DATA_URL: http://market-data:3002
+      # 页面 /_next /api/cn-equity BFF → 前端（统一入口 :3000）
+      FRONTEND_URL: http://frontend:3000
       RATE_LIMIT_PER_MINUTE: "120"
     ports:
       - "${GATEWAY_PORT:-3000}:3000"
     depends_on:
       - orchestrator
       - market-data
+      # frontend 反向依赖 gateway；此处不 depends_on frontend，避免循环。FRONTEND_URL 就绪前页面 502。
     networks: [equitylab]
 
   # Next.js 前端：浏览器走同源 /api/chat；容器内 BFF 经 Docker DNS 访问网关

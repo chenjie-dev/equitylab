@@ -141,9 +141,15 @@ async def klines(
 
 
 @endpoints.get("/five/{code}")
-async def five(code: str) -> dict:
+async def five(
+    code: str,
+    exchange: Annotated[str | None, Query()] = None,
+    category: Annotated[str | None, Query()] = None,
+) -> dict:
     try:
-        return await asyncio.to_thread(service.five, code)
+        return await asyncio.to_thread(
+            service.five, code, exchange=exchange, category=category
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
@@ -152,9 +158,15 @@ async def five(code: str) -> dict:
 
 
 @endpoints.get("/intraday/{code}")
-async def intraday(code: str) -> dict:
+async def intraday(
+    code: str,
+    exchange: Annotated[str | None, Query()] = None,
+    category: Annotated[str | None, Query()] = None,
+) -> dict:
     try:
-        return await asyncio.to_thread(service.intraday, code)
+        return await asyncio.to_thread(
+            service.intraday, code, exchange=exchange, category=category
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:

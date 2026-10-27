@@ -499,14 +499,27 @@ class CnEquityService:
             payload["count"] = len(merged)
         return payload
 
-    def five(self, stock_code: str) -> dict[str, Any]:
+    def five(
+        self,
+        stock_code: str,
+        *,
+        exchange: str | None = None,
+        category: str | None = None,
+    ) -> dict[str, Any]:
         """五档买卖：优先 `cn-equity:depth:*` docs；否则用快照买一/卖一并标明档位不足。"""
-        from app.cn_equity.qdb_client import depth_doc, snapshots
+        from app.cn_equity import pg_client
+        from app.cn_equity.qdb_client import depth_doc, snapshots_symbols
 
-        code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
-        snap_rows = snapshots([code]).get("data") or []
+        ex_hint, code = self._parse_quote_token(stock_code)
+        if not code:
+            code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        ex = pg_client.normalize_exchange(
+            exchange or ex_hint, code=code, category=category
+        )
+        symbol = f"{ex}:{code}"
+        snap_rows = snapshots_symbols([symbol]).get("data") or []
         quote = snap_rows[0] if snap_rows else None
-        depth = depth_doc(code)
+        depth = depth_doc(code, exchange=ex)
         bids: list[dict[str, Any]] = []
         asks: list[dict[str, Any]] = []
         levels = 0
@@ -522,28 +535,64 @@ class CnEquityService:
             if quote.get("ask") is not None:
                 asks = [{"price": quote["ask"], "volume": None}]
             levels = max(len(bids), len(asks))
-            note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 cn-equity:depth"
+            if levels > 0:
+                note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 cn-equity:depth"
         if not note:
-            note = "无盘口数据；等 collector 补 cn-equity:depth 或 quotes bid/ask"
+            if (category or "").lower() == "index":
+                note = "指数通常无买卖五档；右侧展示最新价"
+            else:
+                note = "无盘口数据；等 collector 补 cn-equity:depth 或 quotes bid/ask"
         return {
             "stock_code": code,
+            "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
+            "category": category,
             "bids": bids,
             "asks": asks,
             "levels": levels,
             "note": note,
             "quote": quote,
-            # 兼容旧前端：data 仍为快照行
             "data": snap_rows,
             "source": "qdb",
         }
 
-    def intraday(self, stock_code: str) -> dict[str, Any]:
-        code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
-        candles = _candles_from_qdb(code, "5m", 240)
+    def intraday(
+        self,
+        stock_code: str,
+        *,
+        exchange: str | None = None,
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        ex_hint, code = self._parse_quote_token(stock_code)
+        if not code:
+            code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        ex = pg_client.normalize_exchange(
+            exchange or ex_hint, code=code, category=category
+        )
+        candles = _candles_from_qdb(code, "5m", 240, exchange=ex)
+        source = "qdb"
+        note = ""
+        # 指数/ETF 缺盘中 5m 时：用近日日线作分时占位（标明 synthetic）
+        if not candles and (category or "").lower() in (
+            "index",
+            "etf",
+            "convertible",
+        ):
+            daily, src = _candles_history(
+                code, "1d", 5, exchange=ex, category=category
+            )
+            if daily:
+                candles = daily
+                source = f"{src}+synthetic_intraday"
+                note = "无盘中 5m，暂用近日日线占位；等 collector 写入指数分时"
         return {
             "stock_code": code,
+            "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
+            "category": category,
             "data": candles,
-            "source": "qdb",
+            "source": source,
+            "note": note,
         }
 
 
@@ -572,7 +621,7 @@ def _candles_history(
         candles = []
 
     if not candles:
-        candles = _candles_from_qdb(code, k_type, limit)
+        candles = _candles_from_qdb(code, k_type, limit, exchange=exchange)
         source = "qdb"
     else:
         if k_type == "30m":
@@ -586,10 +635,17 @@ def _candles_history(
     return candles, source
 
 
-def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]]:
+def _candles_from_qdb(
+    code: str,
+    k_type: str,
+    limit: int,
+    *,
+    exchange: str | None = None,
+) -> list[dict[str, Any]]:
     """K 线从 qdb 读（窗口 limit）。周/月由日线归并，30 分由 15 分两两归并。"""
     from datetime import datetime, timezone, timedelta
 
+    from app.cn_equity.pg_client import normalize_exchange
     from app.cn_equity.qdb_client import klines as qdb_klines
     from app.cn_equity.qdb_client import qdb_symbol
 
@@ -603,7 +659,12 @@ def _candles_from_qdb(code: str, k_type: str, limit: int) -> list[dict[str, Any]
     candles: list[dict[str, Any]] = []
     # A 股交易日历按东八区切日；桶 ts 为绝对时间
     sh_tz = timezone(timedelta(hours=8))
-    for row in qdb_klines(qdb_symbol(code), period, limit=raw_limit):
+    if exchange:
+        code6 = "".join(ch for ch in str(code) if ch.isdigit())[-6:].zfill(6)
+        symbol = f"{normalize_exchange(exchange, code=code6)}:{code6}"
+    else:
+        symbol = qdb_symbol(code)
+    for row in qdb_klines(symbol, period, limit=raw_limit):
         ts = row.get("ts")
         if ts is None:
             continue

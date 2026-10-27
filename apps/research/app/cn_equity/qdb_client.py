@@ -92,9 +92,19 @@ def _quote_row(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def depth_doc(code: str) -> dict[str, Any] | None:
+def depth_doc(
+    code: str,
+    *,
+    exchange: str | None = None,
+) -> dict[str, Any] | None:
     """读 collector 写入的 `cn-equity:depth:{EX}:{code}` 五档 docs。"""
-    symbol = qdb_symbol(code)
+    if exchange:
+        from app.cn_equity.pg_client import normalize_exchange
+
+        code6 = "".join(ch for ch in str(code) if ch.isdigit())[-6:].zfill(6)
+        symbol = f"{normalize_exchange(exchange, code=code6)}:{code6}"
+    else:
+        symbol = qdb_symbol(code)
     body = _client.get_doc(f"cn-equity:depth:{symbol}")
     if not body:
         return None
@@ -122,9 +132,15 @@ def codes_catalog() -> dict[str, Any] | None:
 
 def snapshots(codes: list[str]) -> dict[str, Any]:
     symbols = [qdb_symbol(c) for c in codes if c]
-    if not symbols:
+    return snapshots_symbols(symbols)
+
+
+def snapshots_symbols(symbols: list[str]) -> dict[str, Any]:
+    """按完整 qdb 符号读快照（如 SSE:000001 指数，避免 SZSE:000001 个股）。"""
+    clean = [s for s in symbols if s and ":" in s]
+    if not clean:
         return {"data": [], "source": "qdb"}
-    body = _client.snapshots_body(symbols)
+    body = _client.snapshots_body(clean)
     if body.get("error"):
         return {"data": [], "source": "qdb", "error": "qdb_unavailable"}
     rows = [_quote_row(item) for item in body.get("data") or []]

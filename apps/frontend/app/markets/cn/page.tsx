@@ -338,7 +338,11 @@ export default function CnEquityPage() {
   const loadKlines = useCallback(
     async (code: string, kt: string, exchange: string, assetClass: CnAssetClass) => {
       if (kt === "intraday") {
-        const res = await fetch(`/api/cn-equity/intraday/${code}`);
+        const qs = new URLSearchParams({
+          exchange: uiToQdbExchange(exchange),
+          category: assetClass,
+        });
+        const res = await fetch(`/api/cn-equity/intraday/${code}?${qs}`);
         if (res.status === 429) return;
         if (!res.ok) throw new Error(`intraday ${res.status}`);
         const body = (await res.json()) as {
@@ -350,13 +354,17 @@ export default function CnEquityPage() {
             close?: number;
             volume?: number;
           }[];
+          note?: string;
+          source?: string;
         };
         setKlines(mapCandles(body.data ?? []));
         setKMeta({
           session: undefined,
           historyCount: body.data?.length,
           hasRealtime: false,
-          view: "intraday-5m",
+          view: body.note?.includes("占位")
+            ? "intraday-fallback"
+            : "intraday-5m",
         });
         return;
       }
@@ -396,38 +404,45 @@ export default function CnEquityPage() {
     [],
   );
 
-  const loadFive = useCallback(async (code: string) => {
-    try {
-      const res = await fetch(`/api/cn-equity/five/${code}`);
-      if (!res.ok) {
-        setFive({ bids: [], asks: [], levels: 0, note: `五档 ${res.status}` });
-        return;
+  const loadFive = useCallback(
+    async (code: string, exchange: string, assetClass: CnAssetClass) => {
+      try {
+        const qs = new URLSearchParams({
+          exchange: uiToQdbExchange(exchange),
+          category: assetClass,
+        });
+        const res = await fetch(`/api/cn-equity/five/${code}?${qs}`);
+        if (!res.ok) {
+          setFive({ bids: [], asks: [], levels: 0, note: `五档 ${res.status}` });
+          return;
+        }
+        const body = (await res.json()) as {
+          bids?: BookLevel[];
+          asks?: BookLevel[];
+          levels?: number;
+          note?: string;
+          quote?: Quote;
+          data?: Quote[];
+        };
+        const quote = body.quote ?? body.data?.[0];
+        if (quote) {
+          setQuotes((prev) => ({
+            ...prev,
+            [code]: { ...prev[code], ...quote, stock_code: code },
+          }));
+        }
+        setFive({
+          bids: body.bids ?? [],
+          asks: body.asks ?? [],
+          levels: body.levels ?? 0,
+          note: body.note ?? "",
+        });
+      } catch {
+        setFive({ bids: [], asks: [], levels: 0, note: "五档不可用" });
       }
-      const body = (await res.json()) as {
-        bids?: BookLevel[];
-        asks?: BookLevel[];
-        levels?: number;
-        note?: string;
-        quote?: Quote;
-        data?: Quote[];
-      };
-      const quote = body.quote ?? body.data?.[0];
-      if (quote) {
-        setQuotes((prev) => ({
-          ...prev,
-          [code]: { ...prev[code], ...quote, stock_code: code },
-        }));
-      }
-      setFive({
-        bids: body.bids ?? [],
-        asks: body.asks ?? [],
-        levels: body.levels ?? 0,
-        note: body.note ?? "",
-      });
-    } catch {
-      setFive({ bids: [], asks: [], levels: 0, note: "五档不可用" });
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     void loadCodes(asset);
@@ -444,7 +459,8 @@ export default function CnEquityPage() {
         (asset === "index" && next.startsWith("000"));
       setSelectedEx(sh ? "SH" : "SZ");
     }
-    setChartTab(asset === "stock" ? "intraday" : "1d");
+    // 指数/ETF 也默认分时（有 5m 则盘中；否则日线占位）
+    setChartTab("intraday");
     setBoard("all");
     setQuery("");
   }, [asset]);
@@ -537,9 +553,7 @@ export default function CnEquityPage() {
   }, [tick, quoteCodes, loadQuotes, asset]);
 
   useQdbSnapshot(
-    selected && asset === "stock"
-      ? cnEquityQdbSymbol(selected, selectedEx)
-      : null,
+    selected ? cnEquityQdbSymbol(selected, selectedEx) : null,
     (row) => {
       const price = row.last;
       setQuotes((prev) => {
@@ -575,19 +589,9 @@ export default function CnEquityPage() {
       try {
         await Promise.all([
           loadKlines(selected, activeKType, selectedEx, asset),
-          asset === "stock" ? loadFive(selected) : Promise.resolve(),
+          loadFive(selected, selectedEx, asset),
         ]);
-        if (!cancelled) {
-          if (asset !== "stock") {
-            setFive({
-              bids: [],
-              asks: [],
-              levels: 0,
-              note: "指数/ETF/可转债暂无五档；展示日线报价",
-            });
-          }
-          setError(null);
-        }
+        if (!cancelled) setError(null);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -596,7 +600,7 @@ export default function CnEquityPage() {
       void loadKlines(selected, activeKType, selectedEx, asset).catch(
         () => undefined,
       );
-      if (asset === "stock") void loadFive(selected);
+      void loadFive(selected, selectedEx, asset);
     }, 15_000);
     return () => {
       cancelled = true;

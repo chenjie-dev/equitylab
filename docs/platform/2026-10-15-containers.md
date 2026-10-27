@@ -6,8 +6,8 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 
 | 服务 | 容器名 | 宿主机端口 | 说明 |
 |---|---|---|---|
-| gateway | equitylab-gateway | 3000 | 统一入口 |
-| frontend | equitylab-frontend | 3001 | Web UI（容器内 Next 监听 3000） |
+| gateway | equitylab-gateway | 3000 | API + 前端统一入口（`FRONTEND_URL`→frontend） |
+| frontend | equitylab-frontend | 3001 | Web UI（亦可直连；推荐走网关 `:3000`） |
 | market-data | equitylab-market-data | 3002 | 行情 API |
 | orchestrator | equitylab-orchestrator | （内部 8001） | Agent 编排 |
 | research | equitylab-research | （内部 8002） | Python 研究层 |

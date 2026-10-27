@@ -20,6 +20,16 @@ UA = {"User-Agent": "equitylab-collector", "Referer": "https://finance.sina.com.
 # 进程级 qdb 客户端（读写）；写纪律：仅本进程回源
 qdb = Client(timeout=30.0)
 
+# 主流指数（与前端 index-strip 对齐）；须带交易所，避免 000001→平安银行
+INDEX_SEED: list[tuple[str, str]] = [
+    ("SSE", "000001"),
+    ("SZSE", "399001"),
+    ("SZSE", "399006"),
+    ("SSE", "000300"),
+    ("SSE", "000016"),
+    ("SSE", "000852"),
+]
+
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in (
@@ -140,6 +150,16 @@ def main() -> None:
             except Exception as exc:
                 print(f"backfill {code} failed: {exc}", flush=True)
         print("collector cn_equity backfill done", flush=True)
+        print(
+            f"collector index backfill {len(INDEX_SEED)} symbols",
+            flush=True,
+        )
+        for ex, code in INDEX_SEED:
+            try:
+                backfill_ex(ex, code)
+            except Exception as exc:
+                print(f"backfill index {ex}:{code} failed: {exc}", flush=True)
+        print("collector index backfill done", flush=True)
     else:
         print("collector cn_equity backfill skipped (COLLECTOR_SKIP_CN_EQUITY)", flush=True)
 
@@ -166,6 +186,11 @@ def main() -> None:
                 poll_quotes(batch, last_vol)
             except Exception as exc:
                 print(f"cn_equity poll failed: {exc}", flush=True)
+                pm.inc_qdb_error()
+            try:
+                poll_index_quotes(last_vol)
+            except Exception as exc:
+                print(f"cn_equity index poll failed: {exc}", flush=True)
                 pm.inc_qdb_error()
         # WS 健康时 noop；断流才 REST 兜底
         try:
@@ -244,17 +269,23 @@ def wait_qdb() -> None:
 
 
 def backfill(code: str) -> None:
+    exchange, code6 = split_symbol(code)
+    backfill_ex(exchange, code6)
+
+
+def backfill_ex(exchange: str, code: str) -> None:
+    """按交易所回填 K 线（指数用 SSE:000001，勿走个股前缀）。"""
     from retention import cutoff_ns
 
     from equitylab_market import pg as pg_market
     from equitylab_market.sina import klines as sina_klines_pkg
 
-    exchange, code6 = split_symbol(code)
+    code6 = _cn_code6(code)
     symbol = f"{exchange}:{code6}"
     have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m")}
     have_1d = {int(row["ts"]) for row in get_klines(symbol, "1d")}
-    minute = sina_klines_pkg(code, scale_min=5, limit=500)
-    daily = sina_klines_pkg(code, scale_min=240, limit=300)
+    minute = sina_klines_pkg(code6, scale_min=5, limit=500, exchange=exchange)
+    daily = sina_klines_pkg(code6, scale_min=240, limit=300, exchange=exchange)
     # 历史棒同时落 Postgres market.*（冷库）；失败不阻断 qdb 回填
     try:
         stats = pg_market.ingest_sina_klines(
@@ -286,7 +317,7 @@ def backfill(code: str) -> None:
     events.sort(key=lambda item: item[0])
     trades: list[dict] = []
     for ts, bar, _kind in events:
-        trades.extend(ohlc_trades(exchange, code, ts, bar))
+        trades.extend(ohlc_trades(exchange, code6, ts, bar))
     if trades:
         # 启动期尚无 live poll：直写 qdb，避免与币安高优先队列抢、并保证先于未闭合桶落盘
         batch = 256
@@ -295,16 +326,35 @@ def backfill(code: str) -> None:
         print(f"backfill {symbol} trades={len(trades)}", flush=True)
 
 
+def poll_index_quotes(last_vol: dict[str, int]) -> None:
+    """主流指数报价 → qdb（sh000001 等；与个股 000001 分交易所）。"""
+    from equitylab_market.sina import sina_symbol_ex
+
+    symbols = ",".join(sina_symbol_ex(ex, code) for ex, code in INDEX_SEED)
+    text = requests.get(
+        f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8
+    ).content.decode("gb18030", "replace")
+    _ingest_sina_hq(parse_sina(text), last_vol, vol_key_prefix="idx:")
+
+
 def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
     symbols = ",".join(sina_symbol(c) for c in codes)
     text = requests.get(f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8).content.decode("gb18030", "replace")
+    _ingest_sina_hq(parse_sina(text), last_vol)
+
+
+def _ingest_sina_hq(
+    rows: list[dict],
+    last_vol: dict[str, int],
+    *,
+    vol_key_prefix: str = "",
+) -> None:
+    """把 parse_sina 行写入 quotes / trades / depth docs。"""
     quotes = []
     trades = []
     depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
-    parsed_rows: list[dict] = []
-    for row in parse_sina(text):
-        parsed_rows.append(row)
+    for row in rows:
         quotes.append(
             {
                 "exchange": row["exchange"],
@@ -342,13 +392,14 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
                 }
             )
         vol = int(row["volume"])
-        prev = last_vol.get(row["code"])
+        vol_key = f"{vol_key_prefix}{row['exchange']}:{row['code']}"
+        prev = last_vol.get(vol_key)
         # 首见只记量、不写 trade，避免把「当日累计成交量」整笔打进当前 5m 桶
         if prev is None:
-            last_vol[row["code"]] = vol
+            last_vol[vol_key] = vol
         else:
             delta = vol - prev if vol > prev else 0
-            last_vol[row["code"]] = max(vol, prev)
+            last_vol[vol_key] = max(vol, prev)
             if delta > 0:
                 trades.append(
                     {
@@ -370,7 +421,7 @@ def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
         from equitylab_market import pg as pg_market
 
         if pg_market.enabled():
-            for row in parsed_rows:
+            for row in rows:
                 pg_market.maybe_mark_suspend_from_quote(
                     row["exchange"],
                     row["code"],

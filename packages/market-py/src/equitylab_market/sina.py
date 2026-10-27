@@ -24,12 +24,33 @@ def sina_symbol(code: str) -> str:
     return prefix + c
 
 
-def klines(code: str, *, scale_min: int, limit: int, timeout: float = 25.0) -> list[dict[str, Any]]:
+def sina_symbol_ex(exchange: str, code: str) -> str:
+    """带交易所的新浪符号（指数须用：上证指数 SSE:000001 → sh000001）。"""
+    c = code6(code) or "000000"
+    ex = (exchange or "").strip().upper()
+    if ex in ("SH", "SSE", "XSHG"):
+        return f"sh{c}"
+    if ex in ("SZ", "SZSE", "XSHE"):
+        return f"sz{c}"
+    if ex in ("BJ", "BSE", "XBEI"):
+        return f"bj{c}"
+    return sina_symbol(c)
+
+
+def klines(
+    code: str,
+    *,
+    scale_min: int,
+    limit: int,
+    timeout: float = 25.0,
+    exchange: str | None = None,
+) -> list[dict[str, Any]]:
     """拉取新浪 K 线；scale_min=240 为日线，5 为 5 分钟等。"""
+    sym = sina_symbol_ex(exchange, code) if exchange else sina_symbol(code)
     r = requests.get(
         _KLINE_URL,
         params={
-            "symbol": sina_symbol(code),
+            "symbol": sym,
             "scale": scale_min,
             "ma": "no",
             "datalen": limit,
