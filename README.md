@@ -91,6 +91,6 @@ curl -sf -X POST http://localhost:3000/api/chat \
 
 ## 现状与后续
 
-**已有：**多服务 Compose、网关/前端/编排/研究、A 股 cn-equity 读面与行情台、采集族（盘中 + 冷日线 + adata/akshare 冷灌）、qdb 客户端包、`market` 冷域表、基础可观测。
+**已有：**多服务 Compose、网关/前端/编排/研究、A 股 cn-equity 读面与行情台、采集族（盘中 + 冷日线 + adata/akshare 冷灌）、qdb 客户端包、`market` 冷域表、双均线冷库回测、单标的动量时序 IC（`POST /factors/ic`）、基础可观测。
 
-**后续：**因子 IC / 回测生产化与可复现产物；编排工具回归；MCP 与编排对齐。以代码与 `.agents/artifacts/*-dod.md` 为准。
+**后续：**截面/多因子与可复现实验产物；编排工具回归集；MCP 与编排对齐。以代码与 `.agents/artifacts/*-dod.md` 为准。

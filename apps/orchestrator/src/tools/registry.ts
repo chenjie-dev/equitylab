@@ -65,12 +65,22 @@ export const TOOL_REGISTRY = {
     },
   },
   compute_factor_ic: {
-    description: "计算因子 IC / ICIR（Python 研究层确定性引擎）",
+    description:
+      "计算 A 股单标的动量时序 IC/ICIR（研究层冷库日线；非伪随机、非截面）",
     schema: z.object({
-      factor: z.string().min(1),
+      factor: z.string().min(1).default("momentum"),
       windowYears: z.number().int().min(1).max(10).default(3),
+      universe: z.string().min(1).default("600519"),
+      lookback: z.number().int().min(1).max(120).optional(),
+      horizon: z.number().int().min(1).max(60).optional(),
     }),
-    async run(args: { factor: string; windowYears: number }): Promise<unknown> {
+    async run(args: {
+      factor: string;
+      windowYears: number;
+      universe: string;
+      lookback?: number;
+      horizon?: number;
+    }): Promise<unknown> {
       const res = await fetch(`${RESEARCH_URL}/factors/ic`, {
         method: "POST",
         headers: jsonHeaders(),

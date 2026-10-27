@@ -17,8 +17,14 @@ class RagSearchRequest(BaseModel):
 
 
 class FactorIcRequest(BaseModel):
-    factor: str = Field(default="momentum", description="因子名，如 momentum")
-    windowYears: int = Field(default=3, ge=1, le=10, description="回看年数")
+    factor: str = Field(default="momentum", description="目前仅支持 momentum（时序）")
+    windowYears: int = Field(default=3, ge=1, le=10, description="回看年数 → 拉取日线根数")
+    universe: str = Field(
+        default="600519",
+        description="单标的：600519 / 600519.SH / SSE:600519",
+    )
+    lookback: int = Field(default=20, ge=1, le=120, description="动量回看交易日")
+    horizon: int = Field(default=5, ge=1, le=60, description="前瞻收益交易日")
 
 
 class BacktestRequest(BaseModel):

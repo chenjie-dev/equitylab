@@ -37,7 +37,13 @@ function planTools(agent: AgentKind, message: string): PlannedCall[] {
     return [{ name: "get_stock_quote", args: { symbol } }];
   }
   if (agent === "factor") {
-    return [{ name: "compute_factor_ic", args: { factor: "momentum", windowYears: 3 } }];
+    const uni = message.match(/\b\d{6}(?:\.(?:SH|SZ|BJ))?\b/)?.[0] ?? "600519";
+    return [
+      {
+        name: "compute_factor_ic",
+        args: { factor: "momentum", windowYears: 3, universe: uni },
+      },
+    ];
   }
   if (agent === "research") {
     return [{ name: "search_reports", args: { query: message } }];
