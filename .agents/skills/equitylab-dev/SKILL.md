@@ -43,7 +43,7 @@ description: >-
 
 - **深模块**：行情只经 `MarketDataProvider`；新数据源加 Provider，不改 handler 业务分支堆叠（见 skill `codebase-design`）。  
 - **读路径零上游 + 热冷不串权**：除 `services/collector` 外禁止直查公开上游；盘中走 qdb，A 股历史走 `market`（经 `/cn-equity`）。见 `docs/market/2026-10-26-行情模块边界.md` 与 `AGENTS.md` §7。缺数据空/503。不要复活上游透传，或把 sina/adata 当成产品模块名。  
-- **工具三要素**：`name` + `description` + Zod/schema + `run`；编排层不得绕过注册表直打下游（调试除外）。  
+- **工具三要素**：`name` + `description` + Zod/schema + `run`；编排层不得绕过注册表直打下游（调试除外）。改工具面 / eval / harness 时另加载 **equitylab-agent-dev**。  
 - **Stub 诚实**：演示 IC/回测/RAG 必须带 `demo` / mode=stub 或等价标注；禁止写成已生产可用。  
 - **缓存与限流**：报价写缓存默认 TTL 3s；网关限流按 IP 滑动窗口——改默认值时更新 `.env.example` 与 `docs/platform/2026-10-15-containers.md`。  
 - **前缀代理**：网关对 `/api/market`、`/api/research` 剥前缀；`/api/chat` 保留完整路径。改路径时两端一起改并更新 `docs/platform/2026-10-15-api.md`。  

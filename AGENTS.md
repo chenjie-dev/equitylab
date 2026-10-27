@@ -189,5 +189,6 @@ Redis 宿主机端口默认 **16379**（见 `.env`）；容器内仍为 `redis:6
 | 对照规范审查 | `code-review` |
 | 写 skill / AGENTS | `writing-for-agents` |
 | 本仓落地改动 | `equitylab-dev` |
+| Agent / 工具 / harness / eval | `equitylab-agent-dev` |
 | 按流水线推进功能 | `equitylab-pipeline` |
 | 完成判据 / 可否上线 | `equitylab-dod` |

@@ -14,7 +14,7 @@
 | PM / Planner | `mattpocock@grill-me` / `grill-with-docs` | **292K** | 百万级 | ✅ |
 | Architect | `codebase-design` / `improve-codebase-architecture` / `domain-modeling` | **292K** | 高 | ✅ |
 | Frontend | `vercel-react-best-practices` / `frontend-design` / `shadcn` / `ai-sdk` | 32K–181K | 高 | ✅ |
-| Backend | `fastapi` / `rust-async-patterns` / `rust-best-practices` / `langgraph` / `mcp-builder` / `redis-core` | 见详表 | — | ✅ |
+| Backend | `fastapi` / `rust-async` / `langgraph` / `mcp-builder` / `equitylab-agent-dev` | 见详表 | — | ✅ |
 | Data / RAG | `langchain-rag` / `qdrant-clients-sdk` / `rag-architect` | 1.3K–12K | — | ✅ |
 | Test | `tdd` / `diagnosing-bugs` / `playwright-cli` / `webapp-testing` | 高 | — | ✅ |
 | Reviewer | `code-review` / `differential-review` / `semgrep` | 7.6K–292K | — | ✅ |
@@ -41,6 +41,7 @@
 | codebase-design / improve-codebase-architecture / domain-modeling | **292K★** | 深模块、ADR、术语（已有） |
 | [langgraph-fundamentals](https://skills.sh/langchain-ai/langchain-skills/langgraph-fundamentals) | 1.3K★ / 17K | 编排图设计（已有） |
 | equitylab-dev | 本仓 | EquityLab 分层落点 |
+| equitylab-agent-dev | 本仓 | Agent / harness：工具注册、轨迹、eval |
 
 ### 3. Frontend
 
@@ -57,6 +58,7 @@
 | fastapi / rust-async / langgraph / mcp-builder / redis-core | 见上 | 已有 |
 | [rust-best-practices](https://skills.sh/apollographql/skills/rust-best-practices) | 117★ / 20K | Rust 工程实践 |
 | supabase-postgres-best-practices | 2.8K★ / 445K | PG（已有） |
+| equitylab-agent-dev | 本仓 | 工具注册、轨迹 eval、harness 飞轮 |
 
 ### 5. Data / RAG
 
