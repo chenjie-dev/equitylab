@@ -415,3 +415,507 @@ def adjust_factors(code: str) -> list[dict[str, Any]]:
             }
             for r in cur.fetchall()
         ]
+
+
+def _day_s(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    return str(value)[:10]
+
+
+def capital_flow_daily(
+    code: str,
+    *,
+    exchange: str | None = None,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """个股日度资金流（新→旧）。"""
+    inner = resolve_inner_code(code, exchange=exchange)
+    if inner is None:
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT trading_day, main_net, super_large_net, large_net, medium_net, small_net
+            FROM market.capital_flow_daily
+            WHERE inner_code=%s
+            ORDER BY trading_day DESC
+            LIMIT %s
+            """,
+            (inner, lim),
+        )
+        return [
+            {
+                "trading_day": _day_s(r[0]),
+                "main_net": _f(r[1]),
+                "super_large_net": _f(r[2]),
+                "large_net": _f(r[3]),
+                "medium_net": _f(r[4]),
+                "small_net": _f(r[5]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def finance_core(
+    code: str,
+    *,
+    exchange: str | None = None,
+    report_limit: int = 4,
+    indicators: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """核心财务长表；默认最近若干报告期的常用指标。"""
+    inner = resolve_inner_code(code, exchange=exchange)
+    if inner is None:
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    want = indicators or [
+        "basic_eps",
+        "net_profit_attr_sh",
+        "total_rev",
+        "roe_wtd",
+        "gross_margin",
+        "net_margin",
+        "asset_liab_ratio",
+    ]
+    rl = max(1, min(int(report_limit), 40))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT report_date FROM market.finance_core
+            WHERE inner_code=%s
+            ORDER BY report_date DESC
+            LIMIT %s
+            """,
+            (inner, rl),
+        )
+        days = [r[0] for r in cur.fetchall()]
+        if not days:
+            return []
+        cur.execute(
+            """
+            SELECT report_date, indicator_code, indicator_name, value, unit
+            FROM market.finance_core
+            WHERE inner_code=%s AND report_date = ANY(%s)
+              AND indicator_code = ANY(%s)
+            ORDER BY report_date DESC, indicator_code
+            """,
+            (inner, days, want),
+        )
+        return [
+            {
+                "report_date": _day_s(r[0]),
+                "indicator_code": r[1],
+                "indicator_name": r[2] or "",
+                "value": _f(r[3]),
+                "unit": r[4] or "",
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def share_capital_latest(
+    code: str, *, exchange: str | None = None
+) -> dict[str, Any] | None:
+    inner = resolve_inner_code(code, exchange=exchange)
+    if inner is None:
+        return None
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT change_date, total_shares, float_shares, float_shares_a, change_reason
+            FROM market.share_capital
+            WHERE inner_code=%s
+            ORDER BY change_date DESC
+            LIMIT 1
+            """,
+            (inner,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "change_date": _day_s(row[0]),
+        "total_shares": _f(row[1]),
+        "float_shares": _f(row[2]),
+        "float_shares_a": _f(row[3]),
+        "change_reason": row[4] or "",
+    }
+
+
+def security_industries(
+    code: str, *, exchange: str | None = None
+) -> list[dict[str, Any]]:
+    inner = resolve_inner_code(code, exchange=exchange)
+    if inner is None:
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT si.industry_code, sw.name, sw.level, si.effective_from
+            FROM market.security_industry si
+            JOIN market.industry_sw sw ON sw.industry_code = si.industry_code
+            WHERE si.inner_code=%s AND si.effective_to IS NULL
+            ORDER BY sw.level
+            """,
+            (inner,),
+        )
+        return [
+            {
+                "industry_code": r[0],
+                "name": r[1] or "",
+                "level": int(r[2]),
+                "effective_from": _day_s(r[3]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def lifting(
+    code: str,
+    *,
+    exchange: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    inner = resolve_inner_code(code, exchange=exchange)
+    if inner is None:
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 200))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT lift_date, shares, ratio, holder_type, remark
+            FROM market.lifting
+            WHERE inner_code=%s
+            ORDER BY lift_date DESC
+            LIMIT %s
+            """,
+            (inner, lim),
+        )
+        return [
+            {
+                "lift_date": _day_s(r[0]),
+                "shares": _f(r[1]),
+                "ratio": _f(r[2]),
+                "holder_type": r[3] or "",
+                "remark": r[4] or "",
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def list_plates(
+    *,
+    vendor: str = "east",
+    q: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    v = (vendor or "east").strip().lower()
+    if v not in ("ths", "east"):
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 2000))
+    qq = (q or "").strip()
+    with conn.cursor() as cur:
+        if qq:
+            cur.execute(
+                """
+                SELECT vendor, plate_code, name, plate_kind
+                FROM market.plate
+                WHERE vendor=%s AND (plate_code ILIKE %s OR name ILIKE %s)
+                ORDER BY updated_at DESC NULLS LAST, plate_code
+                LIMIT %s
+                """,
+                (v, f"%{qq}%", f"%{qq}%", lim),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT vendor, plate_code, name, plate_kind
+                FROM market.plate
+                WHERE vendor=%s
+                ORDER BY updated_at DESC NULLS LAST, plate_code
+                LIMIT %s
+                """,
+                (v, lim),
+            )
+        return [
+            {
+                "vendor": r[0],
+                "plate_code": r[1],
+                "name": r[2] or "",
+                "plate_kind": r[3] or "",
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def plate_members(
+    vendor: str,
+    plate_code: str,
+    *,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    v = (vendor or "").strip().lower()
+    pcode = (plate_code or "").strip()
+    if v not in ("ths", "east") or not pcode:
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 2000))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.exchange_code, s.secu_code, s.name
+            FROM market.plate_member pm
+            JOIN market.security s ON s.inner_code = pm.inner_code
+            WHERE pm.vendor=%s AND pm.plate_code=%s AND pm.effective_to IS NULL
+            ORDER BY s.secu_code
+            LIMIT %s
+            """,
+            (v, pcode, lim),
+        )
+        out = []
+        for ex, code, name in cur.fetchall():
+            ui = _EX_UI.get(str(ex), "SZ")
+            out.append(
+                {
+                    "stock_code": str(code),
+                    "short_name": str(name or ""),
+                    "exchange": ui,
+                    "symbol": f"{code}.{ui}",
+                    "qdb_exchange": str(ex),
+                }
+            )
+        return out
+
+
+def capital_flow_plate_daily(
+    *,
+    vendor: str = "east",
+    trading_day: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """板块资金流快照；缺省取最新交易日。"""
+    v = (vendor or "east").strip().lower()
+    if v not in ("ths", "east"):
+        return []
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        day = trading_day
+        if not day:
+            cur.execute(
+                """
+                SELECT MAX(trading_day) FROM market.capital_flow_plate_daily
+                WHERE vendor=%s
+                """,
+                (v,),
+            )
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return []
+            day = row[0]
+        cur.execute(
+            """
+            SELECT c.trading_day, c.plate_code, p.name, c.main_net,
+                   c.super_large_net, c.large_net, c.medium_net, c.small_net
+            FROM market.capital_flow_plate_daily c
+            LEFT JOIN market.plate p
+              ON p.vendor=c.vendor AND p.plate_code=c.plate_code
+            WHERE c.vendor=%s AND c.trading_day=%s
+            ORDER BY c.main_net DESC NULLS LAST
+            LIMIT %s
+            """,
+            (v, day, lim),
+        )
+        return [
+            {
+                "trading_day": _day_s(r[0]),
+                "plate_code": r[1],
+                "name": r[2] or "",
+                "main_net": _f(r[3]),
+                "super_large_net": _f(r[4]),
+                "large_net": _f(r[5]),
+                "medium_net": _f(r[6]),
+                "small_net": _f(r[7]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def margin_balance_recent(*, limit: int = 30) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT trading_day, market_scope, financing_balance,
+                   securities_balance, margin_balance
+            FROM market.margin_balance
+            ORDER BY trading_day DESC
+            LIMIT %s
+            """,
+            (lim,),
+        )
+        return [
+            {
+                "trading_day": _day_s(r[0]),
+                "market_scope": r[1],
+                "financing_balance": _f(r[2]),
+                "securities_balance": _f(r[3]),
+                "margin_balance": _f(r[4]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def north_flow_recent(*, limit: int = 30) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT trading_day, net_flow, buy_amount, sell_amount, sh_net, sz_net
+            FROM market.north_flow_daily
+            ORDER BY trading_day DESC
+            LIMIT %s
+            """,
+            (lim,),
+        )
+        return [
+            {
+                "trading_day": _day_s(r[0]),
+                "net_flow": _f(r[1]),
+                "buy_amount": _f(r[2]),
+                "sell_amount": _f(r[3]),
+                "sh_net": _f(r[4]),
+                "sz_net": _f(r[5]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def hot_rank_daily(
+    *,
+    vendor: str | None = None,
+    rank_type: str | None = None,
+    trading_day: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 200))
+    with conn.cursor() as cur:
+        day = trading_day
+        if not day:
+            cur.execute("SELECT MAX(trading_day) FROM market.hot_rank_daily")
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return []
+            day = row[0]
+        clauses = ["trading_day=%s"]
+        args: list[Any] = [day]
+        if vendor:
+            clauses.append("vendor=%s")
+            args.append(vendor.strip().lower())
+        if rank_type:
+            clauses.append("rank_type=%s")
+            args.append(rank_type.strip())
+        args.append(lim)
+        cur.execute(
+            f"""
+            SELECT h.trading_day, h.vendor, h.rank_type, h.rank_no,
+                   s.secu_code, s.name, h.plate_vendor, h.plate_code, h.name, h.score
+            FROM market.hot_rank_daily h
+            LEFT JOIN market.security s ON s.inner_code = h.inner_code
+            WHERE {' AND '.join(clauses)}
+            ORDER BY h.rank_no
+            LIMIT %s
+            """,
+            tuple(args),
+        )
+        return [
+            {
+                "trading_day": _day_s(r[0]),
+                "vendor": r[1],
+                "rank_type": r[2],
+                "rank_no": int(r[3]),
+                "stock_code": r[4] or "",
+                "stock_name": r[5] or "",
+                "plate_vendor": r[6] or "",
+                "plate_code": r[7] or "",
+                "name": r[8] or "",
+                "score": _f(r[9]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def lhb_list_daily(
+    trading_day: str,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT l.trading_day, s.exchange_code, s.secu_code, s.name,
+                   l.list_reason, l.close, l.change_pct, l.amount, l.net_buy, l.id
+            FROM market.lhb_list l
+            JOIN market.security s ON s.inner_code = l.inner_code
+            WHERE l.trading_day=%s
+            ORDER BY l.net_buy DESC NULLS LAST
+            LIMIT %s
+            """,
+            (trading_day[:10], lim),
+        )
+        out = []
+        for r in cur.fetchall():
+            ui = _EX_UI.get(str(r[1]), "SZ")
+            out.append(
+                {
+                    "trading_day": _day_s(r[0]),
+                    "stock_code": str(r[2]),
+                    "short_name": str(r[3] or ""),
+                    "exchange": ui,
+                    "list_reason": r[4] or "",
+                    "close": _f(r[5]),
+                    "change_pct": _f(r[6]),
+                    "amount": _f(r[7]),
+                    "net_buy": _f(r[8]),
+                    "id": int(r[9]),
+                }
+            )
+        return out

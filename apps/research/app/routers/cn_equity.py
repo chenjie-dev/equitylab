@@ -33,6 +33,12 @@ class Catalog(BaseModel):
             "GET /cn-equity/klines/{code}?k_type=1d&view=merged&exchange=&category=",
             "GET /cn-equity/five/{code}",
             "GET /cn-equity/intraday/{code}",
+            "GET /cn-equity/fundamentals/{code}",
+            "GET /cn-equity/plates?vendor=east|ths",
+            "GET /cn-equity/plates/{vendor}/{plate_code}/members",
+            "GET /cn-equity/plate-flow?vendor=east",
+            "GET /cn-equity/sentiment/summary",
+            "GET /cn-equity/lhb?date=YYYY-MM-DD",
         ]
     )
 
@@ -172,6 +178,102 @@ async def intraday(
     except Exception as e:
         logger.exception("cn-equity intraday failed code=%s", code)
         raise HTTPException(status_code=502, detail=f"cn-equity intraday: {e}") from e
+
+
+@endpoints.get("/fundamentals/{code}")
+async def fundamentals(
+    code: str,
+    exchange: Annotated[str | None, Query()] = None,
+    flow_limit: Annotated[int, Query(ge=1, le=120)] = 20,
+    finance_reports: Annotated[int, Query(ge=1, le=20)] = 4,
+) -> dict:
+    """个股冷域：资金流 / 财务 / 股本 / 申万 / 解禁（只读 market）。"""
+    try:
+        return await asyncio.to_thread(
+            service.fundamentals,
+            code,
+            exchange=exchange,
+            flow_limit=flow_limit,
+            finance_reports=finance_reports,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("cn-equity fundamentals failed code=%s", code)
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity fundamentals: {e}"
+        ) from e
+
+
+@endpoints.get("/plates")
+async def plates(
+    vendor: Annotated[str, Query(description="ths|east")] = "east",
+    q: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 200,
+) -> dict:
+    try:
+        return await asyncio.to_thread(
+            service.plates, vendor=vendor, q=q, limit=limit
+        )
+    except Exception as e:
+        logger.exception("cn-equity plates failed")
+        raise HTTPException(status_code=502, detail=f"cn-equity plates: {e}") from e
+
+
+@endpoints.get("/plates/{vendor}/{plate_code}/members")
+async def plate_members(
+    vendor: str,
+    plate_code: str,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 200,
+) -> dict:
+    try:
+        return await asyncio.to_thread(
+            service.plate_members, vendor, plate_code, limit=limit
+        )
+    except Exception as e:
+        logger.exception("cn-equity plate members failed")
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity plate members: {e}"
+        ) from e
+
+
+@endpoints.get("/plate-flow")
+async def plate_flow(
+    vendor: Annotated[str, Query()] = "east",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    try:
+        return await asyncio.to_thread(
+            service.plate_flow, vendor=vendor, limit=limit
+        )
+    except Exception as e:
+        logger.exception("cn-equity plate-flow failed")
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity plate-flow: {e}"
+        ) from e
+
+
+@endpoints.get("/sentiment/summary")
+async def sentiment_summary() -> dict:
+    try:
+        return await asyncio.to_thread(service.sentiment_summary)
+    except Exception as e:
+        logger.exception("cn-equity sentiment failed")
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity sentiment: {e}"
+        ) from e
+
+
+@endpoints.get("/lhb")
+async def lhb(
+    date: Annotated[str, Query(description="YYYY-MM-DD 上榜日")],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict:
+    try:
+        return await asyncio.to_thread(service.lhb, date, limit=limit)
+    except Exception as e:
+        logger.exception("cn-equity lhb failed")
+        raise HTTPException(status_code=502, detail=f"cn-equity lhb: {e}") from e
 
 
 router = APIRouter(prefix="/cn-equity", tags=["cn-equity"])

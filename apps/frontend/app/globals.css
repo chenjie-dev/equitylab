@@ -1810,6 +1810,59 @@ code {
   font-size: 10px;
   line-height: 1.4;
 }
+.ths-side-tabs {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.ths-side-tabs button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--bn-text-tertiary);
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.ths-side-tabs button.active {
+  color: var(--bn-text);
+  background: var(--bn-bg-elevated);
+  font-weight: 600;
+}
+.ths-side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 12px;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  font-size: 12px;
+}
+.ths-side-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.ths-side-table th,
+.ths-side-table td {
+  padding: 4px 2px;
+  text-align: right;
+  border-bottom: 1px solid var(--bn-border);
+}
+.ths-side-table th:first-child,
+.ths-side-table td:first-child,
+.ths-side-table th:nth-child(2),
+.ths-side-table td:nth-child(2) {
+  text-align: left;
+}
+.ths-side-table th {
+  color: var(--bn-text-tertiary);
+  font-weight: 500;
+}
 @media (max-width: 1280px) {
   .bn-page.ths .ths-main {
     grid-template-columns: minmax(0, 1fr) 200px;

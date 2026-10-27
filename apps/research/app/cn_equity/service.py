@@ -595,6 +595,121 @@ class CnEquityService:
             "note": note,
         }
 
+    def fundamentals(
+        self,
+        stock_code: str,
+        *,
+        exchange: str | None = None,
+        flow_limit: int = 20,
+        finance_reports: int = 4,
+    ) -> dict[str, Any]:
+        """个股冷域摘要：资金流 / 财务 / 股本 / 行业 / 解禁（只读 market）。"""
+        from app.cn_equity import pg_client
+
+        ex_hint, code = self._parse_quote_token(stock_code)
+        if not code:
+            code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        ex = pg_client.normalize_exchange(exchange or ex_hint, code=code)
+        if not pg_client.enabled():
+            return {
+                "stock_code": code,
+                "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
+                "source": "postgres:unavailable",
+                "capital_flow": [],
+                "finance": [],
+                "share_capital": None,
+                "industries": [],
+                "lifting": [],
+            }
+        return {
+            "stock_code": code,
+            "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
+            "source": "postgres:market",
+            "capital_flow": pg_client.capital_flow_daily(
+                code, exchange=ex, limit=flow_limit
+            ),
+            "finance": pg_client.finance_core(
+                code, exchange=ex, report_limit=finance_reports
+            ),
+            "share_capital": pg_client.share_capital_latest(code, exchange=ex),
+            "industries": pg_client.security_industries(code, exchange=ex),
+            "lifting": pg_client.lifting(code, exchange=ex, limit=15),
+        }
+
+    def plates(
+        self, *, vendor: str = "east", q: str | None = None, limit: int = 200
+    ) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        rows = pg_client.list_plates(vendor=vendor, q=q, limit=limit)
+        return {
+            "count": len(rows),
+            "data": rows,
+            "vendor": vendor,
+            "source": "postgres:plate",
+        }
+
+    def plate_members(
+        self, vendor: str, plate_code: str, *, limit: int = 200
+    ) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        rows = pg_client.plate_members(vendor, plate_code, limit=limit)
+        return {
+            "count": len(rows),
+            "vendor": vendor,
+            "plate_code": plate_code,
+            "data": rows,
+            "source": "postgres:plate_member",
+        }
+
+    def plate_flow(
+        self, *, vendor: str = "east", limit: int = 50
+    ) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        rows = pg_client.capital_flow_plate_daily(vendor=vendor, limit=limit)
+        day = rows[0]["trading_day"] if rows else None
+        return {
+            "count": len(rows),
+            "trading_day": day,
+            "vendor": vendor,
+            "data": rows,
+            "source": "postgres:capital_flow_plate_daily",
+        }
+
+    def sentiment_summary(self) -> dict[str, Any]:
+        """两融最新 + 北向（可空）+ 热榜摘要。"""
+        from app.cn_equity import pg_client
+
+        margin = pg_client.margin_balance_recent(limit=5)
+        north = pg_client.north_flow_recent(limit=5)
+        hot_ths = pg_client.hot_rank_daily(
+            vendor="ths", rank_type="hot_stock", limit=20
+        )
+        hot_concept = pg_client.hot_rank_daily(
+            vendor="ths", rank_type="hot_concept", limit=10
+        )
+        return {
+            "source": "postgres:market",
+            "margin": margin,
+            "north": north,
+            "hot_stock": hot_ths,
+            "hot_concept": hot_concept,
+            "note": "北向 NET 近端可能为空；热榜为日终快照",
+        }
+
+    def lhb(self, trading_day: str, *, limit: int = 100) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        rows = pg_client.lhb_list_daily(trading_day, limit=limit)
+        return {
+            "trading_day": trading_day[:10],
+            "count": len(rows),
+            "data": rows,
+            "source": "postgres:lhb_list",
+        }
+
 
 def _candles_history(
     code: str,

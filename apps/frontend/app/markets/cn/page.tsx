@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * A 股行情台（同花顺启发布局）：左列表 | 右报价+分时/K线+五档。
- * 只读 qdb / Postgres 历史；BFF `/api/cn-equity/*` → Gateway `/api/research/cn-equity/*`。
+ * A 股行情台（同花顺启发布局）：左列表 | 中图 | 右五档/资金/财务/热榜。
+ * 只读 qdb / Postgres 冷库；BFF `/api/cn-equity/*` → Gateway `/api/research/cn-equity/*`。
  */
 
 import {
@@ -87,6 +87,64 @@ const QUOTE_BUFFER = 24;
 
 /** 主 Tab：分时 | 日K | 其他周期 */
 type ChartTab = "intraday" | "1d" | "other";
+
+/** 右侧：五档 | 资金 | 财务 | 热榜 */
+type SideTab = "book" | "fund" | "finance" | "hot";
+
+type FundFlowRow = {
+  trading_day?: string;
+  main_net?: number | null;
+  super_large_net?: number | null;
+  large_net?: number | null;
+  medium_net?: number | null;
+  small_net?: number | null;
+};
+
+type FinanceRow = {
+  report_date?: string;
+  indicator_code?: string;
+  indicator_name?: string;
+  value?: number | null;
+};
+
+type Fundamentals = {
+  capital_flow?: FundFlowRow[];
+  finance?: FinanceRow[];
+  share_capital?: {
+    change_date?: string;
+    total_shares?: number | null;
+    float_shares_a?: number | null;
+    change_reason?: string;
+  } | null;
+  industries?: { industry_code?: string; name?: string; level?: number }[];
+  lifting?: {
+    lift_date?: string;
+    shares?: number | null;
+    ratio?: number | null;
+    holder_type?: string;
+  }[];
+  source?: string;
+};
+
+type HotRow = {
+  rank_no?: number;
+  stock_code?: string;
+  stock_name?: string;
+  name?: string;
+  score?: number | null;
+  plate_code?: string;
+};
+
+type SentimentSummary = {
+  margin?: {
+    trading_day?: string;
+    financing_balance?: number | null;
+    margin_balance?: number | null;
+  }[];
+  hot_stock?: HotRow[];
+  hot_concept?: HotRow[];
+  note?: string;
+};
 
 const OTHER_INTERVALS = [
   { id: "1w", label: "周K" },
@@ -181,6 +239,44 @@ function fmtVol(n: string | number | null | undefined): string {
   return fmt(v, 0);
 }
 
+/** 资金流金额：按「亿」展示（上游多为元） */
+function fmtYi(n: string | number | null | undefined): string {
+  if (n == null || n === "") return "—";
+  const v = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(v)) return "—";
+  const yi = v / 1e8;
+  if (Math.abs(yi) >= 100) return `${yi.toFixed(0)}亿`;
+  if (Math.abs(yi) >= 1) return `${yi.toFixed(2)}亿`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(1)}万`;
+  return v.toFixed(0);
+}
+
+function fmtYiShares(n: string | number | null | undefined): string {
+  if (n == null || n === "") return "—";
+  const v = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(v)) return "—";
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿股`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(0)}万股`;
+  return `${v.toFixed(0)}股`;
+}
+
+function fmtNum(n: string | number | null | undefined): string {
+  if (n == null || n === "") return "—";
+  const v = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(v)) return "—";
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)}亿`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(2)}万`;
+  if (Math.abs(v) >= 100) return v.toFixed(2);
+  return v.toPrecision(4);
+}
+
+function netCls(n: string | number | null | undefined): string | undefined {
+  if (n == null || n === "") return undefined;
+  const v = typeof n === "string" ? Number(n) : n;
+  if (!Number.isFinite(v) || v === 0) return undefined;
+  return v > 0 ? "up" : "down";
+}
+
 function mapCandles(
   rows: {
     time?: number | null;
@@ -220,6 +316,9 @@ export default function CnEquityPage() {
     levels: 0,
     note: "",
   });
+  const [sideTab, setSideTab] = useState<SideTab>("book");
+  const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
+  const [sentiment, setSentiment] = useState<SentimentSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
@@ -444,9 +543,51 @@ export default function CnEquityPage() {
     [],
   );
 
+  const loadFundamentals = useCallback(async (code: string) => {
+    try {
+      const res = await fetch(
+        `/api/cn-equity/fundamentals/${encodeURIComponent(code)}?flow_limit=10&finance_reports=4`,
+      );
+      if (!res.ok) {
+        setFundamentals(null);
+        return;
+      }
+      setFundamentals((await res.json()) as Fundamentals);
+    } catch {
+      setFundamentals(null);
+    }
+  }, []);
+
+  const loadSentiment = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cn-equity/sentiment/summary?hot_limit=20");
+      if (!res.ok) {
+        setSentiment(null);
+        return;
+      }
+      setSentiment((await res.json()) as SentimentSummary);
+    } catch {
+      setSentiment(null);
+    }
+  }, []);
+
   useEffect(() => {
     void loadCodes(asset);
   }, [asset, loadCodes]);
+
+  useEffect(() => {
+    void loadSentiment();
+    const id = setInterval(() => void loadSentiment(), 120_000);
+    return () => clearInterval(id);
+  }, [loadSentiment]);
+
+  useEffect(() => {
+    if (!selected || asset !== "stock") {
+      setFundamentals(null);
+      return;
+    }
+    void loadFundamentals(selected);
+  }, [selected, asset, loadFundamentals]);
 
   // 切换资产类时重置选中与默认图周期（指数/ETF 默认日K）
   useEffect(() => {
@@ -889,67 +1030,227 @@ export default function CnEquityPage() {
 
         <aside className="bn-right bn-right-quotes ths-book">
           <div className="bn-card bn-book bn-book-tall">
-            <div className="bn-card-head">
-              <span>五档买卖</span>
-              <span className="bn-label">
-                {five.levels > 0 ? `${five.levels} 档` : "—"}
-              </span>
+            <div className="bn-card-head ths-side-tabs">
+              {(
+                [
+                  ["book", "五档"],
+                  ["fund", "资金"],
+                  ["finance", "财务"],
+                  ["hot", "热榜"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={sideTab === id ? "active" : undefined}
+                  onClick={() => setSideTab(id)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-            <div className="ths-five-head">
-              <span>卖盘</span>
-              <span>价格</span>
-              <span>量(手)</span>
-            </div>
-            <div className="ths-five-body">
-              {askRows.map((lv, i) => {
-                const rank = 5 - i;
-                const ok = Number.isFinite(lv.price);
-                const bar = ok
-                  ? Math.min(100, (Number(lv.volume ?? 0) / maxBookVol) * 100)
-                  : 0;
-                return (
-                  <div key={`a${rank}`} className="ths-five-row ask">
-                    <span className="ths-five-side">卖{rank}</span>
-                    <span className="down">
-                      {ok ? fmt(lv.price, 2) : "—"}
+
+            {sideTab === "book" ? (
+              <>
+                <div className="ths-five-head">
+                  <span>卖盘</span>
+                  <span>价格</span>
+                  <span>量(手)</span>
+                </div>
+                <div className="ths-five-body">
+                  {askRows.map((lv, i) => {
+                    const rank = 5 - i;
+                    const ok = Number.isFinite(lv.price);
+                    const bar = ok
+                      ? Math.min(100, (Number(lv.volume ?? 0) / maxBookVol) * 100)
+                      : 0;
+                    return (
+                      <div key={`a${rank}`} className="ths-five-row ask">
+                        <span className="ths-five-side">卖{rank}</span>
+                        <span className="down">
+                          {ok ? fmt(lv.price, 2) : "—"}
+                        </span>
+                        <span className="ths-five-vol">
+                          <i style={{ width: `${bar}%` }} />
+                          {ok ? fmtVol(lv.volume) : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="ths-five-mid">
+                    <span className={up ? "up" : "down"}>
+                      {q?.price != null ? fmt(q.price, 2) : "—"}
                     </span>
-                    <span className="ths-five-vol">
-                      <i style={{ width: `${bar}%` }} />
-                      {ok ? fmtVol(lv.volume) : "—"}
-                    </span>
+                    <span className="bn-label">最新</span>
                   </div>
-                );
-              })}
-              <div className="ths-five-mid">
-                <span className={up ? "up" : "down"}>
-                  {q?.price != null ? fmt(q.price, 2) : "—"}
-                </span>
-                <span className="bn-label">最新</span>
+                  {bidRows.map((lv, i) => {
+                    const rank = i + 1;
+                    const ok = Number.isFinite(lv.price);
+                    const bar = ok
+                      ? Math.min(100, (Number(lv.volume ?? 0) / maxBookVol) * 100)
+                      : 0;
+                    return (
+                      <div key={`b${rank}`} className="ths-five-row bid">
+                        <span className="ths-five-side">买{rank}</span>
+                        <span className="up">
+                          {ok ? fmt(lv.price, 2) : "—"}
+                        </span>
+                        <span className="ths-five-vol">
+                          <i style={{ width: `${bar}%` }} />
+                          {ok ? fmtVol(lv.volume) : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="bn-demo-hint ths-five-note">
+                  {five.note ||
+                    "盘口来自 qdb；完整五档依赖 collector 写入 cn-equity:depth。"}
+                </p>
+              </>
+            ) : null}
+
+            {sideTab === "fund" ? (
+              <div className="ths-side-panel">
+                {asset !== "stock" ? (
+                  <p className="bn-demo-hint">资金流仅个股冷库</p>
+                ) : !(fundamentals?.capital_flow?.length) ? (
+                  <p className="bn-demo-hint">暂无资金流（等 adata-ingest）</p>
+                ) : (
+                  <table className="ths-side-table">
+                    <thead>
+                      <tr>
+                        <th>日</th>
+                        <th>主力</th>
+                        <th>超大</th>
+                        <th>大单</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fundamentals.capital_flow.slice(0, 8).map((r) => (
+                        <tr key={String(r.trading_day)}>
+                          <td>{String(r.trading_day ?? "").slice(5)}</td>
+                          <td className={netCls(r.main_net)}>
+                            {fmtYi(r.main_net)}
+                          </td>
+                          <td className={netCls(r.super_large_net)}>
+                            {fmtYi(r.super_large_net)}
+                          </td>
+                          <td className={netCls(r.large_net)}>
+                            {fmtYi(r.large_net)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {fundamentals?.industries?.length ? (
+                  <p className="bn-demo-hint ths-five-note">
+                    行业{" "}
+                    {fundamentals.industries
+                      .map((x) => x.name)
+                      .filter(Boolean)
+                      .join(" / ")}
+                  </p>
+                ) : null}
               </div>
-              {bidRows.map((lv, i) => {
-                const rank = i + 1;
-                const ok = Number.isFinite(lv.price);
-                const bar = ok
-                  ? Math.min(100, (Number(lv.volume ?? 0) / maxBookVol) * 100)
-                  : 0;
-                return (
-                  <div key={`b${rank}`} className="ths-five-row bid">
-                    <span className="ths-five-side">买{rank}</span>
-                    <span className="up">
-                      {ok ? fmt(lv.price, 2) : "—"}
-                    </span>
-                    <span className="ths-five-vol">
-                      <i style={{ width: `${bar}%` }} />
-                      {ok ? fmtVol(lv.volume) : "—"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="bn-demo-hint ths-five-note">
-              {five.note ||
-                "盘口来自 qdb；完整五档依赖 collector 写入 cn-equity:depth。"}
-            </p>
+            ) : null}
+
+            {sideTab === "finance" ? (
+              <div className="ths-side-panel">
+                {asset !== "stock" ? (
+                  <p className="bn-demo-hint">财务仅个股冷库</p>
+                ) : (
+                  <>
+                    {fundamentals?.share_capital ? (
+                      <p className="bn-demo-hint">
+                        总股本{" "}
+                        {fmtYiShares(fundamentals.share_capital.total_shares)} ·
+                        流通A{" "}
+                        {fmtYiShares(fundamentals.share_capital.float_shares_a)}
+                      </p>
+                    ) : null}
+                    {!(fundamentals?.finance?.length) ? (
+                      <p className="bn-demo-hint">暂无财务核心指标</p>
+                    ) : (
+                      <table className="ths-side-table">
+                        <thead>
+                          <tr>
+                            <th>报告期</th>
+                            <th>指标</th>
+                            <th>值</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fundamentals.finance.slice(0, 12).map((r, i) => (
+                            <tr
+                              key={`${r.report_date}-${r.indicator_code}-${i}`}
+                            >
+                              <td>{String(r.report_date ?? "").slice(0, 10)}</td>
+                              <td>
+                                {r.indicator_name || r.indicator_code || "—"}
+                              </td>
+                              <td>{fmtNum(r.value)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {fundamentals?.lifting?.length ? (
+                      <p className="bn-demo-hint ths-five-note">
+                        近解禁{" "}
+                        {String(fundamentals.lifting[0]?.lift_date ?? "").slice(
+                          0,
+                          10,
+                        )}{" "}
+                        · {fmtYiShares(fundamentals.lifting[0]?.shares)}
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {sideTab === "hot" ? (
+              <div className="ths-side-panel">
+                {sentiment?.margin?.[0] ? (
+                  <p className="bn-demo-hint">
+                    两融 {String(sentiment.margin[0].trading_day ?? "").slice(5)}{" "}
+                    融资余额{" "}
+                    {fmtYi(sentiment.margin[0].financing_balance)}
+                  </p>
+                ) : null}
+                {!(sentiment?.hot_stock?.length) ? (
+                  <p className="bn-demo-hint">
+                    {sentiment?.note || "暂无热榜快照"}
+                  </p>
+                ) : (
+                  <table className="ths-side-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>热度</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sentiment.hot_stock.slice(0, 15).map((r) => (
+                        <tr key={`${r.rank_no}-${r.stock_code}`}>
+                          <td>{r.rank_no ?? "—"}</td>
+                          <td>{r.stock_code ?? "—"}</td>
+                          <td>{r.stock_name || r.name || "—"}</td>
+                          <td>{fmtNum(r.score)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {sentiment?.note ? (
+                  <p className="bn-demo-hint ths-five-note">{sentiment.note}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </aside>
       </div>
