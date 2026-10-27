@@ -1293,23 +1293,29 @@ def list_securities(
         return []
     lim = max(1, min(int(limit), 20000))
     with conn.cursor() as cur:
+        # 沪深优先：否则 LIMIT 小时会被 BSE 码段占满（exchange_code 字典序 BSE < SSE）
+        order_sql = """
+                ORDER BY CASE exchange_code
+                    WHEN 'SSE' THEN 0 WHEN 'SZSE' THEN 1 ELSE 2 END,
+                    secu_code
+                """
         if secu_category:
             cur.execute(
-                """
+                f"""
                 SELECT exchange_code, secu_code, name, secu_category
                 FROM market.security
                 WHERE secu_category = %s
-                ORDER BY exchange_code, secu_code
+                {order_sql}
                 LIMIT %s
                 """,
                 (secu_category, lim),
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT exchange_code, secu_code, name, secu_category
                 FROM market.security
-                ORDER BY exchange_code, secu_code
+                {order_sql}
                 LIMIT %s
                 """,
                 (lim,),

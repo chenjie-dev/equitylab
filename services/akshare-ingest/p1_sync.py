@@ -8,6 +8,7 @@ from typing import Any, Callable
 from equitylab_market import pg as pg_market
 from equitylab_market.symbols import code6, cn_equity_exchange, map_index_exchange
 
+import industry_em2016
 import util
 
 SOURCE = util.SOURCE
@@ -168,25 +169,31 @@ def sync_share_capital(ak: Any, universe: list[dict[str, str]]) -> int:
 
 
 def sync_industry(ak: Any, universe: list[dict[str, str]]) -> int:
-    """东财行业板成分近似行业归属（EM 伪码）；补百度申万缺口。"""
+    """东财行业板成分 → industry_sw / security_industry（EM 伪码）。
+
+    默认灌板成分（不限 P0 宇宙）；个股 info 行业链需显式
+    AKSHARE_INGEST_INDUSTRY_PER_STOCK=1。
+    """
     total = 0
+    boards_n = 0
+    cons_cap = util.int_env("AKSHARE_INGEST_INDUSTRY_CONS_LIMIT", 500)
     df = util.call_ak(ak.stock_board_industry_name_em)
-    boards = util.df_records(df)[: util.int_env("AKSHARE_INGEST_INDUSTRY_BOARD_LIMIT", 20)]
-    # 建行业码表
+    boards = util.df_records(df)[
+        : util.int_env("AKSHARE_INGEST_INDUSTRY_BOARD_LIMIT", 80)
+    ]
     for b in boards:
         name = str(b.get("板块名称") or b.get("name") or "").strip()
-        code = str(b.get("板块代码") or b.get("code") or name).strip()
         if not name:
             continue
         icode = f"EM:1:{name[:24]}"
-        pg_market.upsert_industry_sw(icode, name, 1, parent_code=None, source_code=SOURCE)
+        pg_market.upsert_industry_sw(
+            icode, name, 1, parent_code=None, source_code=SOURCE
+        )
+        boards_n += 1
         cons = util.call_ak(ak.stock_board_industry_cons_em, symbol=name)
-        for row in util.df_records(cons)[:80]:
+        for row in util.df_records(cons)[:cons_cap]:
             c = code6(str(row.get("代码") or row.get("code") or ""))
             if not c:
-                continue
-            # 仅写入宇宙内或全量（控量：仅宇宙）
-            if universe and c not in {u["code"] for u in universe}:
                 continue
             ex = cn_equity_exchange(c)
             if pg_market.upsert_security_industry(
@@ -194,38 +201,104 @@ def sync_industry(ak: Any, universe: list[dict[str, str]]) -> int:
             ):
                 total += 1
         util.sleep_ms()
-    # 个股信息行业字段回落
-    for item in universe:
-        df = util.call_ak(ak.stock_individual_info_em, symbol=item["code"])
-        kv = {
-            str(r.get("item") or r.get("指标") or ""): str(r.get("value") or r.get("值") or "")
-            for r in util.df_records(df)
-        }
-        industry = (kv.get("行业") or "").strip()
-        if not industry:
-            continue
-        parts = [p.strip() for p in industry.replace("/", "-").split("-") if p.strip()]
-        parent = None
-        for i, name in enumerate(parts[:3], start=1):
-            icode = f"EM:{i}:{name[:24]}"
-            pg_market.upsert_industry_sw(
-                icode, name, i, parent_code=parent, source_code=SOURCE
-            )
-            if pg_market.upsert_security_industry(
-                item["exchange"],
-                item["code"],
-                icode,
-                name=item.get("name") or "",
-                source_code=SOURCE,
+    # 可选：个股 info 行业链（默认关）
+    if util.env_flag("AKSHARE_INGEST_INDUSTRY_PER_STOCK", "0"):
+        for item in universe:
+            df = util.call_ak(ak.stock_individual_info_em, symbol=item["code"])
+            kv = {
+                str(r.get("item") or r.get("指标") or ""): str(
+                    r.get("value") or r.get("值") or ""
+                )
+                for r in util.df_records(df)
+            }
+            industry = (kv.get("行业") or "").strip()
+            if not industry:
+                continue
+            parts = [
+                p.strip()
+                for p in industry.replace("/", "-").split("-")
+                if p.strip()
+            ]
+            parent = None
+            for i, iname in enumerate(parts[:3], start=1):
+                icode = f"EM:{i}:{iname[:24]}"
+                pg_market.upsert_industry_sw(
+                    icode, iname, i, parent_code=parent, source_code=SOURCE
+                )
+                if pg_market.upsert_security_industry(
+                    item["exchange"],
+                    item["code"],
+                    icode,
+                    name=item.get("name") or "",
+                    source_code=SOURCE,
+                ):
+                    total += 1
+                parent = icode
+            util.sleep_ms()
+
+    # 行业板 push2 空时：东财 F10 EM2016 回落（沪深目录，不改 schema）
+    em_n = 0
+    if boards_n == 0 and util.env_flag("AKSHARE_INGEST_INDUSTRY_EM2016", "1"):
+        em_lim = util.int_env("AKSHARE_INGEST_INDUSTRY_EM2016_LIMIT", 200)
+        seed = list(universe)
+        if len(seed) < em_lim:
+            for row in pg_market.list_securities(
+                secu_category="stock", limit=em_lim * 2
             ):
-                total += 1
-            parent = icode
-        util.sleep_ms()
-    if total:
-        pg_market.set_watermark(
-            SOURCE, "industry_sw", "", watermark_day=date.today(), detail={"n": total}
-        )
-    print(f"akshare-ingest industry n={total}", flush=True)
+                if row["exchange"] not in ("SSE", "SZSE"):
+                    continue
+                seed.append(
+                    {
+                        "exchange": row["exchange"],
+                        "code": row["code"],
+                        "name": row.get("name") or "",
+                    }
+                )
+                if len(seed) >= em_lim:
+                    break
+        seen: set[str] = set()
+        for item in seed[:em_lim]:
+            c = item["code"]
+            if c in seen:
+                continue
+            seen.add(c)
+            chain = industry_em2016.fetch_em2016(c)
+            parent = None
+            for node in chain:
+                icode = str(node["sw_code"])
+                pg_market.upsert_industry_sw(
+                    icode,
+                    str(node["industry_name"]),
+                    int(node["level"]),
+                    parent_code=parent,
+                    source_code=SOURCE,
+                )
+                if pg_market.upsert_security_industry(
+                    item["exchange"],
+                    c,
+                    icode,
+                    name=item.get("name") or "",
+                    source_code=SOURCE,
+                ):
+                    total += 1
+                    em_n += 1
+                parent = icode
+            util.sleep_ms()
+        print(f"akshare-ingest industry em2016 fallback n={em_n}", flush=True)
+
+    detail = {
+        "n": total,
+        "boards": boards_n,
+        "members": total,
+        "em2016": em_n,
+    }
+    pg_market.set_watermark(
+        SOURCE, "industry_sw", "", watermark_day=date.today(), detail=detail
+    )
+    print(
+        f"akshare-ingest industry boards={boards_n} members={total} em2016={em_n}",
+        flush=True,
+    )
     return total
 
 

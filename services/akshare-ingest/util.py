@@ -21,7 +21,7 @@ def int_env(name: str, default: int) -> int:
 
 
 def sleep_ms(default_ms: float | None = None) -> None:
-    ms = float(os.environ.get("AKSHARE_INGEST_SLEEP_MS", str(default_ms or 350)))
+    ms = float(os.environ.get("AKSHARE_INGEST_SLEEP_MS", str(default_ms or 800)))
     time.sleep(max(0.05, ms / 1000.0))
 
 
@@ -36,14 +36,52 @@ def df_records(df: Any) -> list[dict[str, Any]]:
         return []
 
 
+def _is_transient_upstream(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    name = type(exc).__name__.lower()
+    needles = (
+        "remotedisconnected",
+        "connection aborted",
+        "connection reset",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "max retries",
+        "503",
+        "502",
+        "429",
+    )
+    if any(n in msg for n in needles):
+        return True
+    if any(n in name for n in ("timeout", "connection", "protocol")):
+        return True
+    return False
+
+
 def call_ak(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """调用 akshare；失败返回 None。"""
-    try:
-        return fn(*args, **kwargs)
-    except Exception as exc:
-        name = getattr(fn, "__name__", str(fn))
-        print(f"akshare-ingest call {name} failed: {exc}", flush=True)
-        return None
+    """调用 akshare；连接类错误最多 3 次指数退避，仍失败返回 None。"""
+    name = getattr(fn, "__name__", str(fn))
+    retries = max(1, int_env("AKSHARE_INGEST_CALL_RETRIES", 3))
+    last_exc: BaseException | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries and _is_transient_upstream(exc):
+                backoff = min(8.0, 0.5 * (2 ** (attempt - 1)))
+                print(
+                    f"akshare-ingest call {name} retry {attempt}/{retries} "
+                    f"after {backoff:.1f}s: {exc}",
+                    flush=True,
+                )
+                time.sleep(backoff)
+                continue
+            print(f"akshare-ingest call {name} failed: {exc}", flush=True)
+            return None
+    if last_exc is not None:
+        print(f"akshare-ingest call {name} failed: {last_exc}", flush=True)
+    return None
 
 
 def day_s(value: Any) -> str | None:

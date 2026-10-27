@@ -26,7 +26,7 @@
 | 阶段 | 写入的既有表（不新建） | 典型 akshare 接口 |
 |---|---|---|
 | P0 | `trading_calendar`、`security`、`bar_daily` | `tool_trade_date_hist_sina`；`stock_info_a_code_name`；`stock_zh_a_hist`；指数/ETF 日线 |
-| P1 | `plate`/`plate_member`、`index_member`、`share_capital`、`industry_*`、`dividend` | `stock_board_concept_*_em`；`index_stock_cons`；`stock_individual_info_em`；行业板成分 |
+| P1 | `plate`/`plate_member`、`index_member`、`share_capital`、`industry_*`、`dividend` | 概念板；指数成分；**行业板 `stock_board_industry_*_em` 成分灌 `security_industry`（不限 P0 宇宙）**；分红 |
 | P2 | `capital_flow_*`、`finance_core` | `stock_individual_fund_flow`；`stock_fund_flow_concept`；`stock_financial_analysis_indicator` |
 | P3 | `lifting`、`margin_balance`、`north_flow_daily`、`lhb_*`、`hot_rank_daily` | 解禁/两融；**`stock_hsgt_hist_em` 北向**；龙虎榜；人气榜 |
 
@@ -46,8 +46,23 @@ docker compose logs -f akshare-ingest
 环境变量见 `.env.example`（`AKSHARE_INGEST_*`）；指标默认 `:9104/metrics`。  
 `AKSHARE_INGEST_SKIP=1` 空转；`SKIP_P1/P2/P3` 关阶段。
 
+关键默认：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `AKSHARE_INGEST_SLEEP_MS` | 800 | 调用间隔（防东财断连） |
+| `AKSHARE_INGEST_CALL_RETRIES` | 3 | 连接类错误指数退避重试 |
+| `AKSHARE_INGEST_INDUSTRY_BOARD_LIMIT` | 80 | 行业板数量 |
+| `AKSHARE_INGEST_INDUSTRY_CONS_LIMIT` | 500 | 每板写入成分上限 |
+| `AKSHARE_INGEST_INDUSTRY_PER_STOCK` | 0 | 是否再扫个股 info 行业链 |
+| `AKSHARE_INGEST_INDUSTRY_EM2016` | 1 | 行业板空时 F10 EM2016 回落 |
+| `AKSHARE_INGEST_INDUSTRY_EM2016_LIMIT` | 200 | EM2016 回落票数 |
+
+行业灌数策略：优先东财**行业板成分** → 既有 `industry_sw`/`security_industry`；板接口不可达时回落 **F10 EM2016**（与 adata 同源，不改 schema）。
+
 ## 4. 与 adata-ingest
 
 - 独立镜像与限速，避免 SDK 互相拖死。  
 - 北向/行业等 adata 弱项可由本边车补写；读面不感知供应商。  
+- adata 侧行业另有 `ADATA_INGEST_INDUSTRY_STOCK_LIMIT`（默认 400）扩 EM2016 宇宙。  
 - 对账：`SELECT source_code, dataset, count(*) FROM market.ingest_watermark GROUP BY 1,2`。

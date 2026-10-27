@@ -123,7 +123,7 @@
 ## 6. 采集优先级
 
 1. **P0（已落地 `services/adata-ingest`）**：日历权威 + 指数/ETF/可转债 `security` + 种子日线（`ADATA_INGEST_*`）  
-2. **P1（已落地同进程 `p1_sync`）**：`plate`（ths 目录 + east push2）/ `plate_member`（按股概念 + 种子 east 成分）/ `index_member` / `share_capital` / `industry_*`（百度申万；风控时跳过）/ `dividend`（东财 RPT_SHAREBONUS_DET 优先，adata 百度回落）→股数口径 `adjust_factor`；`ADATA_INGEST_SKIP_P1=1` 可关  
+2. **P1（已落地同进程 `p1_sync`）**：`plate`（ths 目录 + east push2）/ `plate_member`（按股概念 + 种子 east 成分）/ `index_member` / `share_capital` / `industry_*`（百度申万优先，东财 EM2016 回落；宇宙用 `ADATA_INGEST_INDUSTRY_STOCK_LIMIT` 默认 400，与 `STOCK_LIMIT` 解耦）/ `dividend`（东财 RPT_SHAREBONUS_DET 优先，adata 百度回落）→股数口径 `adjust_factor`；`ADATA_INGEST_SKIP_P1=1` 可关。补数轮示例：`SKIP_P0/P2/P3=1` 且抬 `INDUSTRY_STOCK_LIMIT`  
 3. **P2（已落地 `p2_sync`）**：`capital_flow_daily`（adata get_capital_flow）/ `capital_flow_plate_daily`（东财 push2 概念资金流快照）/ `finance_core`（get_core_index 宽表→长表）；`ADATA_INGEST_SKIP_P2=1` 可关；分时资金流仍不进 market  
 4. **P3（已落地 `p3_sync`）**：`lifting`（东财 RPT_LIFT_STAGE）/ `margin_balance` / `north_flow_daily`（NET 字段近端常空则跳过）/ `lhb_*` / `hot_rank_daily`；`ADATA_INGEST_SKIP_P3=1` 可关  
 

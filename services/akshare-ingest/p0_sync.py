@@ -188,6 +188,15 @@ def _upsert_hist_bars(
             end_date=end,
             adjust="",
         )
+        if df is None:
+            pg_market.set_watermark(
+                SOURCE,
+                "bar_daily",
+                f"{exchange}:{code}",
+                watermark_day=date.today(),
+                detail={"n": 0, "kind": kind, "note": "upstream_disconnect"},
+            )
+            return 0
         rows_raw = util.df_records(df)
     elif kind == "index":
         df = util.call_ak(

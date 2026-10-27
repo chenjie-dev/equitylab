@@ -92,9 +92,14 @@ def _sw_parent(sw_code: str, level: int) -> str | None:
     return c[:4] + "00"
 
 
-def stock_universe(*, prefer_index_members: bool = True) -> list[dict[str, str]]:
+def stock_universe(
+    *,
+    prefer_index_members: bool = True,
+    limit: int | None = None,
+) -> list[dict[str, str]]:
     """P1 按股 API 的标的集：显式代码 ∪ 指数成分 ∪ security 存量。"""
-    limit = _int_env("ADATA_INGEST_STOCK_LIMIT", 80)
+    if limit is None:
+        limit = _int_env("ADATA_INGEST_STOCK_LIMIT", 80)
     raw = os.environ.get("ADATA_INGEST_STOCK_CODES", "").strip()
     if not raw:
         raw = _DEFAULT_STOCKS
@@ -579,10 +584,19 @@ def run_p1(adata, *, inc_sync: Callable[[str, str], None] | None = None) -> dict
     universe = stock_universe()
     detail["universe"] = len(universe)
     print(f"adata-ingest p1 universe n={len(universe)}", flush=True)
+    # 行业可单独扩宇宙（默认 400），不抬高股本/分红等按股 API 的 STOCK_LIMIT
+    industry_lim = _int_env("ADATA_INGEST_INDUSTRY_STOCK_LIMIT", 400)
+    industry_universe = stock_universe(limit=industry_lim)
+    detail["industry_universe"] = len(industry_universe)
+    print(
+        f"adata-ingest p1 industry_universe n={len(industry_universe)} "
+        f"(limit={industry_lim})",
+        flush=True,
+    )
 
     for name, fn in (
         ("share_capital", lambda: sync_share_capital(adata, universe)),
-        ("industry_sw", lambda: sync_industry_sw(adata, universe)),
+        ("industry_sw", lambda: sync_industry_sw(adata, industry_universe)),
         ("plate_member", lambda: sync_plate_members_by_stock(adata, universe)),
         ("east_constituent", sync_east_concept_constituents),
         ("dividend", lambda: sync_dividends(adata, universe)),
