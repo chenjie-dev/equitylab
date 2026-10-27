@@ -79,6 +79,6 @@
 | 「模型算因子」 | 模型可规划与解释；**数值结果**必须来自研究层引擎（或标明 demo stub）。 |
 | 「本地大模型」 | 当前架构统一外部模型 API，不部署 vLLM 推理层。 |
 | 「行情都在 qdb」 | qdb 是热路径；**长期历史与日历权威在 `market`**。 |
-| 「ashare / adata 模块」 | 历史误名（已移除）；产品面是 **cn-equity**；adata/sina 只是 data_source。 |
+| 「ashare / adata 模块」 | 历史误名（已移除）；产品面是 **cn-equity**；adata/sina 只是 data_source。adata 库参考：<https://github.com/1nchaos/adata>。 |
 | 「market-data 管 A 股历史」 | 否；A 股历史经 research/`cn-equity` 读 `market`。 |
 | 「前端/研究回源新浪」 | 禁止；缺数等 collector，返回空/503。 |

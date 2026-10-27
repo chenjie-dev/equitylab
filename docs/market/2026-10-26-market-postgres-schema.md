@@ -7,7 +7,7 @@
 
 - 历史 K 线、复权因子、交易日历、停牌落 **Postgres `market` schema**（冷权威）。
 - 语义对齐聚源常用表：`SecuMain` / `QT_DailyQuote` / `QT_AdjustingFactor` / `QT_TradingDayNew` / `QT_Suspend`。
-- **新浪 / adata 等只是 `data_source`**；业务 API 与路由用 **中国 A 股市场段** 名 `cn-equity`，不出现 ashare/adata 作资源名。
+- **新浪 / adata 等只是 `data_source`**；业务 API 与路由用 **中国 A 股市场段** 名 `cn-equity`，不出现 ashare/adata 作资源名。adata 库参考：<https://github.com/1nchaos/adata>。
 
 ## 2. 本 schema 边界
 
