@@ -85,7 +85,8 @@ PM/Planner ──► Architect ──► Frontend + Backend + Data/RAG
 
 对代理：打开 skill **equitylab-pipeline**，按当前阶段加载对应 `.agents/team/0N-*.md`，完成门禁后再进入下一阶段。
 
-小修复（单文件 typo、文案）可跳过规划/架构，但仍须 **冒烟证据**；feature/epic 结束前强制 **equitylab-dod**。
+小修复（单文件 typo、文案）可跳过规划/架构，但仍须 **冒烟证据**；feature/epic 结束前强制 **equitylab-dod**。  
+改编排工具 / Agent 循环时另对 [Agent 开发流程与设计清单](./2026-10-27-agent-开发流程与设计清单.md) 勾选，并走 skill **equitylab-agent-dev**。
 
 整轮简报须含：`已做 / 未做 / 已知风险 / 复验命令`。
 

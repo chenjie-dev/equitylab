@@ -64,6 +64,7 @@ docs/<topic>/YYYY-MM-DD-<标题>.md   # 例：market/ platform/ agents/
 | 何时 | 打开 |
 |---|---|
 | 改架构 / Agent / RAG / 行情分层 | [`docs/platform/2026-10-15-architecture.md`](docs/platform/2026-10-15-architecture.md) |
+| 改工具面 / harness / Agent eval | [`docs/agents/2026-10-27-agent-开发流程与设计清单.md`](docs/agents/2026-10-27-agent-开发流程与设计清单.md) + skill **equitylab-agent-dev** |
 | 改行情模块职责 / 热冷 / 命名禁令 | [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md)（SSOT） |
 | 改 HTTP 契约或联调路径 | [`docs/platform/2026-10-15-api.md`](docs/platform/2026-10-15-api.md) |
 | Compose / 端口 / 环境变量 / 排障 | [`docs/platform/2026-10-15-containers.md`](docs/platform/2026-10-15-containers.md) |
