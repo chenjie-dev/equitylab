@@ -11,7 +11,7 @@
   （plate / index_member / capital_flow_* / finance_core / 舆情等；列注释见
   infra/postgres/migrations/20261027_market_schema_adata.sql）
 
-本模块当前实现以日线覆盖与 sina 写入为主；完整域写入按该文档 P0–P3 分阶段扩展。
+本模块：日线 / 日历 / sina 覆盖 + P1（股本/申万/板块/成分/分红）写入辅助。
 """
 
 from __future__ import annotations
@@ -416,6 +416,403 @@ def set_watermark(
             ),
         )
     return True
+
+
+# P1 成分/行业「当前快照」统一生效日起点（上游常无调入日；重跑幂等）
+_MEMBERSHIP_FROM = date(1990, 1, 1)
+
+
+def _as_day(value: date | str | None) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def upsert_share_capital(
+    exchange_code: str,
+    secu_code: str,
+    change_date: date | str,
+    *,
+    total_shares: Any = None,
+    float_shares: Any = None,
+    float_shares_a: Any = None,
+    change_reason: str = "",
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """写入 market.share_capital（单位：股）。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    day = _as_day(change_date)
+    if day is None:
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.share_capital (
+                inner_code, change_date, total_shares, float_shares, float_shares_a,
+                change_reason, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, change_date) DO UPDATE SET
+                total_shares = COALESCE(EXCLUDED.total_shares, market.share_capital.total_shares),
+                float_shares = COALESCE(EXCLUDED.float_shares, market.share_capital.float_shares),
+                float_shares_a = COALESCE(EXCLUDED.float_shares_a, market.share_capital.float_shares_a),
+                change_reason = CASE
+                    WHEN EXCLUDED.change_reason <> '' THEN EXCLUDED.change_reason
+                    ELSE market.share_capital.change_reason
+                END,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                inner,
+                day,
+                _dec(total_shares),
+                _dec(float_shares),
+                _dec(float_shares_a),
+                change_reason or "",
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_industry_sw(
+    industry_code: str,
+    name: str,
+    level: int,
+    *,
+    parent_code: str | None = None,
+    source_code: str = "adata",
+) -> bool:
+    """写入 market.industry_sw；parent 须先存在或为空。"""
+    code = (industry_code or "").strip()
+    if not code or level not in (1, 2, 3):
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    parent = (parent_code or "").strip() or None
+    with conn.cursor() as cur:
+        if parent:
+            # 父级占位，避免 FK 失败（名称可后续补）
+            cur.execute(
+                """
+                INSERT INTO market.industry_sw (industry_code, name, level, parent_code, source_code)
+                VALUES (%s, %s, %s, NULL, %s)
+                ON CONFLICT (industry_code) DO NOTHING
+                """,
+                (parent, parent, max(1, level - 1), source_code),
+            )
+        cur.execute(
+            """
+            INSERT INTO market.industry_sw (
+                industry_code, name, level, parent_code, source_code
+            ) VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (industry_code) DO UPDATE SET
+                name = CASE
+                    WHEN EXCLUDED.name <> '' AND EXCLUDED.name <> EXCLUDED.industry_code
+                    THEN EXCLUDED.name ELSE market.industry_sw.name
+                END,
+                level = EXCLUDED.level,
+                parent_code = COALESCE(EXCLUDED.parent_code, market.industry_sw.parent_code),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (code, name or code, level, parent, source_code),
+        )
+    return True
+
+
+def upsert_security_industry(
+    exchange_code: str,
+    secu_code: str,
+    industry_code: str,
+    *,
+    effective_from: date | str | None = None,
+    effective_to: date | str | None = None,
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """证券↔申万归属；默认 effective_from=1990-01-01 表示当前快照。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    icode = (industry_code or "").strip()
+    if not icode:
+        return False
+    start = _as_day(effective_from) or _MEMBERSHIP_FROM
+    end = _as_day(effective_to)
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.security_industry (
+                inner_code, industry_code, effective_from, effective_to, source_code
+            ) VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, industry_code, effective_from) DO UPDATE SET
+                effective_to = EXCLUDED.effective_to,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (inner, icode, start, end, source_code),
+        )
+    return True
+
+
+def upsert_plate(
+    vendor: str,
+    plate_code: str,
+    *,
+    name: str = "",
+    plate_kind: str = "concept",
+    link_security: bool = True,
+    source_code: str = "adata",
+) -> int | None:
+    """写入 market.plate；可选挂 THS/EAST 概念 security，返回 plate 关联 inner_code。"""
+    v = (vendor or "").strip().lower()
+    code = (plate_code or "").strip()
+    if v not in ("ths", "east") or not code:
+        return None
+    kind = (plate_kind or "concept").strip().lower()
+    if kind not in ("concept", "industry", "region", "other"):
+        kind = "other"
+    exchange = "THS" if v == "ths" else "EAST"
+    linked: int | None = None
+    if link_security:
+        linked = ensure_security(
+            exchange, code, name=name or code, secu_category="concept"
+        )
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.plate (
+                vendor, plate_code, name, plate_kind, inner_code, source_code, updated_at
+            ) VALUES (%s,%s,%s,%s,%s,%s, NOW())
+            ON CONFLICT (vendor, plate_code) DO UPDATE SET
+                name = CASE
+                    WHEN EXCLUDED.name <> '' THEN EXCLUDED.name
+                    ELSE market.plate.name
+                END,
+                plate_kind = EXCLUDED.plate_kind,
+                inner_code = COALESCE(EXCLUDED.inner_code, market.plate.inner_code),
+                source_code = EXCLUDED.source_code,
+                updated_at = NOW()
+            RETURNING inner_code
+            """,
+            (v, code, name or "", kind, linked, source_code),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else linked
+
+
+def upsert_plate_member(
+    vendor: str,
+    plate_code: str,
+    exchange_code: str,
+    secu_code: str,
+    *,
+    effective_from: date | str | None = None,
+    effective_to: date | str | None = None,
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """板块成分；缺省 effective_from=1990-01-01。plate 行须已存在。"""
+    v = (vendor or "").strip().lower()
+    pcode = (plate_code or "").strip()
+    if v not in ("ths", "east") or not pcode:
+        return False
+    # 确保 plate 目录行（无名称时至少占位）
+    upsert_plate(v, pcode, name="", plate_kind="concept", source_code=source_code)
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    start = _as_day(effective_from) or _MEMBERSHIP_FROM
+    end = _as_day(effective_to)
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.plate_member (
+                vendor, plate_code, inner_code, effective_from, effective_to, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (vendor, plate_code, inner_code, effective_from) DO UPDATE SET
+                effective_to = EXCLUDED.effective_to,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (v, pcode, inner, start, end, source_code),
+        )
+    return True
+
+
+def upsert_index_member(
+    index_exchange: str,
+    index_code: str,
+    member_exchange: str,
+    member_code: str,
+    *,
+    effective_from: date | str | None = None,
+    effective_to: date | str | None = None,
+    weight: Any = None,
+    index_name: str = "",
+    member_name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """指数成分（官方/权威）；与 plate_member 分离。"""
+    idx = ensure_security(
+        index_exchange, index_code, name=index_name, secu_category="index"
+    )
+    mem = ensure_security(
+        member_exchange, member_code, name=member_name, secu_category="stock"
+    )
+    if idx is None or mem is None:
+        return False
+    start = _as_day(effective_from) or _MEMBERSHIP_FROM
+    end = _as_day(effective_to)
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.index_member (
+                index_inner_code, member_inner_code, effective_from, effective_to,
+                weight, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (index_inner_code, member_inner_code, effective_from) DO UPDATE SET
+                effective_to = EXCLUDED.effective_to,
+                weight = COALESCE(EXCLUDED.weight, market.index_member.weight),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (idx, mem, start, end, _dec(weight), source_code),
+        )
+    return True
+
+
+def upsert_dividend(
+    exchange_code: str,
+    secu_code: str,
+    ex_date: date | str,
+    *,
+    announce_date: date | str | None = None,
+    record_date: date | str | None = None,
+    pay_date: date | str | None = None,
+    cash_per_share: Any = None,
+    stock_per_share: Any = None,
+    transfer_per_share: Any = None,
+    remark: str = "",
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """分红送转。announce 缺省时用 ex_date，满足 UNIQUE(inner, ex, announce)。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    ex = _as_day(ex_date)
+    if ex is None:
+        return False
+    ann = _as_day(announce_date) or ex
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.dividend (
+                inner_code, announce_date, ex_date, record_date, pay_date,
+                cash_per_share, stock_per_share, transfer_per_share,
+                remark, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, ex_date, announce_date) DO UPDATE SET
+                record_date = COALESCE(EXCLUDED.record_date, market.dividend.record_date),
+                pay_date = COALESCE(EXCLUDED.pay_date, market.dividend.pay_date),
+                cash_per_share = COALESCE(EXCLUDED.cash_per_share, market.dividend.cash_per_share),
+                stock_per_share = COALESCE(
+                    EXCLUDED.stock_per_share, market.dividend.stock_per_share
+                ),
+                transfer_per_share = COALESCE(
+                    EXCLUDED.transfer_per_share, market.dividend.transfer_per_share
+                ),
+                remark = CASE
+                    WHEN EXCLUDED.remark <> '' THEN EXCLUDED.remark
+                    ELSE market.dividend.remark
+                END,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                inner,
+                ann,
+                ex,
+                _as_day(record_date),
+                _as_day(pay_date),
+                _dec(cash_per_share),
+                _dec(stock_per_share),
+                _dec(transfer_per_share),
+                remark or "",
+                source_code,
+            ),
+        )
+    return True
+
+
+def list_securities(
+    *,
+    secu_category: str | None = "stock",
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """列出已入库证券（供采集族按目录扩写）。"""
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 20000))
+    with conn.cursor() as cur:
+        if secu_category:
+            cur.execute(
+                """
+                SELECT exchange_code, secu_code, name, secu_category
+                FROM market.security
+                WHERE secu_category = %s
+                ORDER BY exchange_code, secu_code
+                LIMIT %s
+                """,
+                (secu_category, lim),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT exchange_code, secu_code, name, secu_category
+                FROM market.security
+                ORDER BY exchange_code, secu_code
+                LIMIT %s
+                """,
+                (lim,),
+            )
+        rows = cur.fetchall() or []
+    return [
+        {
+            "exchange": r[0],
+            "code": r[1],
+            "name": r[2] or "",
+            "secu_category": r[3],
+        }
+        for r in rows
+    ]
 
 
 def get_watermark_day(source_code: str, dataset: str, scope_key: str = "") -> date | None:

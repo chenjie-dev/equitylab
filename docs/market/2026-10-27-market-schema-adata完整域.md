@@ -123,7 +123,7 @@
 ## 6. 采集优先级
 
 1. **P0（已落地 `services/adata-ingest`）**：日历权威 + 指数/ETF/可转债 `security` + 种子日线（`ADATA_INGEST_*`）  
-2. **P1（未做）**：`plate` / `plate_member` / `index_member` / `share_capital` / `industry_*` / `dividend`→`adjust_factor`  
+2. **P1（已落地同进程 `p1_sync`）**：`plate`（ths 目录 + east push2）/ `plate_member`（按股概念 + 种子 east 成分）/ `index_member` / `share_capital` / `industry_*`（百度申万；风控时跳过）/ `dividend`（东财 RPT_SHAREBONUS_DET 优先，adata 百度回落）→股数口径 `adjust_factor`；`ADATA_INGEST_SKIP_P1=1` 可关  
 3. **P2（未做）**：`capital_flow_*` / `finance_core`  
 4. **P3（未做）**：舆情冷表日终 job  
 

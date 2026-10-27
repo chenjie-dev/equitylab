@@ -8,8 +8,8 @@ COPY services/adata-ingest/requirements.txt .
 RUN pip install --no-cache-dir /tmp/market-py \
     && pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/market-py
-COPY services/adata-ingest/main.py services/adata-ingest/prom_metrics.py \
-     services/adata-ingest/eastmoney_bars.py ./
+COPY services/adata-ingest/*.py ./
+# 测试文件不进运行镜像主路径依赖；若 COPY 带入 test_* 无妨
 USER appuser
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]
