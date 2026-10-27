@@ -13,7 +13,7 @@ EquityLab 是面向量化研究的 **多语言 AI Agent 平台**（非 Java 单�
 Frontend (Next.js) → Gateway (Rust) → Orchestrator (TS) → Research (Python)
                               ↘ Market-Data (Rust)
 存储：PostgreSQL（含 `market` 冷行情）+ Redis + Qdrant + qdb（热行情）；模型走外部 API（无本地 vLLM）
-行情：授权采集族 collector（盘中）+ history-ingest（新浪冷日线）+ adata-ingest（adata 冷域 P0）→ qdb/`market`；读路径零上游；边界见 docs/market/2026-10-26-行情模块边界.md
+行情：授权采集族 collector（盘中）+ history-ingest（新浪冷日线）+ adata-ingest / akshare-ingest（冷域并行）→ qdb/`market`；读路径零上游；边界见 docs/market/2026-10-26-行情模块边界.md
 ```
 
 目录约定：`apps/*` 应用、`services/*` 边车（含 `collector`）、`packages/qdb-{py,ts,rs}` qdb 客户端、`docs/*` 人读架构文档、`.agents/skills/` agent 技能、`.agents/team/` 角色卡。
@@ -84,7 +84,7 @@ docs/<topic>/YYYY-MM-DD-<标题>.md   # 例：market/ platform/ agents/
 5. **工具循环**：编排层最多 5 轮、单工具超时 ≤30s（立项约定）。  
 6. **报价缓存** TTL≈3s；盘中 WebSocket 推送不进 MCP（后续独立进程）。  
 7. **行情热冷分离 + 读路径零上游**（细则 [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md)）： 
-   - **授权回源**：`services/collector`（盘中 → qdb + 部分 `market`）、`services/history-ingest`（新浪冷日线 → `market.bar_daily`）、`services/adata-ingest`（adata → 日历/指数·ETF·可转债等冷表）；其它服务禁止访问公开上游。
+   - **授权回源**：`services/collector`（盘中 → qdb + 部分 `market`）、`services/history-ingest`（新浪冷日线 → `market.bar_daily`）、`services/adata-ingest`（adata → 冷表）、`services/akshare-ingest`（akshare → 冷表并行）；其它服务禁止访问公开上游。
    - **所有读路径**零外部行情 HTTP/WS：盘中/订阅/短窗 → qdb（经 `packages/qdb-*` 或 market-data `/qdb/ws`）；A 股已闭合历史 → research `/cn-equity` 读 `market`（可回落 qdb，须标明 `source`）。缺数据 → 空/503，等 collector 补，**禁止回源**。 
    - **命名**：产品面用 `cn-equity`；`sina`/`adata`/`binance` 只作 `data_source`；禁止产品路由/包名再用 `ashare`。 
    - market-data **不得**再代理上游（如 `/binance/v3/{*}`、`/binance/ws`、RWA bapi）；**不**承担 A 股 `market` 历史读。 

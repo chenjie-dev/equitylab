@@ -20,6 +20,7 @@ services:
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
       - ./infra/postgres/migrations/20261026_market_schema.sql:/docker-entrypoint-initdb.d/02_market_schema.sql:ro
       - ./infra/postgres/migrations/20261027_market_schema_adata.sql:/docker-entrypoint-initdb.d/03_market_schema_adata.sql:ro
+      - ./infra/postgres/migrations/20261027_market_data_source_akshare.sql:/docker-entrypoint-initdb.d/04_market_data_source_akshare.sql:ro
     networks: [equitylab]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -203,6 +204,46 @@ services:
       # 可选：与 collector 共用宿主机代理（公开上游）
       HTTPS_PROXY: ${ADATA_INGEST_HTTPS_PROXY:-}
       HTTP_PROXY: ${ADATA_INGEST_HTTP_PROXY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [equitylab]
+
+  # 授权回源边车：akshare → market（P0–P3，与 adata-ingest 并行）
+  akshare-ingest:
+    build:
+      context: .
+      dockerfile: services/akshare-ingest/Dockerfile
+    image: equitylab-akshare-ingest:local
+    container_name: equitylab-akshare-ingest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
+      AKSHARE_INGEST_SKIP: ${AKSHARE_INGEST_SKIP:-0}
+      AKSHARE_INGEST_WINDOW_DAYS: ${AKSHARE_INGEST_WINDOW_DAYS:-180}
+      AKSHARE_INGEST_BAR_START: ${AKSHARE_INGEST_BAR_START:-}
+      AKSHARE_INGEST_SLEEP_MS: ${AKSHARE_INGEST_SLEEP_MS:-350}
+      AKSHARE_INGEST_IDLE_SEC: ${AKSHARE_INGEST_IDLE_SEC:-3600}
+      AKSHARE_INGEST_STOCK_LIMIT: ${AKSHARE_INGEST_STOCK_LIMIT:-80}
+      AKSHARE_INGEST_STOCK_CODES: ${AKSHARE_INGEST_STOCK_CODES:-}
+      AKSHARE_INGEST_STOCK_BAR_LIMIT: ${AKSHARE_INGEST_STOCK_BAR_LIMIT:-20}
+      AKSHARE_INGEST_INDEX_CODES: ${AKSHARE_INGEST_INDEX_CODES:-000001,399001,399006,000300,000016,000852}
+      AKSHARE_INGEST_INDEX_BAR_LIMIT: ${AKSHARE_INGEST_INDEX_BAR_LIMIT:-12}
+      AKSHARE_INGEST_ETF_CODES: ${AKSHARE_INGEST_ETF_CODES:-510300,159915,512880,159919}
+      AKSHARE_INGEST_ETF_BAR_LIMIT: ${AKSHARE_INGEST_ETF_BAR_LIMIT:-8}
+      AKSHARE_INGEST_CONVERT_META_LIMIT: ${AKSHARE_INGEST_CONVERT_META_LIMIT:-200}
+      AKSHARE_INGEST_SKIP_P1: ${AKSHARE_INGEST_SKIP_P1:-0}
+      AKSHARE_INGEST_CONCEPT_LIMIT: ${AKSHARE_INGEST_CONCEPT_LIMIT:-40}
+      AKSHARE_INGEST_INDEX_MEMBER_CODES: ${AKSHARE_INGEST_INDEX_MEMBER_CODES:-000300,000016,399006}
+      AKSHARE_INGEST_SKIP_P2: ${AKSHARE_INGEST_SKIP_P2:-0}
+      AKSHARE_INGEST_FLOW_DAYS: ${AKSHARE_INGEST_FLOW_DAYS:-60}
+      AKSHARE_INGEST_FINANCE_REPORT_LIMIT: ${AKSHARE_INGEST_FINANCE_REPORT_LIMIT:-8}
+      AKSHARE_INGEST_SKIP_P3: ${AKSHARE_INGEST_SKIP_P3:-0}
+      AKSHARE_INGEST_LHB_LOOKBACK: ${AKSHARE_INGEST_LHB_LOOKBACK:-7}
+      AKSHARE_INGEST_MARGIN_DAYS: ${AKSHARE_INGEST_MARGIN_DAYS:-120}
+      METRICS_PORT: ${AKSHARE_INGEST_METRICS_PORT:-9104}
+      HTTPS_PROXY: ${AKSHARE_INGEST_HTTPS_PROXY:-}
+      HTTP_PROXY: ${AKSHARE_INGEST_HTTP_PROXY:-}
     depends_on:
       postgres:
         condition: service_healthy

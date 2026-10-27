@@ -15,9 +15,9 @@
 | **行情服务（Market-Data）** | 非 A 股（如币安/RWA）报价与 K 线适配、缓存与 `/qdb/ws` 代理；**只读 qdb**；不负责下单，不承载 A 股历史库。 |
 | **行情库（qdb）** | 盘中**热**存储：快照、未闭合棒、订阅、短窗引擎 K；业务层只读；不是长期历史主副本。 |
 | **历史库（market）** | Postgres `market` schema：已闭合棒、复权因子、交易日历、停牌；回测/翻历史主读。 |
-| **采集族** | 授权回源：`collector`（盘中）、`history-ingest`（冷日线缺口）、`adata-ingest`（adata/东财冷维表与日终舆情）；其它服务不得回源。 |
+| **采集族** | 授权回源写入**既有**热/冷库：`collector`（盘中 → qdb / 部分 market）、`history-ingest` / `adata-ingest` / `akshare-ingest`（冷 → market）；源头可并行，**不各自改表结构**；其它服务不得回源。 |
 | **中国 A 股面（cn-equity）** | 产品读面与路由前缀；不是采集供应商名。 |
-| **数据源码（data_source）** | 供应商登记（sina/binance…）；只出现在库表与采集实现，不作 API 资源名。 |
+| **数据源码（data_source）** | 供应商登记（sina/adata/akshare/binance…）；只出现在登记表与行级 `source_code`，不作 API 资源名；加源 ≠ 改 schema。 |
 
 ## 交互与工具
 
