@@ -3,7 +3,7 @@
 -- 仅在 Postgres 数据卷首次初始化时由 docker-entrypoint-initdb.d 执行。
 -- 已有卷时修改本文件不会自动重跑，需手工执行 migrations/ 或重建 volume。
 --
--- 行情历史表见同目录挂载的 02_market_schema.sql（market schema）。
+-- 行情历史表：02_market_schema.sql（聚源基线）+ 03_market_schema_adata.sql（adata 完整冷域）。
 -- 命名约定：snake_case、显式主键、查询路径二级索引、COMMENT。
 
 CREATE TABLE IF NOT EXISTS audit_events (

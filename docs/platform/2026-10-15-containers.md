@@ -115,4 +115,4 @@ docker compose down
 
 ## Schema 初始化
 
-`infra/postgres/init.sql` + `migrations/20261026_market_schema.sql` 在 Postgres **首次**初始化时挂载执行（`audit_events` / `chat_sessions` + **`market` schema**）。顶层 `klines` 已废弃。已有数据卷需手工执行 migration 或重建卷。见 [行情 PG 域模型](../market/2026-10-26-market-postgres-schema.md)。
+`infra/postgres/init.sql` + `migrations/20261026_market_schema.sql` + `migrations/20261027_market_schema_adata.sql` 在 Postgres **首次**初始化时挂载执行（`01`/`02`/`03`）。顶层 `klines` 已废弃。已有数据卷需手工执行 migration 或重建卷。见 [行情 PG 域模型](../market/2026-10-26-market-postgres-schema.md)、[adata 完整冷域](../market/2026-10-27-market-schema-adata完整域.md)。

@@ -19,6 +19,7 @@ services:
       - equitylab_pgdata:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
       - ./infra/postgres/migrations/20261026_market_schema.sql:/docker-entrypoint-initdb.d/02_market_schema.sql:ro
+      - ./infra/postgres/migrations/20261027_market_schema_adata.sql:/docker-entrypoint-initdb.d/03_market_schema_adata.sql:ro
     networks: [equitylab]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]

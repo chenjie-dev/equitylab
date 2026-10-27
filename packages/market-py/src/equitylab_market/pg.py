@@ -2,8 +2,16 @@
 
 边界（docs/market/2026-10-26-行情模块边界.md）：
 - 只写冷数据；盘中热路径仍走 qdb，勿在此写未闭合棒。
-- `source_code` 为 data_source（sina 等），不是产品 API 名。
+- `source_code` 为 data_source（sina / adata / eastmoney / ths 等），不是产品 API 名。
 - DATABASE_URL 未配置或库不可达时 no-op。
+
+表结构：
+- 基线：docs/market/2026-10-26-market-postgres-schema.md（bar_daily / adjust_factor / …）
+- adata 完整冷域：docs/market/2026-10-27-market-schema-adata完整域.md
+  （plate / index_member / capital_flow_* / finance_core / 舆情等；列注释见
+  infra/postgres/migrations/20261027_market_schema_adata.sql）
+
+本模块当前实现以日线覆盖与 sina 写入为主；完整域写入按该文档 P0–P3 分阶段扩展。
 """
 
 from __future__ import annotations

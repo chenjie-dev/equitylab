@@ -8,6 +8,7 @@
 - 历史 K 线、复权因子、交易日历、停牌落 **Postgres `market` schema**（冷权威）。
 - 语义对齐聚源常用表：`SecuMain` / `QT_DailyQuote` / `QT_AdjustingFactor` / `QT_TradingDayNew` / `QT_Suspend`。
 - **新浪 / adata 等只是 `data_source`**；业务 API 与路由用 **中国 A 股市场段** 名 `cn-equity`，不出现 ashare/adata 作资源名。adata 库参考：<https://github.com/1nchaos/adata>。
+- **adata 完整冷域**（板块/成分/资金流/财务/舆情等）见 **[2026-10-27-market-schema-adata完整域](./2026-10-27-market-schema-adata完整域.md)** 与迁移 `20261027_market_schema_adata.sql`。本文保留 **首版基线** 说明。
 
 ## 2. 本 schema 边界
 
@@ -16,6 +17,7 @@
 | 已闭合 `bar_daily` / `bar_minute` | 盘中未闭合棒、WebSocket 会话（→ qdb） |
 | `adjust_factor` / `trading_calendar` / `suspend` | 币安/RWA 盘中流（→ qdb；读经 market-data） |
 | `security` / `data_source` / `ingest_watermark` | 研报向量、会话审计（其它表/库） |
+| 板块/成分/股本/行业/分红/资金流/财务/舆情冷表 | 三大报明细、公告原文、当日分时（见完整域文） |
 
 写入默认 **仅 collector**；读取 A 股历史经 **research `/cn-equity`**。详见 [模块边界 §3.4](./2026-10-26-行情模块边界.md)。
 
@@ -29,8 +31,9 @@
 | `market.adjust_factor` | QT_AdjustingFactor | 只存因子，不存三份 OHLC |
 | `market.trading_calendar` | QT_TradingDayNew | 按交易所 |
 | `market.suspend` | QT_Suspend | 停牌区间 |
-| `market.data_source` | （扩展） | `sina` / `binance` / `ondo` / `manual` |
+| `market.data_source` | （扩展） | `sina` / `adata` / `eastmoney` / `ths` / `binance` / … |
 | `market.ingest_watermark` | （运维） | 断点续爬 |
+| 板块/成分/资金/财务/舆情等 | 见完整域文 | 迁移 `20261027_*` |
 
 价格：交易所**原始价** `NUMERIC`（元）。成交量：股。成交额：元。  
 复权：读路径按 `adjust_type` 用因子变换；**库内不存复权价行**。
@@ -65,6 +68,7 @@
 - **已有卷**：执行 `migrations/20261026_market_schema.sql`；可选将旧 `public.klines` 导入后 `DROP`。
 - `public.klines` 标记废弃，新代码勿再写入。
 
-## 7. 不做
+## 7. 不做 / 后置
 
-财务报表、公告、股东名册、指数成分权重等——不建表。
+- **不做 PG 权威表**：盘中五档/分笔/当日分时、三大报表明细、公告原文、股东名册、通达信扫雷全文、周月 K 物理表。  
+- **完整域已建表、采集后置**：成分/板块/资金流/核心财务/舆情日终等见 [adata 完整域](./2026-10-27-market-schema-adata完整域.md) §6（P0–P3）。指数成分 `weight` 可空（adata 常无权重）。
