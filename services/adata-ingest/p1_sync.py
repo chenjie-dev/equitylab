@@ -94,7 +94,7 @@ def _sw_parent(sw_code: str, level: int) -> str | None:
 
 def stock_universe(*, prefer_index_members: bool = True) -> list[dict[str, str]]:
     """P1 按股 API 的标的集：显式代码 ∪ 指数成分 ∪ security 存量。"""
-    limit = _int_env("ADATA_INGEST_STOCK_LIMIT", 40)
+    limit = _int_env("ADATA_INGEST_STOCK_LIMIT", 80)
     raw = os.environ.get("ADATA_INGEST_STOCK_CODES", "").strip()
     if not raw:
         raw = _DEFAULT_STOCKS
@@ -277,15 +277,25 @@ def sync_industry_sw(adata, universe: list[dict[str, str]]) -> int:
             if not sw or sw.lower() == "nan":
                 continue
             itype = str(row.get("industry_type") or "")
-            # 只要申万；百度「行业」会混证监会门类（Dxxxxx）
-            if "申万" not in itype and not sw.isdigit():
+            src = str(row.get("source") or "")
+            is_em = sw.startswith("EM:") or "eastmoney" in src.lower()
+            # 申万数字码 / 标明申万；东财 EM2016 回落；拒证监会门类等杂码
+            if not is_em and "申万" not in itype and not sw.isdigit():
                 continue
             level = _sw_level(itype, sw)
             name = str(row.get("industry_name") or row.get("name") or sw)
-            parsed.append((level, sw, name, _sw_parent(sw, level)))
-        parsed.sort(key=lambda x: x[0])
+            parent = _sw_parent(sw, level)
+            parsed.append((level, sw, name, parent))
+        # 东财链：按出现顺序挂父级（同票一次返回的 1→2→3）
+        by_level: dict[int, str] = {}
+        fixed: list[tuple[int, str, str, str | None]] = []
+        for level, sw, name, parent in sorted(parsed, key=lambda x: x[0]):
+            if sw.startswith("EM:") and level > 1 and (level - 1) in by_level:
+                parent = by_level[level - 1]
+            by_level[level] = sw
+            fixed.append((level, sw, name, parent))
         n = 0
-        for level, sw, name, parent in parsed:
+        for level, sw, name, parent in fixed:
             if pg_market.upsert_industry_sw(
                 sw, name, level, parent_code=parent, source_code=SOURCE
             ) and pg_market.upsert_security_industry(

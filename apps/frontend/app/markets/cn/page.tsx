@@ -141,9 +141,37 @@ type SentimentSummary = {
     financing_balance?: number | null;
     margin_balance?: number | null;
   }[];
+  north?: {
+    trading_day?: string;
+    net_flow?: number | null;
+  }[];
   hot_stock?: HotRow[];
   hot_concept?: HotRow[];
   note?: string;
+};
+
+type PlateRow = {
+  vendor?: string;
+  plate_code?: string;
+  name?: string;
+  plate_kind?: string;
+};
+
+type PlateMember = {
+  stock_code?: string;
+  short_name?: string;
+  exchange?: string;
+  name?: string;
+};
+
+type LhbRow = {
+  id?: number;
+  stock_code?: string;
+  short_name?: string;
+  exchange?: string;
+  list_reason?: string;
+  net_buy?: number | null;
+  change_pct?: number | null;
 };
 
 const OTHER_INTERVALS = [
@@ -319,6 +347,17 @@ export default function CnEquityPage() {
   const [sideTab, setSideTab] = useState<SideTab>("book");
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
   const [sentiment, setSentiment] = useState<SentimentSummary | null>(null);
+  const [listMode, setListMode] = useState<"symbols" | "plates">("symbols");
+  const [plates, setPlates] = useState<PlateRow[]>([]);
+  const [plateFocus, setPlateFocus] = useState<PlateRow | null>(null);
+  const [plateMembers, setPlateMembers] = useState<PlateMember[]>([]);
+  const [lhbDay, setLhbDay] = useState("");
+  const [lhbDays, setLhbDays] = useState<string[]>([]);
+  const [lhbRows, setLhbRows] = useState<LhbRow[]>([]);
+  const [lhbDetailId, setLhbDetailId] = useState<number | null>(null);
+  const [lhbDetail, setLhbDetail] = useState<
+    { seat_name?: string; side?: string; net_amount?: number | null }[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
@@ -571,15 +610,111 @@ export default function CnEquityPage() {
     }
   }, []);
 
+  const loadPlates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cn-equity/plates?vendor=east&limit=80");
+      if (!res.ok) {
+        setPlates([]);
+        return;
+      }
+      const body = (await res.json()) as { data?: PlateRow[] };
+      setPlates(body.data ?? []);
+    } catch {
+      setPlates([]);
+    }
+  }, []);
+
+  const loadPlateMembers = useCallback(async (vendor: string, code: string) => {
+    try {
+      const res = await fetch(
+        `/api/cn-equity/plates/${encodeURIComponent(vendor)}/${encodeURIComponent(code)}/members?limit=80`,
+      );
+      if (!res.ok) {
+        setPlateMembers([]);
+        return;
+      }
+      const body = (await res.json()) as { data?: PlateMember[] };
+      setPlateMembers(body.data ?? []);
+    } catch {
+      setPlateMembers([]);
+    }
+  }, []);
+
+  const loadLhbDays = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cn-equity/lhb-days?limit=12");
+      if (!res.ok) return;
+      const body = (await res.json()) as { data?: string[] };
+      const days = body.data ?? [];
+      setLhbDays(days);
+      setLhbDay((prev) => prev || days[0] || "");
+    } catch {
+      setLhbDays([]);
+    }
+  }, []);
+
+  const loadLhb = useCallback(async (day: string) => {
+    if (!day) {
+      setLhbRows([]);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/cn-equity/lhb?date=${encodeURIComponent(day)}&limit=30`,
+      );
+      if (!res.ok) {
+        setLhbRows([]);
+        return;
+      }
+      const body = (await res.json()) as { data?: LhbRow[] };
+      setLhbRows(body.data ?? []);
+    } catch {
+      setLhbRows([]);
+    }
+  }, []);
+
+  const loadLhbDetail = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(`/api/cn-equity/lhb/${id}/detail?limit=40`);
+      if (!res.ok) {
+        setLhbDetail([]);
+        return;
+      }
+      const body = (await res.json()) as {
+        data?: { seat_name?: string; side?: string; net_amount?: number | null }[];
+      };
+      setLhbDetail(body.data ?? []);
+    } catch {
+      setLhbDetail([]);
+    }
+  }, []);
+
   useEffect(() => {
     void loadCodes(asset);
   }, [asset, loadCodes]);
 
   useEffect(() => {
     void loadSentiment();
+    void loadLhbDays();
     const id = setInterval(() => void loadSentiment(), 120_000);
     return () => clearInterval(id);
-  }, [loadSentiment]);
+  }, [loadSentiment, loadLhbDays]);
+
+  useEffect(() => {
+    if (listMode === "plates" && asset === "stock") void loadPlates();
+  }, [listMode, asset, loadPlates]);
+
+  useEffect(() => {
+    if (!lhbDay) return;
+    void loadLhb(lhbDay);
+    setLhbDetailId(null);
+    setLhbDetail([]);
+  }, [lhbDay, loadLhb]);
+
+  useEffect(() => {
+    if (lhbDetailId == null) return;
+    void loadLhbDetail(lhbDetailId);
+  }, [lhbDetailId, loadLhbDetail]);
 
   useEffect(() => {
     if (!selected || asset !== "stock") {
@@ -921,55 +1056,167 @@ export default function CnEquityPage() {
             ))}
           </div>
           {asset === "stock" ? (
-            <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
-              {CN_EQUITY_BOARDS.map((b) => (
+            <>
+              <div className="ths-board-tabs" role="tablist" aria-label="列表模式">
                 <button
-                  key={b.id}
                   type="button"
                   role="tab"
-                  aria-selected={board === b.id}
+                  aria-selected={listMode === "symbols"}
                   className={
-                    board === b.id ? "ths-board-tab active" : "ths-board-tab"
+                    listMode === "symbols" ? "ths-board-tab active" : "ths-board-tab"
                   }
-                  onClick={() => setBoard(b.id)}
+                  onClick={() => {
+                    setListMode("symbols");
+                    setPlateFocus(null);
+                  }}
                 >
-                  {b.label}
+                  标的
                 </button>
-              ))}
-            </div>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={listMode === "plates"}
+                  className={
+                    listMode === "plates" ? "ths-board-tab active" : "ths-board-tab"
+                  }
+                  onClick={() => setListMode("plates")}
+                >
+                  概念
+                </button>
+              </div>
+              {listMode === "symbols" ? (
+                <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
+                  {CN_EQUITY_BOARDS.map((b) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={board === b.id}
+                      className={
+                        board === b.id ? "ths-board-tab active" : "ths-board-tab"
+                      }
+                      onClick={() => setBoard(b.id)}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
           ) : null}
           <input
             className="bn-search"
-            placeholder="搜索代码 / 名称"
+            placeholder={
+              listMode === "plates" && asset === "stock"
+                ? "搜索概念名称 / 代码"
+                : "搜索代码 / 名称"
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索标的"
+            aria-label="搜索"
           />
-          <div className="bn-mkt-head bn-mkt-head-stock">
-            <span>代码</span>
-            <span>现价</span>
-            <span>涨跌%</span>
-          </div>
-          <VirtualMktList
-            key={`${asset}:${board}:${query.trim() || "all"}`}
-            className="bn-mkt-body"
-            items={displayList}
-            rowHeight={40}
-            height="fill"
-            keyOf={(c) => `${c.exchange}:${c.stock_code}`}
-            onVisibleRange={onVisibleRange}
-            empty={<p className="bn-empty">无匹配标的</p>}
-            renderRow={(c) => (
-              <CnEquityMktRow
-                row={c}
-                quote={quotes[c.stock_code]}
-                active={
-                  c.stock_code === selected && c.exchange === selectedEx
-                }
-                onPick={() => pickRow(c)}
+          {listMode === "plates" && asset === "stock" ? (
+            <div className="ths-side-panel" style={{ padding: "4px 8px", flex: 1 }}>
+              {plateFocus ? (
+                <>
+                  <button
+                    type="button"
+                    className="ths-board-tab"
+                    onClick={() => {
+                      setPlateFocus(null);
+                      setPlateMembers([]);
+                    }}
+                  >
+                    ← {plateFocus.name || plateFocus.plate_code}
+                  </button>
+                  <table className="ths-side-table">
+                    <tbody>
+                      {plateMembers.map((m) => (
+                        <tr
+                          key={`${m.exchange}-${m.stock_code}`}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            if (!m.stock_code) return;
+                            startTransition(() => {
+                              setSelected(m.stock_code!);
+                              setSelectedEx(m.exchange || "SZ");
+                              setAsset("stock");
+                              setListMode("symbols");
+                            });
+                          }}
+                        >
+                          <td>{m.stock_code}</td>
+                          <td>{m.short_name || m.name || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!plateMembers.length ? (
+                    <p className="bn-demo-hint">暂无成分（冷库未就绪）</p>
+                  ) : null}
+                </>
+              ) : (
+                <table className="ths-side-table">
+                  <tbody>
+                    {plates
+                      .filter((p) => {
+                        const q = query.trim();
+                        if (!q) return true;
+                        return (
+                          (p.name || "").includes(q) ||
+                          (p.plate_code || "").includes(q)
+                        );
+                      })
+                      .slice(0, 60)
+                      .map((p) => (
+                        <tr
+                          key={`${p.vendor}-${p.plate_code}`}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            setPlateFocus(p);
+                            void loadPlateMembers(
+                              p.vendor || "east",
+                              p.plate_code || "",
+                            );
+                          }}
+                        >
+                          <td>{p.plate_code}</td>
+                          <td>{p.name || "—"}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="bn-mkt-head bn-mkt-head-stock">
+                <span>代码</span>
+                <span>现价</span>
+                <span>涨跌%</span>
+              </div>
+              <VirtualMktList
+                key={`${asset}:${board}:${query.trim() || "all"}`}
+                className="bn-mkt-body"
+                items={displayList}
+                rowHeight={40}
+                height="fill"
+                keyOf={(c) => `${c.exchange}:${c.stock_code}`}
+                onVisibleRange={onVisibleRange}
+                empty={<p className="bn-empty">无匹配标的</p>}
+                renderRow={(c) => (
+                  <CnEquityMktRow
+                    row={c}
+                    quote={quotes[c.stock_code]}
+                    active={
+                      c.stock_code === selected && c.exchange === selectedEx
+                    }
+                    onPick={() => pickRow(c)}
+                  />
+                )}
               />
-            )}
-          />
+            </>
+          )}
         </aside>
 
         <section className="bn-card bn-chart-panel ths-chart">
@@ -1115,7 +1362,7 @@ export default function CnEquityPage() {
                 {asset !== "stock" ? (
                   <p className="bn-demo-hint">资金流仅个股冷库</p>
                 ) : !(fundamentals?.capital_flow?.length) ? (
-                  <p className="bn-demo-hint">暂无资金流（等 adata-ingest）</p>
+                  <p className="bn-demo-hint">暂无资金流（冷库未就绪）</p>
                 ) : (
                   <table className="ths-side-table">
                     <thead>
@@ -1216,8 +1463,13 @@ export default function CnEquityPage() {
                 {sentiment?.margin?.[0] ? (
                   <p className="bn-demo-hint">
                     两融 {String(sentiment.margin[0].trading_day ?? "").slice(5)}{" "}
-                    融资余额{" "}
-                    {fmtYi(sentiment.margin[0].financing_balance)}
+                    融资余额 {fmtYi(sentiment.margin[0].financing_balance)}
+                  </p>
+                ) : null}
+                {sentiment?.north?.[0] ? (
+                  <p className="bn-demo-hint">
+                    北向 {String(sentiment.north[0].trading_day ?? "").slice(0, 10)}{" "}
+                    净流入 {fmtYi(sentiment.north[0].net_flow)}
                   </p>
                 ) : null}
                 {!(sentiment?.hot_stock?.length) ? (
@@ -1235,8 +1487,19 @@ export default function CnEquityPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sentiment.hot_stock.slice(0, 15).map((r) => (
-                        <tr key={`${r.rank_no}-${r.stock_code}`}>
+                      {sentiment.hot_stock.slice(0, 10).map((r) => (
+                        <tr
+                          key={`${r.rank_no}-${r.stock_code}`}
+                          style={{ cursor: r.stock_code ? "pointer" : undefined }}
+                          onClick={() => {
+                            if (!r.stock_code) return;
+                            startTransition(() => {
+                              setSelected(r.stock_code!);
+                              setAsset("stock");
+                              setListMode("symbols");
+                            });
+                          }}
+                        >
                           <td>{r.rank_no ?? "—"}</td>
                           <td>{r.stock_code ?? "—"}</td>
                           <td>{r.stock_name || r.name || "—"}</td>
@@ -1246,6 +1509,74 @@ export default function CnEquityPage() {
                     </tbody>
                   </table>
                 )}
+                <p className="bn-demo-hint">龙虎榜</p>
+                {lhbDays.length ? (
+                  <select
+                    value={lhbDay}
+                    onChange={(e) => setLhbDay(e.target.value)}
+                    aria-label="龙虎榜日期"
+                    style={{ fontSize: 12, marginBottom: 6 }}
+                  >
+                    {lhbDays.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="bn-demo-hint">暂无上榜日</p>
+                )}
+                {lhbRows.length ? (
+                  <table className="ths-side-table">
+                    <thead>
+                      <tr>
+                        <th>代码</th>
+                        <th>名称</th>
+                        <th>净买</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lhbRows.slice(0, 12).map((r) => (
+                        <tr
+                          key={`${r.id}-${r.stock_code}`}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            if (r.stock_code) {
+                              startTransition(() => {
+                                setSelected(r.stock_code!);
+                                setSelectedEx(r.exchange || "SZ");
+                                setAsset("stock");
+                              });
+                            }
+                            if (r.id != null) setLhbDetailId(r.id);
+                          }}
+                        >
+                          <td>{r.stock_code ?? "—"}</td>
+                          <td>{r.short_name ?? "—"}</td>
+                          <td className={netCls(r.net_buy)}>{fmtYi(r.net_buy)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
+                {lhbDetail.length ? (
+                  <>
+                    <p className="bn-demo-hint">席位明细</p>
+                    <table className="ths-side-table">
+                      <tbody>
+                        {lhbDetail.slice(0, 8).map((d, i) => (
+                          <tr key={`${d.seat_name}-${i}`}>
+                            <td>{d.seat_name || "—"}</td>
+                            <td>{d.side || ""}</td>
+                            <td className={netCls(d.net_amount)}>
+                              {fmtYi(d.net_amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                ) : null}
                 {sentiment?.note ? (
                   <p className="bn-demo-hint ths-five-note">{sentiment.note}</p>
                 ) : null}

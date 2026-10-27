@@ -39,6 +39,8 @@ class Catalog(BaseModel):
             "GET /cn-equity/plate-flow?vendor=east",
             "GET /cn-equity/sentiment/summary",
             "GET /cn-equity/lhb?date=YYYY-MM-DD",
+            "GET /cn-equity/lhb/{list_id}/detail",
+            "GET /cn-equity/lhb-days",
         ]
     )
 
@@ -274,6 +276,35 @@ async def lhb(
     except Exception as e:
         logger.exception("cn-equity lhb failed")
         raise HTTPException(status_code=502, detail=f"cn-equity lhb: {e}") from e
+
+
+@endpoints.get("/lhb/{list_id}/detail")
+async def lhb_detail(
+    list_id: int,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict:
+    """龙虎榜席位明细（只读 market.lhb_detail）。"""
+    try:
+        return await asyncio.to_thread(service.lhb_detail, list_id, limit=limit)
+    except Exception as e:
+        logger.exception("cn-equity lhb detail failed id=%s", list_id)
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity lhb detail: {e}"
+        ) from e
+
+
+@endpoints.get("/lhb-days")
+async def lhb_days(
+    limit: Annotated[int, Query(ge=1, le=60)] = 10,
+) -> dict:
+    try:
+        from app.cn_equity import pg_client
+
+        days = await asyncio.to_thread(pg_client.lhb_recent_days, limit=limit)
+        return {"count": len(days), "data": days, "source": "postgres:lhb_list"}
+    except Exception as e:
+        logger.exception("cn-equity lhb-days failed")
+        raise HTTPException(status_code=502, detail=f"cn-equity lhb-days: {e}") from e
 
 
 router = APIRouter(prefix="/cn-equity", tags=["cn-equity"])

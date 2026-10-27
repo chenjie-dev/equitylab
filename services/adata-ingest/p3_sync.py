@@ -143,24 +143,21 @@ def sync_north_flow() -> int:
             source_code=SOURCE,
         ):
             n += 1
-    print(f"adata-ingest p3 north n={n}", flush=True)
-    if n:
-        pg_market.set_watermark(
-            SOURCE, "north_flow_daily", "", watermark_day=_today(), detail={"n": n}
-        )
-    else:
-        print(
-            "adata-ingest p3 north empty "
-            "(eastmoney NET_DEAL_AMT 近端常为 null，水位仍记尝试)",
-            flush=True,
-        )
-        pg_market.set_watermark(
-            SOURCE,
-            "north_flow_daily",
-            "",
-            watermark_day=_today(),
-            detail={"n": 0, "note": "net_fields_null"},
-        )
+    meta = eastmoney_north.coverage_meta()
+    print(
+        f"adata-ingest p3 north n={n} net_max={meta.get('net_max')} "
+        f"deal_only={meta.get('deal_only_days')}",
+        flush=True,
+    )
+    detail = {
+        "n": n,
+        "net_max": meta.get("net_max"),
+        "deal_only_days": meta.get("deal_only_days"),
+        "note": meta.get("note") or ("ok" if n else "net_fields_null"),
+    }
+    pg_market.set_watermark(
+        SOURCE, "north_flow_daily", "", watermark_day=_today(), detail=detail
+    )
     return n
 
 

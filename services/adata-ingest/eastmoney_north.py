@@ -64,21 +64,34 @@ def _fetch_type(mutual_type: str, *, pages: int = 3, page_size: int = 100) -> di
             net = _amt_yuan(row.get("NET_DEAL_AMT"))
             buy = _amt_yuan(row.get("BUY_AMT"))
             sell = _amt_yuan(row.get("SELL_AMT"))
-            if net is None and buy is None and sell is None:
+            # DEAL_AMT 近端仍有值（东财多为万元）；仅作覆盖探测，不冒充净流入
+            deal_raw = row.get("DEAL_AMT")
+            deal = None
+            if deal_raw is not None and deal_raw != "":
+                try:
+                    deal = float(deal_raw) * 10_000.0
+                except (TypeError, ValueError):
+                    deal = None
+            if net is None and buy is None and sell is None and deal is None:
                 continue
-            by_day[day] = {"net": net, "buy": buy, "sell": sell}
+            by_day[day] = {"net": net, "buy": buy, "sell": sell, "deal": deal}
         if len(rows) < page_size:
             break
     return by_day
 
 
 def north_flow_daily(*, pages: int = 5) -> list[dict[str, Any]]:
-    """合并沪/深港通 → [{trade_date, sh_net, sz_net, net_flow, buy_amount, sell_amount}]。"""
+    """合并沪/深港通 → [{trade_date, sh_net, sz_net, net_flow, buy_amount, sell_amount}]。
+
+    近端东财常仅有 DEAL_AMT、NET/BUY/SELL 为 null：此类日不入库（避免假净流入），
+    由调用方读 `coverage_meta()` 写水位说明。
+    """
     # adata：003=沪、001=深
     hgt = _fetch_type("003", pages=pages)
     sgt = _fetch_type("001", pages=pages)
     days = sorted(set(hgt) | set(sgt), reverse=True)
     out: list[dict[str, Any]] = []
+    deal_only = 0
     for day in days:
         h = hgt.get(day) or {}
         s = sgt.get(day) or {}
@@ -94,6 +107,9 @@ def north_flow_daily(*, pages: int = 5) -> list[dict[str, Any]]:
         if sh_net is not None or sz_net is not None:
             net = (sh_net or 0.0) + (sz_net or 0.0)
         if net is None and buy is None and sell is None:
+            # DEAL_AMT 仍可能有值，但不写入（无净流入语义）
+            if h.get("deal") is not None or s.get("deal") is not None:
+                deal_only += 1
             continue
         out.append(
             {
@@ -105,4 +121,19 @@ def north_flow_daily(*, pages: int = 5) -> list[dict[str, Any]]:
                 "sell_amount": sell,
             }
         )
+    north_flow_daily.last_meta = {  # type: ignore[attr-defined]
+        "deal_only_days": deal_only,
+        "net_rows": len(out),
+        "net_max": out[0]["trade_date"] if out else None,
+        "note": (
+            "eastmoney NET/BUY/SELL 近端常 null；仅入库有净流入字段的交易日"
+            if deal_only
+            else ""
+        ),
+    }
     return out
+
+
+def coverage_meta() -> dict[str, Any]:
+    """最近一次 north_flow_daily() 的覆盖说明（供水位 detail）。"""
+    return dict(getattr(north_flow_daily, "last_meta", {}) or {})

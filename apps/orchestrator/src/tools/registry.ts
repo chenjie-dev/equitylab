@@ -16,7 +16,8 @@ function jsonHeaders(): Record<string, string> {
 
 export const TOOL_REGISTRY = {
   get_stock_quote: {
-    description: "按证券代码查询最新行情快照",
+    description:
+      "按证券代码查询最新行情快照（币安/RWA 等非 A 股；A 股请用 get_cn_equity_quote）",
     schema: z.object({ symbol: z.string().min(1) }),
     async run(args: { symbol: string }): Promise<unknown> {
       const res = await fetch(
@@ -29,6 +30,25 @@ export const TOOL_REGISTRY = {
       return res.json();
     },
   },
+  get_cn_equity_quote: {
+    description:
+      "查询中国 A 股报价（research /cn-equity；支持 600519 或 SSE:000001）",
+    schema: z.object({
+      codes: z.string().min(1).describe("逗号分隔代码，如 600519,000001"),
+    }),
+    async run(args: { codes: string }): Promise<unknown> {
+      const q = new URLSearchParams({ codes: args.codes });
+      const res = await fetch(
+        `${RESEARCH_URL}/cn-equity/quotes?${q}`,
+        { headers: traceHeaders() },
+      );
+      if (!res.ok) {
+        throw new Error(`cn-equity quotes ${res.status}`);
+      }
+      return res.json();
+    },
+  },
+
   search_reports: {
     description: "在私有研报库中检索相关切片（RAG）",
     schema: z.object({ query: z.string().min(1) }),
@@ -63,7 +83,8 @@ export const TOOL_REGISTRY = {
     },
   },
   run_backtest: {
-    description: "运行双均线等策略回测（研究层；bars 来自 market-data）",
+    description:
+      "运行双均线等策略回测（研究层；A 股日线优先 market 冷库，其它走 market-data）",
     schema: z.object({
       strategy: z.string().default("dual_ma"),
       fast: z.number().int().positive().default(20),

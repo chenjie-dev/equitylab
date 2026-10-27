@@ -14,8 +14,9 @@ def test_codes_router_limit_covers_full_universe():
     text = src.read_text(encoding="utf-8")
     assert "le=12000" in text
     assert "limit=10000" in text or "= 10000" in text
-    ashare = Path(__file__).resolve().parents[1] / "app" / "routers" / "ashare.py"
-    assert not ashare.exists()
+    root = Path(__file__).resolve().parents[1] / "app"
+    assert not (root / "routers" / "ashare.py").exists()
+    assert not (root / "ashare").exists()
 
 
 def test_cn_equity_exchange_maps_bse_before_sse_nine():

@@ -690,13 +690,19 @@ class CnEquityService:
         hot_concept = pg_client.hot_rank_daily(
             vendor="ths", rank_type="hot_concept", limit=10
         )
+        north_max = north[0]["trading_day"] if north else None
+        note = "热榜为日终快照"
+        if north_max:
+            note = f"北向净流入冷库覆盖至 {north_max}（近端东财常无 NET 字段）；" + note
+        else:
+            note = "北向净流入暂缺；" + note
         return {
             "source": "postgres:market",
             "margin": margin,
             "north": north,
             "hot_stock": hot_ths,
             "hot_concept": hot_concept,
-            "note": "北向 NET 近端可能为空；热榜为日终快照",
+            "note": note,
         }
 
     def lhb(self, trading_day: str, *, limit: int = 100) -> dict[str, Any]:
@@ -708,6 +714,17 @@ class CnEquityService:
             "count": len(rows),
             "data": rows,
             "source": "postgres:lhb_list",
+        }
+
+    def lhb_detail(self, list_id: int, *, limit: int = 100) -> dict[str, Any]:
+        from app.cn_equity import pg_client
+
+        rows = pg_client.lhb_detail(list_id, limit=limit)
+        return {
+            "lhb_list_id": int(list_id),
+            "count": len(rows),
+            "data": rows,
+            "source": "postgres:lhb_detail",
         }
 
 

@@ -919,3 +919,49 @@ def lhb_list_daily(
                 }
             )
         return out
+
+
+def lhb_recent_days(*, limit: int = 10) -> list[str]:
+    """有龙虎榜数据的交易日（新→旧）。"""
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 60))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT trading_day FROM market.lhb_list
+            ORDER BY trading_day DESC
+            LIMIT %s
+            """,
+            (lim,),
+        )
+        return [_day_s(r[0]) for r in cur.fetchall() if r[0]]
+
+
+def lhb_detail(list_id: int, *, limit: int = 100) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    lim = max(1, min(int(limit), 500))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT seat_name, side, buy_amount, sell_amount, net_amount
+            FROM market.lhb_detail
+            WHERE lhb_list_id=%s
+            ORDER BY net_amount DESC NULLS LAST
+            LIMIT %s
+            """,
+            (int(list_id), lim),
+        )
+        return [
+            {
+                "seat_name": r[0] or "",
+                "side": r[1] or "",
+                "buy_amount": _f(r[2]),
+                "sell_amount": _f(r[3]),
+                "net_amount": _f(r[4]),
+            }
+            for r in cur.fetchall()
+        ]
