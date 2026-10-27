@@ -124,7 +124,7 @@
 
 1. **P0（已落地 `services/adata-ingest`）**：日历权威 + 指数/ETF/可转债 `security` + 种子日线（`ADATA_INGEST_*`）  
 2. **P1（已落地同进程 `p1_sync`）**：`plate`（ths 目录 + east push2）/ `plate_member`（按股概念 + 种子 east 成分）/ `index_member` / `share_capital` / `industry_*`（百度申万；风控时跳过）/ `dividend`（东财 RPT_SHAREBONUS_DET 优先，adata 百度回落）→股数口径 `adjust_factor`；`ADATA_INGEST_SKIP_P1=1` 可关  
-3. **P2（未做）**：`capital_flow_*` / `finance_core`  
+3. **P2（已落地 `p2_sync`）**：`capital_flow_daily`（adata get_capital_flow）/ `capital_flow_plate_daily`（东财 push2 概念资金流快照）/ `finance_core`（get_core_index 宽表→长表）；`ADATA_INGEST_SKIP_P2=1` 可关；分时资金流仍不进 market  
 4. **P3（未做）**：舆情冷表日终 job  
 
 写者仍仅采集族；读路径零上游。

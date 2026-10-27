@@ -11,7 +11,8 @@
   （plate / index_member / capital_flow_* / finance_core / 舆情等；列注释见
   infra/postgres/migrations/20261027_market_schema_adata.sql）
 
-本模块：日线 / 日历 / sina 覆盖 + P1（股本/申万/板块/成分/分红）写入辅助。
+本模块：日线 / 日历 / sina 覆盖 + P1（股本/申万/板块/成分/分红）
++ P2（资金流 / finance_core）写入辅助。
 """
 
 from __future__ import annotations
@@ -765,6 +766,195 @@ def upsert_dividend(
                 _dec(stock_per_share),
                 _dec(transfer_per_share),
                 remark or "",
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_capital_flow_daily(
+    exchange_code: str,
+    secu_code: str,
+    trading_day: date | str,
+    *,
+    main_net: Any = None,
+    super_large_net: Any = None,
+    large_net: Any = None,
+    medium_net: Any = None,
+    small_net: Any = None,
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """个股日度资金净流入（元）。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    day = _as_day(trading_day)
+    if day is None:
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.capital_flow_daily (
+                inner_code, trading_day, main_net, super_large_net, large_net,
+                medium_net, small_net, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, trading_day) DO UPDATE SET
+                main_net = COALESCE(EXCLUDED.main_net, market.capital_flow_daily.main_net),
+                super_large_net = COALESCE(
+                    EXCLUDED.super_large_net, market.capital_flow_daily.super_large_net
+                ),
+                large_net = COALESCE(EXCLUDED.large_net, market.capital_flow_daily.large_net),
+                medium_net = COALESCE(
+                    EXCLUDED.medium_net, market.capital_flow_daily.medium_net
+                ),
+                small_net = COALESCE(EXCLUDED.small_net, market.capital_flow_daily.small_net),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                inner,
+                day,
+                _dec(main_net),
+                _dec(super_large_net),
+                _dec(large_net),
+                _dec(medium_net),
+                _dec(small_net),
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_capital_flow_plate_daily(
+    vendor: str,
+    plate_code: str,
+    trading_day: date | str,
+    *,
+    main_net: Any = None,
+    super_large_net: Any = None,
+    large_net: Any = None,
+    medium_net: Any = None,
+    small_net: Any = None,
+    plate_name: str = "",
+    plate_kind: str = "concept",
+    source_code: str = "adata",
+) -> bool:
+    """板块日度资金净流入；自动确保 plate 行存在。"""
+    v = (vendor or "").strip().lower()
+    pcode = (plate_code or "").strip()
+    if v not in ("ths", "east") or not pcode:
+        return False
+    day = _as_day(trading_day)
+    if day is None:
+        return False
+    upsert_plate(
+        v,
+        pcode,
+        name=plate_name,
+        plate_kind=plate_kind,
+        source_code=source_code,
+    )
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.capital_flow_plate_daily (
+                vendor, plate_code, trading_day, main_net, super_large_net,
+                large_net, medium_net, small_net, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (vendor, plate_code, trading_day) DO UPDATE SET
+                main_net = COALESCE(
+                    EXCLUDED.main_net, market.capital_flow_plate_daily.main_net
+                ),
+                super_large_net = COALESCE(
+                    EXCLUDED.super_large_net,
+                    market.capital_flow_plate_daily.super_large_net
+                ),
+                large_net = COALESCE(
+                    EXCLUDED.large_net, market.capital_flow_plate_daily.large_net
+                ),
+                medium_net = COALESCE(
+                    EXCLUDED.medium_net, market.capital_flow_plate_daily.medium_net
+                ),
+                small_net = COALESCE(
+                    EXCLUDED.small_net, market.capital_flow_plate_daily.small_net
+                ),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                v,
+                pcode,
+                day,
+                _dec(main_net),
+                _dec(super_large_net),
+                _dec(large_net),
+                _dec(medium_net),
+                _dec(small_net),
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_finance_core(
+    exchange_code: str,
+    secu_code: str,
+    report_date: date | str,
+    indicator_code: str,
+    *,
+    value: Any = None,
+    indicator_name: str = "",
+    unit: str = "",
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """核心财务指标长表一行。"""
+    code = (indicator_code or "").strip()
+    if not code:
+        return False
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    day = _as_day(report_date)
+    if day is None:
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.finance_core (
+                inner_code, report_date, indicator_code, indicator_name,
+                value, unit, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, report_date, indicator_code) DO UPDATE SET
+                indicator_name = CASE
+                    WHEN EXCLUDED.indicator_name <> '' THEN EXCLUDED.indicator_name
+                    ELSE market.finance_core.indicator_name
+                END,
+                value = COALESCE(EXCLUDED.value, market.finance_core.value),
+                unit = CASE
+                    WHEN EXCLUDED.unit <> '' THEN EXCLUDED.unit
+                    ELSE market.finance_core.unit
+                END,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                inner,
+                day,
+                code[:64],
+                (indicator_name or "")[:128],
+                _dec(value),
+                unit or "",
                 source_code,
             ),
         )

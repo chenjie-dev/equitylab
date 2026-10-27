@@ -1,9 +1,7 @@
-"""授权回源边车：adata → market（P0 日历/指数·ETF·可转债日线 + P1 板块/成分/股本/申万/分红）。
+"""授权回源边车：adata → market（P0–P2）。
 
-边界（docs/market/2026-10-26-行情模块边界.md + 2026-10-27-market-schema-adata完整域.md）：
-- 可访问上游（adata SDK / 东财 push2）；只写 Postgres market；不写 qdb。
-- 产品面仍是 cn-equity；source_code=adata；vendor=ths|east 仅作 plate 隔离。
-- P2+（资金流/财务/舆情）另开。ADATA_INGEST_SKIP_P1=1 可跳过 P1。
+P0 日历/指数·ETF·可转债日线；P1 板块/成分/股本/申万/分红；P2 资金流/财务核心。
+边界见行情模块边界 + market-schema-adata完整域；ADATA_INGEST_SKIP_P1/P2 可关。
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from equitylab_market.symbols import code6, map_adata_exchange, map_index_exchan
 
 import eastmoney_bars
 import p1_sync
+import p2_sync
 
 SOURCE = "adata"
 SLEEP_MS = float(os.environ.get("ADATA_INGEST_SLEEP_MS", "300"))
@@ -303,6 +302,7 @@ def run_round(adata) -> None:
         flush=True,
     )
     p1_sync.run_p1(adata, inc_sync=pm.inc_sync)
+    p2_sync.run_p2(adata, inc_sync=pm.inc_sync)
 
 
 def main() -> None:
