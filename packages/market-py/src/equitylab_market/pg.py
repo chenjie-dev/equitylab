@@ -11,8 +11,7 @@
   （plate / index_member / capital_flow_* / finance_core / 舆情等；列注释见
   infra/postgres/migrations/20261027_market_schema_adata.sql）
 
-本模块：日线 / 日历 / sina 覆盖 + P1（股本/申万/板块/成分/分红）
-+ P2（资金流 / finance_core）写入辅助。
+本模块：日线 / 日历 / sina 覆盖 + P1–P3（板块/资金流/财务/舆情）写入辅助。
 """
 
 from __future__ import annotations
@@ -955,6 +954,328 @@ def upsert_finance_core(
                 (indicator_name or "")[:128],
                 _dec(value),
                 unit or "",
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_lifting(
+    exchange_code: str,
+    secu_code: str,
+    lift_date: date | str,
+    *,
+    shares: Any = None,
+    ratio: Any = None,
+    holder_type: str = "",
+    remark: str = "",
+    name: str = "",
+    source_code: str = "adata",
+) -> bool:
+    """限售解禁；UNIQUE(inner, lift_date, holder_type, shares)。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return False
+    day = _as_day(lift_date)
+    if day is None:
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    # UNIQUE 含 shares；NULL 在 PG 唯一约束中互不等价，缺省写 0
+    sh = _dec(shares)
+    if sh is None:
+        sh = Decimal(0)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.lifting (
+                inner_code, lift_date, shares, ratio, holder_type, remark, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (inner_code, lift_date, holder_type, shares) DO UPDATE SET
+                ratio = COALESCE(EXCLUDED.ratio, market.lifting.ratio),
+                remark = CASE
+                    WHEN EXCLUDED.remark <> '' THEN EXCLUDED.remark
+                    ELSE market.lifting.remark
+                END,
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (inner, day, sh, _dec(ratio), holder_type or "", remark or "", source_code),
+        )
+    return True
+
+
+def upsert_margin_balance(
+    trading_day: date | str,
+    *,
+    market_scope: str = "CN",
+    financing_balance: Any = None,
+    securities_balance: Any = None,
+    margin_balance: Any = None,
+    source_code: str = "adata",
+) -> bool:
+    """两融余额日度。"""
+    day = _as_day(trading_day)
+    if day is None:
+        return False
+    scope = (market_scope or "CN").strip() or "CN"
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.margin_balance (
+                trading_day, market_scope, financing_balance, securities_balance,
+                margin_balance, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (trading_day, market_scope) DO UPDATE SET
+                financing_balance = COALESCE(
+                    EXCLUDED.financing_balance, market.margin_balance.financing_balance
+                ),
+                securities_balance = COALESCE(
+                    EXCLUDED.securities_balance, market.margin_balance.securities_balance
+                ),
+                margin_balance = COALESCE(
+                    EXCLUDED.margin_balance, market.margin_balance.margin_balance
+                ),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                day,
+                scope[:32],
+                _dec(financing_balance),
+                _dec(securities_balance),
+                _dec(margin_balance),
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_north_flow_daily(
+    trading_day: date | str,
+    *,
+    net_flow: Any = None,
+    buy_amount: Any = None,
+    sell_amount: Any = None,
+    sh_net: Any = None,
+    sz_net: Any = None,
+    source_code: str = "adata",
+) -> bool:
+    """北向资金日度。"""
+    day = _as_day(trading_day)
+    if day is None:
+        return False
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.north_flow_daily (
+                trading_day, net_flow, buy_amount, sell_amount, sh_net, sz_net, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (trading_day) DO UPDATE SET
+                net_flow = COALESCE(EXCLUDED.net_flow, market.north_flow_daily.net_flow),
+                buy_amount = COALESCE(
+                    EXCLUDED.buy_amount, market.north_flow_daily.buy_amount
+                ),
+                sell_amount = COALESCE(
+                    EXCLUDED.sell_amount, market.north_flow_daily.sell_amount
+                ),
+                sh_net = COALESCE(EXCLUDED.sh_net, market.north_flow_daily.sh_net),
+                sz_net = COALESCE(EXCLUDED.sz_net, market.north_flow_daily.sz_net),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                day,
+                _dec(net_flow),
+                _dec(buy_amount),
+                _dec(sell_amount),
+                _dec(sh_net),
+                _dec(sz_net),
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_lhb_list(
+    exchange_code: str,
+    secu_code: str,
+    trading_day: date | str,
+    *,
+    list_reason: str = "",
+    close: Any = None,
+    change_pct: Any = None,
+    amount: Any = None,
+    net_buy: Any = None,
+    name: str = "",
+    source_code: str = "adata",
+) -> int | None:
+    """龙虎榜上榜日；返回 lhb_list.id。"""
+    inner = ensure_security(exchange_code, secu_code, name=name, secu_category="stock")
+    if inner is None:
+        return None
+    day = _as_day(trading_day)
+    if day is None:
+        return None
+    conn = _connect()
+    if conn is None:
+        return None
+    reason = (list_reason or "")[:256]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.lhb_list (
+                trading_day, inner_code, list_reason, close, change_pct,
+                amount, net_buy, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (trading_day, inner_code, list_reason) DO UPDATE SET
+                close = COALESCE(EXCLUDED.close, market.lhb_list.close),
+                change_pct = COALESCE(EXCLUDED.change_pct, market.lhb_list.change_pct),
+                amount = COALESCE(EXCLUDED.amount, market.lhb_list.amount),
+                net_buy = COALESCE(EXCLUDED.net_buy, market.lhb_list.net_buy),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            RETURNING id
+            """,
+            (
+                day,
+                inner,
+                reason,
+                _dec(close),
+                _dec(change_pct),
+                _dec(amount),
+                _dec(net_buy),
+                source_code,
+            ),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
+def upsert_lhb_detail(
+    lhb_list_id: int,
+    *,
+    seat_name: str = "",
+    side: str = "",
+    buy_amount: Any = None,
+    sell_amount: Any = None,
+    net_amount: Any = None,
+    source_code: str = "adata",
+) -> bool:
+    """龙虎榜席位明细；同 list+seat+side 先删后插保持幂等。"""
+    if not lhb_list_id:
+        return False
+    side_n = (side or "").strip().lower()
+    if side_n not in ("buy", "sell", "unknown", ""):
+        side_n = "unknown"
+    seat = (seat_name or "")[:256]
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM market.lhb_detail
+            WHERE lhb_list_id=%s AND seat_name=%s AND side=%s
+            """,
+            (lhb_list_id, seat, side_n),
+        )
+        cur.execute(
+            """
+            INSERT INTO market.lhb_detail (
+                lhb_list_id, seat_name, side, buy_amount, sell_amount,
+                net_amount, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                lhb_list_id,
+                seat,
+                side_n,
+                _dec(buy_amount),
+                _dec(sell_amount),
+                _dec(net_amount),
+                source_code,
+            ),
+        )
+    return True
+
+
+def upsert_hot_rank_daily(
+    trading_day: date | str,
+    vendor: str,
+    rank_type: str,
+    rank_no: int,
+    *,
+    exchange_code: str | None = None,
+    secu_code: str | None = None,
+    plate_vendor: str | None = None,
+    plate_code: str | None = None,
+    name: str = "",
+    score: Any = None,
+    source_code: str = "adata",
+) -> bool:
+    """热度日终榜一行。"""
+    day = _as_day(trading_day)
+    if day is None:
+        return False
+    v = (vendor or "").strip().lower()
+    if v not in ("ths", "east", "adata"):
+        return False
+    rtype = (rank_type or "").strip()[:32]
+    if not rtype or int(rank_no) < 1:
+        return False
+    inner = None
+    if exchange_code and secu_code:
+        inner = ensure_security(
+            exchange_code, secu_code, name=name, secu_category="stock"
+        )
+    pv = (plate_vendor or "").strip().lower() or None
+    pc = (plate_code or "").strip() or None
+    if pv and pc:
+        upsert_plate(pv, pc, name=name, plate_kind="concept", source_code=source_code)
+    conn = _connect()
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO market.hot_rank_daily (
+                trading_day, vendor, rank_type, rank_no, inner_code,
+                plate_vendor, plate_code, name, score, source_code
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (trading_day, vendor, rank_type, rank_no) DO UPDATE SET
+                inner_code = COALESCE(EXCLUDED.inner_code, market.hot_rank_daily.inner_code),
+                plate_vendor = COALESCE(
+                    EXCLUDED.plate_vendor, market.hot_rank_daily.plate_vendor
+                ),
+                plate_code = COALESCE(
+                    EXCLUDED.plate_code, market.hot_rank_daily.plate_code
+                ),
+                name = CASE
+                    WHEN EXCLUDED.name <> '' THEN EXCLUDED.name
+                    ELSE market.hot_rank_daily.name
+                END,
+                score = COALESCE(EXCLUDED.score, market.hot_rank_daily.score),
+                source_code = EXCLUDED.source_code,
+                ingested_at = NOW()
+            """,
+            (
+                day,
+                v,
+                rtype,
+                int(rank_no),
+                inner,
+                pv,
+                pc,
+                name or "",
+                _dec(score),
                 source_code,
             ),
         )
