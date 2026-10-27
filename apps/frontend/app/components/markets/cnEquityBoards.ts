@@ -3,6 +3,16 @@
  * 北交所须先于「9→沪」；主板不含创业板 / 科创板 / 北交所。
  */
 
+/** 一级资产类（主流终端：A股 / 指数 / ETF / 可转债）。 */
+export type CnAssetClass = "stock" | "index" | "etf" | "convertible";
+
+export const CN_ASSET_CLASSES: { id: CnAssetClass; label: string }[] = [
+  { id: "stock", label: "沪深A股" },
+  { id: "index", label: "指数" },
+  { id: "etf", label: "ETF" },
+  { id: "convertible", label: "可转债" },
+];
+
 export type CnEquityBoardId =
   | "all"
   | "hs_main"
@@ -21,6 +31,15 @@ export const CN_EQUITY_BOARDS: { id: CnEquityBoardId; label: string }[] = [
   { id: "sse", label: "沪市A股" },
   { id: "szse", label: "深市A股" },
 ];
+
+/** UI 交易所 → qdb / PG 交易所。 */
+export function uiToQdbExchange(exchange: string | undefined): string {
+  const e = (exchange || "").toUpperCase();
+  if (e === "SH" || e === "SSE") return "SSE";
+  if (e === "BJ" || e === "BSE") return "BSE";
+  if (e === "SZ" || e === "SZSE") return "SZSE";
+  return "SZSE";
+}
 
 /** 归一化 6 位代码。 */
 export function code6(raw: string): string {

@@ -91,7 +91,27 @@ class CnEquityService:
         self._quote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._quote_ttl = 5.0
 
-    def list_codes(self, q: str | None = None, limit: int = 5000) -> dict[str, Any]:
+    def list_codes(
+        self,
+        q: str | None = None,
+        limit: int = 5000,
+        category: str = "stock",
+    ) -> dict[str, Any]:
+        cat = (category or "stock").strip().lower()
+        if cat in ("index", "etf", "convertible"):
+            from app.cn_equity import pg_client
+
+            rows = pg_client.list_securities(cat, q=q, limit=limit)
+            return {
+                "count": len(rows),
+                "data": rows,
+                "source": "postgres:security",
+                "category": cat,
+                "meta": {
+                    "note": f"{cat} 目录来自 market.security；报价优先 qdb，缺则 bar_daily 末日",
+                },
+            }
+
         now = time.monotonic()
         source = "qdb"
         meta: dict[str, Any] = {}
@@ -175,10 +195,39 @@ class CnEquityService:
         total = len(rows)
         if limit > 0:
             rows = rows[:limit]
-        out: dict[str, Any] = {"count": total, "data": rows, "source": source}
+        # 个股目录标 category=stock，便于前端资产类切换
+        tagged = [{**r, "category": "stock"} for r in rows]
+        out: dict[str, Any] = {
+            "count": total,
+            "data": tagged,
+            "source": source,
+            "category": "stock",
+        }
         if meta:
             out["meta"] = meta
         return out
+
+    @staticmethod
+    def _parse_quote_token(tok: str) -> tuple[str | None, str]:
+        """`SSE:000001` / `000001.SH` / `000001` → (exchange|None, code6)。"""
+        s = str(tok or "").strip().upper()
+        if not s:
+            return None, ""
+        if ":" in s:
+            ex, _, rest = s.partition(":")
+            digits = "".join(ch for ch in rest if ch.isdigit())
+            code = digits[-6:].zfill(6) if len(digits) >= 6 else ""
+            return (ex if ex else None), code
+        if "." in s:
+            code_part, _, ex_ui = s.partition(".")
+            digits = "".join(ch for ch in code_part if ch.isdigit())
+            code = digits[-6:].zfill(6) if len(digits) >= 6 else ""
+            from app.cn_equity.pg_client import normalize_exchange
+
+            return normalize_exchange(ex_ui, code=code), code
+        digits = "".join(ch for ch in s if ch.isdigit())
+        code = digits[-6:].zfill(6) if len(digits) >= 6 else ""
+        return None, code
 
     @staticmethod
     def _normalize_codes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -203,25 +252,63 @@ class CnEquityService:
             )
         return norm
 
-    def quotes(self, codes: list[str]) -> dict[str, Any]:
-        """实时报价只读 qdb。采集由 collector 写入。"""
+    def quotes(
+        self,
+        codes: list[str],
+        *,
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        """报价：qdb 优先；指数/ETF 等缺快照时回落 market.bar_daily 末日。"""
         from app.cn_equity.qdb_client import snapshots
+        from app.cn_equity import pg_client
 
-        clean = []
-        for c in codes:
-            c = "".join(ch for ch in str(c).strip() if ch.isdigit())
-            if len(c) >= 6:
-                clean.append(c[-6:].zfill(6))
-            elif c:
-                clean.append(c.zfill(6))
-        clean = list(dict.fromkeys(clean))[:80]
-        if not clean:
+        parsed: list[tuple[str | None, str]] = []
+        for tok in codes:
+            ex, code = self._parse_quote_token(tok)
+            if code:
+                parsed.append((ex, code))
+        # 去重保序（同 code 不同所保留）
+        seen: set[tuple[str | None, str]] = set()
+        uniq: list[tuple[str | None, str]] = []
+        for item in parsed:
+            if item in seen:
+                continue
+            seen.add(item)
+            uniq.append(item)
+            if len(uniq) >= 80:
+                break
+        if not uniq:
             return {"data": [], "source": "qdb"}
 
+        cat = (category or "").strip().lower() or None
+
+        # 指数/ETF/转债：优先 market.bar_daily（避免 000001 被个股快照盖掉）
+        if cat in ("index", "etf", "convertible") and pg_client.enabled():
+            pairs = [
+                (
+                    pg_client.normalize_exchange(ex_hint, code=code, category=cat),
+                    code,
+                )
+                for ex_hint, code in uniq
+            ]
+            ordered = pg_client.last_daily_quotes(pairs)
+            by_pair = {
+                (pg_client.normalize_exchange(r.get("exchange"), code=str(r.get("stock_code"))), str(r.get("stock_code"))): r
+                for r in ordered
+            }
+            # 保序：按请求 pairs 排
+            ordered = [by_pair[p] for p in pairs if p in by_pair]
+            return {
+                "data": ordered,
+                "source": "postgres:bar_daily",
+                "category": cat,
+            }
+
+        plain_codes = list(dict.fromkeys(c for _, c in uniq))
         now = time.monotonic()
         cached: list[dict[str, Any]] = []
         missing: list[str] = []
-        for code in clean:
+        for code in plain_codes:
             hit = self._quote_cache.get(code)
             if hit and now - hit[0] < self._quote_ttl:
                 cached.append(hit[1])
@@ -235,9 +322,46 @@ class CnEquityService:
                 self._quote_cache[code] = (now, row)
                 cached.append(row)
 
-        by = {r["stock_code"]: r for r in cached}
-        ordered = [by[c] for c in clean if c in by]
-        return {"data": ordered, "source": "qdb"}
+        by_code = {str(r.get("stock_code") or "").zfill(6): r for r in cached}
+        ordered = [by_code[c] for _, c in uniq if c in by_code]
+        return {"data": ordered, "source": "qdb", "category": cat}
+
+    def index_strip(self) -> dict[str, Any]:
+        """顶栏主流指数（上证/深成/创业板/沪深300/上证50/中证1000）。"""
+        seeds = [
+            ("SSE", "000001", "上证指数"),
+            ("SZSE", "399001", "深证成指"),
+            ("SZSE", "399006", "创业板指"),
+            ("SSE", "000300", "沪深300"),
+            ("SSE", "000016", "上证50"),
+            ("SSE", "000852", "中证1000"),
+        ]
+        tokens = [f"{ex}:{code}" for ex, code, _ in seeds]
+        body = self.quotes(tokens, category="index")
+        by = {
+            f"{r.get('exchange')}:{r.get('stock_code')}": r
+            for r in body.get("data") or []
+        }
+        # 也按 code 兜底
+        by_code = {str(r.get("stock_code")): r for r in body.get("data") or []}
+        data = []
+        for ex, code, name in seeds:
+            ui = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}[ex]
+            row = by.get(f"{ui}:{code}") or by_code.get(code) or {}
+            data.append(
+                {
+                    "stock_code": code,
+                    "short_name": row.get("short_name") or name,
+                    "exchange": ui,
+                    "symbol": f"{code}.{ui}",
+                    "category": "index",
+                    "price": row.get("price"),
+                    "change": row.get("change"),
+                    "change_pct": row.get("change_pct"),
+                    "pre_close": row.get("pre_close"),
+                }
+            )
+        return {"data": data, "source": body.get("source"), "category": "index"}
 
     def klines(
         self,
@@ -248,6 +372,8 @@ class CnEquityService:
         adjust_type: int = 1,
         limit: int = 300,
         view: str = "merged",
+        exchange: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         """Wind 风格：历史(WSD)与实时(WSQ)分离，再按需合并。
 
@@ -256,13 +382,18 @@ class CnEquityService:
         - merged：history + realtime（默认，供图表）
         - view：history | realtime | merged
         """
-        code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        ex_hint, code = self._parse_quote_token(stock_code)
+        if not code:
+            code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
+        if ex_hint and not exchange:
+            exchange = ex_hint
         view = (view or "merged").lower()
         if view not in ("history", "realtime", "merged"):
             view = "merged"
 
-        candles, raw_source = _candles_history(code, k_type, limit)
-
+        candles, raw_source = _candles_history(
+            code, k_type, limit, exchange=exchange, category=category
+        )
         session = _cn_session_status()
         today = session["trade_date"]
         in_session = session["status"] in ("pre", "trading", "lunch", "post")
@@ -416,7 +547,14 @@ class CnEquityService:
         }
 
 
-def _candles_history(code: str, k_type: str, limit: int) -> tuple[list[dict[str, Any]], str]:
+def _candles_history(
+    code: str,
+    k_type: str,
+    limit: int,
+    *,
+    exchange: str | None = None,
+    category: str | None = None,
+) -> tuple[list[dict[str, Any]], str]:
     """历史优先 Postgres `market`；不足则回落 qdb。周/月/30m 仍本地折叠。"""
     from app.cn_equity import pg_client
 
@@ -424,7 +562,9 @@ def _candles_history(code: str, k_type: str, limit: int) -> tuple[list[dict[str,
     source = "qdb"
     try:
         if pg_client.enabled():
-            candles = pg_client.bars(code, k_type, limit=limit)
+            candles = pg_client.bars(
+                code, k_type, limit=limit, exchange=exchange, category=category
+            )
             if candles:
                 source = "postgres"
     except Exception as exc:

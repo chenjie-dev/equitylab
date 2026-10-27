@@ -45,3 +45,10 @@ scrape_configs:
       - targets: ["history-ingest:9102"]
         labels:
           service: history-ingest
+
+  - job_name: adata-ingest
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["adata-ingest:9103"]
+        labels:
+          service: adata-ingest

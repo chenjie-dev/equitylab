@@ -23,3 +23,48 @@ def cn_equity_exchange(code: str) -> str:
     if c.startswith(("5", "6", "9")):
         return "SSE"
     return "SZSE"
+
+
+def map_adata_exchange(raw: str, *, code: str = "") -> str:
+    """adata 交易所字段（SH/SZ/BJ 或中文）→ SSE/SZSE/BSE。
+
+    无法识别时回落 cn_equity_exchange(code)。
+    """
+    s = (raw or "").strip().upper()
+    if s in ("SSE", "SZSE", "BSE"):
+        return s
+    if s in ("SH", "SHA", "XSHG", "上海", "沪"):
+        return "SSE"
+    if s in ("SZ", "SZA", "XSHE", "深圳", "深"):
+        return "SZSE"
+    if s in ("BJ", "BSE", "XBEI", "北京", "北"):
+        return "BSE"
+    if code:
+        return cn_equity_exchange(code)
+    return "SZSE"
+
+
+def map_index_exchange(raw: str = "", *, code: str = "") -> str:
+    """指数代码 → 交易所（勿用股票前缀：000001 是上证指数，不是深市个股）。
+
+    优先 adata 交易所字段；否则 399/395→SZSE，000/880→SSE，4/8/92→BSE。
+    """
+    s = (raw or "").strip().upper()
+    if s in ("SSE", "SZSE", "BSE"):
+        return s
+    if s in ("SH", "SHA", "XSHG", "上海", "沪"):
+        return "SSE"
+    if s in ("SZ", "SZA", "XSHE", "深圳", "深"):
+        return "SZSE"
+    if s in ("BJ", "XBEI", "北京", "北"):
+        return "BSE"
+    c = code6(code) or (code or "").strip()
+    if c.startswith(("399", "395", "980")):
+        return "SZSE"
+    if c.startswith(("4", "8")) or c.startswith("92"):
+        return "BSE"
+    if c.startswith(("000", "880", "999")):
+        return "SSE"
+    if code:
+        return cn_equity_exchange(code)
+    return "SSE"

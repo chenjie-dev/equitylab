@@ -159,6 +159,34 @@ services:
         condition: service_healthy
     networks: [equitylab]
 
+  # 授权回源边车（P0）：adata → market 日历 / 指数·ETF·可转债主数据与日线
+  adata-ingest:
+    build:
+      context: .
+      dockerfile: services/adata-ingest/Dockerfile
+    image: equitylab-adata-ingest:local
+    container_name: equitylab-adata-ingest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://equitylab:equitylab@postgres:5432/equitylab}
+      ADATA_INGEST_SKIP: ${ADATA_INGEST_SKIP:-0}
+      ADATA_INGEST_WINDOW_DAYS: ${ADATA_INGEST_WINDOW_DAYS:-180}
+      ADATA_INGEST_BAR_START: ${ADATA_INGEST_BAR_START:-}
+      ADATA_INGEST_SLEEP_MS: ${ADATA_INGEST_SLEEP_MS:-300}
+      ADATA_INGEST_IDLE_SEC: ${ADATA_INGEST_IDLE_SEC:-3600}
+      ADATA_INGEST_INDEX_BAR_LIMIT: ${ADATA_INGEST_INDEX_BAR_LIMIT:-12}
+      ADATA_INGEST_ETF_BAR_LIMIT: ${ADATA_INGEST_ETF_BAR_LIMIT:-8}
+      ADATA_INGEST_INDEX_CODES: ${ADATA_INGEST_INDEX_CODES:-000001,399001,399006,000300,000016,000852}
+      ADATA_INGEST_CONVERT_META_LIMIT: ${ADATA_INGEST_CONVERT_META_LIMIT:-500}
+      METRICS_PORT: ${ADATA_INGEST_METRICS_PORT:-9103}
+      # 可选：与 collector 共用宿主机代理（公开上游）
+      HTTPS_PROXY: ${ADATA_INGEST_HTTPS_PROXY:-}
+      HTTP_PROXY: ${ADATA_INGEST_HTTP_PROXY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [equitylab]
+
   # --- 应用服务 ---
   # 行情：Provider + Redis 短缓存；也可经网关 /api/market/* 访问
   market-data:

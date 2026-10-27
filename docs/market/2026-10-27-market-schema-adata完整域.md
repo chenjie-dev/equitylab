@@ -120,12 +120,12 @@
 概念本身无 SSE/SZSE 席位：用 `exchange_code`=`THS`|`EAST`，`secu_category`=`concept`，`secu_code`=厂商板块码（如 `BK0800` / 同花顺概念码）。  
 `plate.inner_code`（可空）指向该 security，便于 `bar_daily` 与板块行情共用一套 K 线表。
 
-## 6. 采集优先级（路线图，本轮不实现写入）
+## 6. 采集优先级
 
-1. **P0**：登记源 + 日历权威 + 指数/ETF/可转债 `security` + 其 `bar_daily`  
-2. **P1**：`plate` / `plate_member` / `index_member` / `share_capital` / `industry_*` / `dividend`→`adjust_factor`  
-3. **P2**：`capital_flow_*` / `finance_core`  
-4. **P3**：舆情冷表日终 job  
+1. **P0（已落地 `services/adata-ingest`）**：日历权威 + 指数/ETF/可转债 `security` + 种子日线（`ADATA_INGEST_*`）  
+2. **P1（未做）**：`plate` / `plate_member` / `index_member` / `share_capital` / `industry_*` / `dividend`→`adjust_factor`  
+3. **P2（未做）**：`capital_flow_*` / `finance_core`  
+4. **P3（未做）**：舆情冷表日终 job  
 
 写者仍仅采集族；读路径零上游。
 

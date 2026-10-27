@@ -23,16 +23,24 @@ import {
   usePriceFlash,
 } from "../../components/markets/usePriceFlash";
 import {
+  CN_ASSET_CLASSES,
   CN_EQUITY_BOARDS,
+  type CnAssetClass,
   type CnEquityBoardId,
   matchesCnEquityBoard,
+  uiToQdbExchange,
 } from "../../components/markets/cnEquityBoards";
+import {
+  CnIndexStrip,
+  type IndexStripItem,
+} from "../../components/markets/CnIndexStrip";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
 import { useQdbSnapshot } from "../../components/markets/useQdbSnapshot";
 
 /** 与 research/collector 一致：北交所 4/8/92 → BSE；须先于「9→SSE」。 */
-function cnEquityQdbSymbol(code: string): string {
+function cnEquityQdbSymbol(code: string, exchange?: string): string {
   const c = code.replace(/\D/g, "").slice(-6).padStart(6, "0");
+  if (exchange) return `${uiToQdbExchange(exchange)}:${c}`;
   let ex = "SZSE";
   if (c.startsWith("4") || c.startsWith("8") || c.startsWith("92")) {
     ex = "BSE";
@@ -94,7 +102,36 @@ type CodeRow = {
   short_name: string;
   exchange: string;
   symbol: string;
+  category?: string;
+  qdb_exchange?: string;
 };
+
+const INDEX_PRIORITY = [
+  "000001",
+  "399001",
+  "399006",
+  "000300",
+  "000016",
+  "000852",
+] as const;
+
+const ETF_PRIORITY = ["510300", "159915", "512880", "159919"] as const;
+
+function defaultSelected(asset: CnAssetClass): string {
+  if (asset === "index") return "000001";
+  if (asset === "etf") return "510300";
+  if (asset === "convertible") return "";
+  return "600519";
+}
+
+function quoteToken(row: Pick<CodeRow, "stock_code" | "exchange" | "category" | "qdb_exchange">): string {
+  const cat = row.category || "stock";
+  if (cat !== "stock") {
+    const ex = row.qdb_exchange || uiToQdbExchange(row.exchange);
+    return `${ex}:${row.stock_code}`;
+  }
+  return row.stock_code;
+}
 
 type Quote = {
   stock_code: string;
@@ -168,10 +205,12 @@ function mapCandles(
 
 export default function CnEquityPage() {
   const [query, setQuery] = useState("");
+  const [asset, setAsset] = useState<CnAssetClass>("stock");
   const [board, setBoard] = useState<CnEquityBoardId>("all");
   const [codes, setCodes] = useState<CodeRow[]>([]);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState("600519");
+  const [selectedEx, setSelectedEx] = useState("SH");
   const [chartTab, setChartTab] = useState<ChartTab>("intraday");
   const [otherK, setOtherK] = useState<string>("60m");
   const [klines, setKlines] = useState<Kline[]>([]);
@@ -207,34 +246,52 @@ export default function CnEquityPage() {
     });
   }, []);
 
-  // 搜索/板块变更后列表 remount，窗口先回到顶部，避免沿用旧 scroll 下标拉错报价
+  // 搜索/板块/资产类变更后列表 remount，窗口先回到顶部
   useEffect(() => {
     setVisibleRange({ start: 0, end: 40 });
-  }, [query, board]);
+  }, [query, board, asset]);
 
-  const loadCodes = useCallback(async () => {
+  const loadCodes = useCallback(async (assetClass: CnAssetClass) => {
     setLoadingCodes(true);
+    const seed =
+      assetClass === "index"
+        ? INDEX_PRIORITY
+        : assetClass === "etf"
+          ? ETF_PRIORITY
+          : PRIORITY;
     setCodes(
-      PRIORITY.map((stock_code) => ({
+      seed.map((stock_code) => ({
         stock_code,
         short_name: "",
         exchange:
-          stock_code.startsWith("6") || stock_code.startsWith("5") ? "SH" : "SZ",
+          stock_code.startsWith("6") ||
+          stock_code.startsWith("5") ||
+          (assetClass === "index" && stock_code.startsWith("000"))
+            ? "SH"
+            : "SZ",
         symbol: `${stock_code}.CN`,
+        category: assetClass,
       })),
     );
     try {
-      // 与 research le=12000 对齐；勿再传 > 上限以免 422 只剩种子
-      const res = await fetch(`/api/cn-equity/codes?limit=10000`);
+      const res = await fetch(
+        `/api/cn-equity/codes?limit=10000&category=${encodeURIComponent(assetClass)}`,
+      );
       if (!res.ok) throw new Error(`codes ${res.status}`);
       const body = (await res.json()) as {
         data?: CodeRow[];
         count?: number;
         meta?: { note?: string; universe?: string; catalog_count?: number };
+        category?: string;
       };
       if (body.data?.length) setCodes(body.data);
       const n = body.meta?.catalog_count ?? body.count ?? body.data?.length;
-      if (body.meta?.universe === "full" || (typeof n === "number" && n > 100)) {
+      if (assetClass !== "stock") {
+        setCatalogNote(
+          body.meta?.note ||
+            `${assetClass} ${n ?? "—"} 只 · 目录 Postgres · 报价 qdb/日线`,
+        );
+      } else if (body.meta?.universe === "full" || (typeof n === "number" && n > 100)) {
         setCatalogNote(
           `全市场 ${n ?? "—"} 只；列表可滚动；报价按可视窗口分批（有滞后）；K 线完整回填仅热门 seed`,
         );
@@ -251,32 +308,69 @@ export default function CnEquityPage() {
     }
   }, []);
 
-  const loadQuotes = useCallback(async (list: string[]) => {
-    const unique = [...new Set(list.map((c) => c.replace(/\D/g, "").slice(-6)).filter(Boolean))];
-    if (!unique.length) return;
-    for (let i = 0; i < unique.length; i += QUOTE_CHUNK) {
-      const chunk = unique.slice(i, i + QUOTE_CHUNK);
-      const res = await fetch(
-        `/api/cn-equity/quotes?codes=${encodeURIComponent(chunk.join(","))}`,
-      );
-      if (!res.ok) continue;
-      const body = (await res.json()) as { data?: Quote[] };
-      setQuotes((prev) => {
-        const next = { ...prev };
-        for (const q of body.data ?? []) {
-          next[q.stock_code] = { ...prev[q.stock_code], ...q };
-        }
-        return next;
-      });
-    }
-  }, []);
+  const loadQuotes = useCallback(
+    async (tokens: string[], assetClass: CnAssetClass) => {
+      const unique = [...new Set(tokens.filter(Boolean))];
+      if (!unique.length) return;
+      const catQ =
+        assetClass !== "stock"
+          ? `&category=${encodeURIComponent(assetClass)}`
+          : "";
+      for (let i = 0; i < unique.length; i += QUOTE_CHUNK) {
+        const chunk = unique.slice(i, i + QUOTE_CHUNK);
+        const res = await fetch(
+          `/api/cn-equity/quotes?codes=${encodeURIComponent(chunk.join(","))}${catQ}`,
+        );
+        if (!res.ok) continue;
+        const body = (await res.json()) as { data?: Quote[] };
+        setQuotes((prev) => {
+          const next = { ...prev };
+          for (const q of body.data ?? []) {
+            next[q.stock_code] = { ...prev[q.stock_code], ...q };
+          }
+          return next;
+        });
+      }
+    },
+    [],
+  );
 
-  const loadKlines = useCallback(async (code: string, kt: string) => {
-    if (kt === "intraday") {
-      const res = await fetch(`/api/cn-equity/intraday/${code}`);
-      // 429 时保留旧图，避免整页 Error 条把行情台打挂
-      if (res.status === 429) return;
-      if (!res.ok) throw new Error(`intraday ${res.status}`);
+  const loadKlines = useCallback(
+    async (code: string, kt: string, exchange: string, assetClass: CnAssetClass) => {
+      if (kt === "intraday") {
+        const res = await fetch(`/api/cn-equity/intraday/${code}`);
+        if (res.status === 429) return;
+        if (!res.ok) throw new Error(`intraday ${res.status}`);
+        const body = (await res.json()) as {
+          data?: {
+            time?: number | null;
+            open?: number;
+            high?: number;
+            low?: number;
+            close?: number;
+            volume?: number;
+          }[];
+        };
+        setKlines(mapCandles(body.data ?? []));
+        setKMeta({
+          session: undefined,
+          historyCount: body.data?.length,
+          hasRealtime: false,
+          view: "intraday-5m",
+        });
+        return;
+      }
+      const ex = uiToQdbExchange(exchange);
+      const qs = new URLSearchParams({
+        k_type: kt,
+        limit: "300",
+        adjust_type: "1",
+        view: "merged",
+        exchange: ex,
+        category: assetClass,
+      });
+      const res = await fetch(`/api/cn-equity/klines/${code}?${qs}`);
+      if (!res.ok) throw new Error(`klines ${res.status}`);
       const body = (await res.json()) as {
         data?: {
           time?: number | null;
@@ -286,42 +380,21 @@ export default function CnEquityPage() {
           close?: number;
           volume?: number;
         }[];
+        session?: { status?: string };
+        history?: { count?: number };
+        realtime?: { bar?: unknown } | null;
+        view?: string;
       };
       setKlines(mapCandles(body.data ?? []));
       setKMeta({
-        session: undefined,
-        historyCount: body.data?.length,
-        hasRealtime: false,
-        view: "intraday-5m",
+        session: body.session?.status,
+        historyCount: body.history?.count,
+        hasRealtime: Boolean(body.realtime?.bar),
+        view: body.view ?? "merged",
       });
-      return;
-    }
-    const res = await fetch(
-      `/api/cn-equity/klines/${code}?k_type=${encodeURIComponent(kt)}&limit=300&adjust_type=1&view=merged`,
-    );
-    if (!res.ok) throw new Error(`klines ${res.status}`);
-    const body = (await res.json()) as {
-      data?: {
-        time?: number | null;
-        open?: number;
-        high?: number;
-        low?: number;
-        close?: number;
-        volume?: number;
-      }[];
-      session?: { status?: string };
-      history?: { count?: number };
-      realtime?: { bar?: unknown } | null;
-      view?: string;
-    };
-    setKlines(mapCandles(body.data ?? []));
-    setKMeta({
-      session: body.session?.status,
-      historyCount: body.history?.count,
-      hasRealtime: Boolean(body.realtime?.bar),
-      view: body.view ?? "merged",
-    });
-  }, []);
+    },
+    [],
+  );
 
   const loadFive = useCallback(async (code: string) => {
     try {
@@ -357,15 +430,42 @@ export default function CnEquityPage() {
   }, []);
 
   useEffect(() => {
-    void loadCodes();
-  }, [loadCodes]);
+    void loadCodes(asset);
+  }, [asset, loadCodes]);
+
+  // 切换资产类时重置选中与默认图周期（指数/ETF 默认日K）
+  useEffect(() => {
+    const next = defaultSelected(asset);
+    if (next) {
+      setSelected(next);
+      const sh =
+        next.startsWith("6") ||
+        next.startsWith("5") ||
+        (asset === "index" && next.startsWith("000"));
+      setSelectedEx(sh ? "SH" : "SZ");
+    }
+    setChartTab(asset === "stock" ? "intraday" : "1d");
+    setBoard("all");
+    setQuery("");
+  }, [asset]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    const priorityIdx = new Map(PRIORITY.map((c, i) => [c, i]));
-    let list = codes.filter((c) =>
-      matchesCnEquityBoard(c.stock_code, c.exchange, board),
+    const pri =
+      asset === "index"
+        ? INDEX_PRIORITY
+        : asset === "etf"
+          ? ETF_PRIORITY
+          : PRIORITY;
+    const priorityIdx = new Map<string, number>(
+      [...pri].map((c, i) => [c, i]),
     );
+    let list =
+      asset === "stock"
+        ? codes.filter((c) =>
+            matchesCnEquityBoard(c.stock_code, c.exchange, board),
+          )
+        : [...codes];
     if (q) {
       list = list.filter(
         (c) =>
@@ -375,15 +475,27 @@ export default function CnEquityPage() {
       );
     }
     list.sort((a, b) => {
-      const pa = priorityIdx.get(a.stock_code as (typeof PRIORITY)[number]) ?? 999;
-      const pb = priorityIdx.get(b.stock_code as (typeof PRIORITY)[number]) ?? 999;
+      const pa = priorityIdx.get(a.stock_code) ?? 999;
+      const pb = priorityIdx.get(b.stock_code) ?? 999;
       if (pa !== pb) return pa - pb;
       return a.stock_code.localeCompare(b.stock_code);
     });
     return list;
-  }, [codes, query, board]);
+  }, [codes, query, board, asset]);
 
-  // 全量目录交给虚拟列表；不再 slice 截断
+  // 目录到齐后：可转债等无默认码时选第一只；并同步交易所
+  useEffect(() => {
+    if (!filtered.length) return;
+    const hit = filtered.find((c) => c.stock_code === selected);
+    if (hit) {
+      setSelectedEx(hit.exchange);
+      return;
+    }
+    const first = filtered[0];
+    setSelected(first.stock_code);
+    setSelectedEx(first.exchange);
+  }, [filtered, selected]);
+
   const displayList = filtered;
   const listIds = useMemo(
     () => displayList.map((c) => c.stock_code),
@@ -391,81 +503,127 @@ export default function CnEquityPage() {
   );
   useListKeyboard(listIds, selected, setSelected, Boolean(listIds.length));
 
-  // 仅可视窗口 ± buffer + 当前选中：避免对 ~5k 全表每轮报价
   const quoteCodes = useMemo(() => {
-    if (!displayList.length) return selected ? [selected] : [];
+    if (!displayList.length) {
+      return selected
+        ? [quoteToken({ stock_code: selected, exchange: selectedEx, category: asset })]
+        : [];
+    }
     const from = Math.max(0, visibleRange.start - QUOTE_BUFFER);
     const to = Math.min(
       displayList.length,
       Math.max(visibleRange.end, visibleRange.start + 1) + QUOTE_BUFFER,
     );
-    const want = displayList.slice(from, to).map((c) => c.stock_code);
-    if (selected && !want.includes(selected)) want.push(selected);
+    const want = displayList.slice(from, to).map((c) => quoteToken(c));
+    const selTok = quoteToken({
+      stock_code: selected,
+      exchange: selectedEx,
+      category: asset,
+    });
+    if (selected && !want.includes(selTok)) want.push(selTok);
     return want;
-  }, [displayList, visibleRange, selected]);
+  }, [displayList, visibleRange, selected, selectedEx, asset]);
 
   useEffect(() => {
     if (!quoteCodes.length) return;
-    void loadQuotes(quoteCodes);
+    void loadQuotes(quoteCodes, asset);
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(id);
-  }, [quoteCodes, loadQuotes]);
+  }, [quoteCodes, loadQuotes, asset]);
 
   useEffect(() => {
     if (tick === 0) return;
-    void loadQuotes(quoteCodes);
-  }, [tick, quoteCodes, loadQuotes]);
+    void loadQuotes(quoteCodes, asset);
+  }, [tick, quoteCodes, loadQuotes, asset]);
 
-  useQdbSnapshot(selected ? cnEquityQdbSymbol(selected) : null, (row) => {
-    const price = row.last;
-    setQuotes((prev) => {
-      const cur = prev[selected];
-      const pre = Number(cur?.pre_close);
-      let change = cur?.change;
-      let changePct = cur?.change_pct;
-      if (Number.isFinite(price) && Number.isFinite(pre) && pre !== 0) {
-        change = Math.round((price - pre) * 10000) / 10000;
-        changePct = Math.round(((price - pre) / pre) * 10000) / 100;
-      }
-      return {
-        ...prev,
-        [selected]: {
-          ...cur,
-          stock_code: selected,
-          short_name: cur?.short_name ?? "",
-          price,
-          change,
-          change_pct: changePct,
-          bid: row.bid ?? cur?.bid,
-          ask: row.ask ?? cur?.ask,
-        },
-      };
-    });
-  });
+  useQdbSnapshot(
+    selected && asset === "stock"
+      ? cnEquityQdbSymbol(selected, selectedEx)
+      : null,
+    (row) => {
+      const price = row.last;
+      setQuotes((prev) => {
+        const cur = prev[selected];
+        const pre = Number(cur?.pre_close);
+        let change = cur?.change;
+        let changePct = cur?.change_pct;
+        if (Number.isFinite(price) && Number.isFinite(pre) && pre !== 0) {
+          change = Math.round((price - pre) * 10000) / 10000;
+          changePct = Math.round(((price - pre) / pre) * 10000) / 100;
+        }
+        return {
+          ...prev,
+          [selected]: {
+            ...cur,
+            stock_code: selected,
+            short_name: cur?.short_name ?? "",
+            price,
+            change,
+            change_pct: changePct,
+            bid: row.bid ?? cur?.bid,
+            ask: row.ask ?? cur?.ask,
+          },
+        };
+      });
+    },
+  );
 
   useEffect(() => {
-    // 换票/周期：seriesKey 已变，图表会 forceFull；勿先清空——否则 429/慢请求时会白屏
+    if (!selected) return;
     let cancelled = false;
     void (async () => {
       try {
-        await Promise.all([loadKlines(selected, activeKType), loadFive(selected)]);
-        if (!cancelled) setError(null);
+        await Promise.all([
+          loadKlines(selected, activeKType, selectedEx, asset),
+          asset === "stock" ? loadFive(selected) : Promise.resolve(),
+        ]);
+        if (!cancelled) {
+          if (asset !== "stock") {
+            setFive({
+              bids: [],
+              asks: [],
+              levels: 0,
+              note: "指数/ETF/可转债暂无五档；展示日线报价",
+            });
+          }
+          setError(null);
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
     const id = setInterval(() => {
-      void loadKlines(selected, activeKType).catch(() => undefined);
-      void loadFive(selected);
+      void loadKlines(selected, activeKType, selectedEx, asset).catch(
+        () => undefined,
+      );
+      if (asset === "stock") void loadFive(selected);
     }, 15_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [selected, activeKType, loadKlines, loadFive]);
+  }, [selected, selectedEx, asset, activeKType, loadKlines, loadFive]);
+
+  const pickRow = useCallback((row: CodeRow) => {
+    startTransition(() => {
+      setSelected(row.stock_code);
+      setSelectedEx(row.exchange);
+    });
+  }, []);
+
+  const onIndexStripPick = useCallback((item: IndexStripItem) => {
+    startTransition(() => {
+      setAsset("index");
+      setSelected(item.stock_code);
+      setSelectedEx(item.exchange);
+      setChartTab("1d");
+    });
+  }, []);
 
   const q = quotes[selected];
-  const meta = codes.find((c) => c.stock_code === selected);
+  const meta = codes.find(
+    (c) => c.stock_code === selected && c.exchange === selectedEx,
+  ) ?? codes.find((c) => c.stock_code === selected);
   const name = q?.short_name || meta?.short_name || selected;
   const chg = Number(q?.change_pct ?? 0);
   const up = Number.isFinite(chg) ? chg >= 0 : true;
@@ -492,12 +650,21 @@ export default function CnEquityPage() {
 
   return (
     <div className="bn-page wind ths">
+      <CnIndexStrip selectedCode={selected} onPick={onIndexStripPick} />
       <header className="bn-top ths-top">
         <div className="bn-top-pair">
           <div className="bn-top-name">
-            <span className="ths-code">{selected}</span>
+            <span className="ths-code">{selected || "—"}</span>
             <span className="ths-name">{name}</span>
-            <span className="bn-pill">A股</span>
+            <span className="bn-pill">
+              {asset === "stock"
+                ? "A股"
+                : asset === "index"
+                  ? "指数"
+                  : asset === "etf"
+                    ? "ETF"
+                    : "转债"}
+            </span>
             {kMeta.session ? (
               <span
                 className={
@@ -563,7 +730,8 @@ export default function CnEquityPage() {
         <span className="bn-label">↑↓ / j k 切换标的</span>
         <span className="bn-label">·</span>
         <span className="bn-label">
-          {meta?.exchange ?? "—"} · 只读 qdb
+          {meta?.exchange ?? selectedEx} ·{" "}
+          {asset === "stock" ? "只读 qdb" : "Postgres/qdb"}
         </span>
         {catalogNote ? (
           <>
@@ -591,28 +759,46 @@ export default function CnEquityPage() {
                   } 只`}
             </span>
           </div>
-          <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
-            {CN_EQUITY_BOARDS.map((b) => (
+          <div className="ths-asset-tabs" role="tablist" aria-label="资产类别">
+            {CN_ASSET_CLASSES.map((a) => (
               <button
-                key={b.id}
+                key={a.id}
                 type="button"
                 role="tab"
-                aria-selected={board === b.id}
+                aria-selected={asset === a.id}
                 className={
-                  board === b.id ? "ths-board-tab active" : "ths-board-tab"
+                  asset === a.id ? "ths-asset-tab active" : "ths-asset-tab"
                 }
-                onClick={() => setBoard(b.id)}
+                onClick={() => setAsset(a.id)}
               >
-                {b.label}
+                {a.label}
               </button>
             ))}
           </div>
+          {asset === "stock" ? (
+            <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
+              {CN_EQUITY_BOARDS.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={board === b.id}
+                  className={
+                    board === b.id ? "ths-board-tab active" : "ths-board-tab"
+                  }
+                  onClick={() => setBoard(b.id)}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <input
             className="bn-search"
             placeholder="搜索代码 / 名称"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="搜索 A 股"
+            aria-label="搜索标的"
           />
           <div className="bn-mkt-head bn-mkt-head-stock">
             <span>代码</span>
@@ -620,22 +806,22 @@ export default function CnEquityPage() {
             <span>涨跌%</span>
           </div>
           <VirtualMktList
-            key={`${board}:${query.trim() || "all"}`}
+            key={`${asset}:${board}:${query.trim() || "all"}`}
             className="bn-mkt-body"
             items={displayList}
             rowHeight={40}
             height="fill"
-            keyOf={(c) => c.stock_code}
+            keyOf={(c) => `${c.exchange}:${c.stock_code}`}
             onVisibleRange={onVisibleRange}
             empty={<p className="bn-empty">无匹配标的</p>}
             renderRow={(c) => (
               <CnEquityMktRow
                 row={c}
                 quote={quotes[c.stock_code]}
-                active={c.stock_code === selected}
-                onPick={() => {
-                  startTransition(() => setSelected(c.stock_code));
-                }}
+                active={
+                  c.stock_code === selected && c.exchange === selectedEx
+                }
+                onPick={() => pickRow(c)}
               />
             )}
           />
@@ -691,8 +877,8 @@ export default function CnEquityPage() {
           </div>
           <BinanceChart
             klines={klines}
-            symbol={`${selected}.CN`}
-            seriesKey={`${selected}:${activeKType}`}
+            symbol={`${selected}.${selectedEx}`}
+            seriesKey={`${selectedEx}:${selected}:${activeKType}:${asset}`}
             palette="wind"
           />
         </section>
@@ -766,9 +952,9 @@ export default function CnEquityPage() {
 
       <footer className="bn-status">
         <span className="bn-status-dot" />
-        <span>A股 · 同花顺启发布局</span>
+        <span>A股 · 同花顺布局</span>
         <span className="bn-label">·</span>
-        <span className="bn-label">红涨绿跌 · Quotes only</span>
+        <span className="bn-label">红涨绿跌 · 指数/ETF/转债已接冷库</span>
         <span className="bn-status-right">
           {selected} {name}
           {q?.price != null ? ` · ${fmt(q.price, 2)}` : ""}

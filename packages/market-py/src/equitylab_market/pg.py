@@ -105,6 +105,13 @@ def ensure_security(
                     WHEN EXCLUDED.name <> '' THEN EXCLUDED.name
                     ELSE market.security.name
                   END,
+                  -- 日线 upsert 默认 category=stock，不得把已有 index/etf 降级
+                  secu_category = CASE
+                    WHEN EXCLUDED.secu_category = 'stock'
+                      AND market.security.secu_category <> 'stock'
+                    THEN market.security.secu_category
+                    ELSE EXCLUDED.secu_category
+                  END,
                   updated_at = NOW()
             RETURNING inner_code
             """,
@@ -126,9 +133,12 @@ def upsert_bar_daily(
     *,
     source_code: str = "sina",
     name: str = "",
+    secu_category: str = "stock",
 ) -> bool:
     """写入 / 覆盖一根日线（交易所原始价）。"""
-    inner = ensure_security(exchange_code, secu_code, name=name)
+    inner = ensure_security(
+        exchange_code, secu_code, name=name, secu_category=secu_category
+    )
     if inner is None:
         return False
     day = trading_day if isinstance(trading_day, date) else date.fromisoformat(str(trading_day)[:10])
@@ -599,6 +609,56 @@ def ingest_sina_klines(
             detail={"n": n_m},
         )
     return {"daily": n_d, "minute": n_m}
+
+
+def apply_calendar_rows(
+    exchange_code: str,
+    rows: list[dict[str, Any]],
+    *,
+    source_code: str = "adata",
+) -> int:
+    """按上游交易日历行写入 trading_calendar。
+
+    每行至少含 calendar_date / trade_date / date；
+    is_trading_day 缺省时看 trade_status / is_open（1/true/交易日）。
+    """
+    n = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_day = (
+            row.get("calendar_date")
+            or row.get("trade_date")
+            or row.get("date")
+            or row.get("cal_date")
+        )
+        if not raw_day:
+            continue
+        day = (
+            raw_day
+            if isinstance(raw_day, date)
+            else date.fromisoformat(str(raw_day)[:10])
+        )
+        flag = row.get("is_trading_day")
+        if flag is None:
+            flag = row.get("trade_status", row.get("is_open", row.get("is_trade_date")))
+        if isinstance(flag, str):
+            is_td = flag.strip().lower() in ("1", "true", "yes", "交易", "交易日", "open")
+        elif flag is None:
+            is_td = True
+        else:
+            is_td = bool(flag)
+        if upsert_calendar_day(exchange_code, day, is_trading_day=is_td):
+            n += 1
+    if n:
+        set_watermark(
+            source_code,
+            "calendar",
+            exchange_code,
+            watermark_day=datetime.now(SH).date(),
+            detail={"n": n},
+        )
+    return n
 
 
 def seed_calendar_weekdays(

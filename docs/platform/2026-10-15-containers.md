@@ -16,7 +16,8 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 | qdrant | equitylab-qdrant | 6333 | 向量库 |
 | qdb | equitylab-qdb | 9090 | 行情库（构建上下文 `../qdb`，不回源） |
 | collector | equitylab-collector | （内部） | 盘中采集：上游 → qdb + 部分 `market` |
-| history-ingest | equitylab-history-ingest | （内部） | 冷历史：扫描 `market` 日线缺口 → 新浪补近半年 |
+| history-ingest | equitylab-history-ingest | （内部） | 新浪冷日线缺口 → `market.bar_daily` |
+| adata-ingest | equitylab-adata-ingest | （内部） | adata P0 → 日历/指数·ETF·可转债元数据 + 东财日线；metrics `:9103` |
 | prometheus | equitylab-prometheus | **9091**→9090 | 指标抓取（避开本机 qdb:9090） |
 | loki | equitylab-loki | 3100 | 日志存储 |
 | alloy | equitylab-alloy | （内部） | 采集容器日志 → Loki（需 docker.sock） |
@@ -24,7 +25,7 @@ Compose 项目名：`equitylab`。一服务一容器，共享网络 `equitylab-n
 
 卷：`equitylab-pgdata`、`equitylab-qdrant`、`equitylab-qdbdata`、`equitylab-loki`、`equitylab-alloy`、`equitylab-grafana`、`equitylab-prometheus`。
 
-qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。**授权采集族**可回源：`collector`（盘中 → qdb / 部分 `market`）与 `history-ingest`（冷日线缺口 → `market.bar_daily`）。研究层与 market-data **读路径零外呼**。边界见 [行情模块边界](../market/2026-10-26-行情模块边界.md)。用法与排障：[2026-10-20-qdb-行情库.md](../market/2026-10-20-qdb-行情库.md)。
+qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`，不用 qdb 内置采集）。**授权采集族**可回源：`collector`（盘中 → qdb / 部分 `market`）、`history-ingest`（新浪冷日线 → `market.bar_daily`）、`adata-ingest`（adata P0 → 日历/指数·ETF·可转债）。研究层与 market-data **读路径零外呼**。边界见 [行情模块边界](../market/2026-10-26-行情模块边界.md)。用法与排障：[2026-10-20-qdb-行情库.md](../market/2026-10-20-qdb-行情库.md)。
 
 可观测性说明：[2026-10-16-observability.md](./2026-10-16-observability.md)。
 

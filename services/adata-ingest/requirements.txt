@@ -1,0 +1,3 @@
+adata>=2.0.0
+prometheus-client==0.21.1
+# psycopg2 / equitylab_market 由 Dockerfile 安装 packages/market-py

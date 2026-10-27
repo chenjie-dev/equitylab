@@ -27,9 +27,10 @@ class Catalog(BaseModel):
     )
     endpoints: list[str] = Field(
         default_factory=lambda: [
-            "GET /cn-equity/codes?q=&limit=",
-            "GET /cn-equity/quotes?codes=000001,600519",
-            "GET /cn-equity/klines/{code}?k_type=1d&view=merged&limit=",
+            "GET /cn-equity/codes?q=&limit=&category=stock|index|etf|convertible",
+            "GET /cn-equity/quotes?codes=000001,SSE:000001&category=",
+            "GET /cn-equity/index-strip",
+            "GET /cn-equity/klines/{code}?k_type=1d&view=merged&exchange=&category=",
             "GET /cn-equity/five/{code}",
             "GET /cn-equity/intraday/{code}",
         ]
@@ -45,9 +46,13 @@ async def catalog() -> Catalog:
 async def codes(
     q: Annotated[str | None, Query(description="代码或名称关键词")] = None,
     limit: Annotated[int, Query(ge=1, le=12000)] = 10000,
+    category: Annotated[
+        str,
+        Query(description="stock|index|etf|convertible；非 stock 读 market.security"),
+    ] = "stock",
 ) -> dict:
     try:
-        return await asyncio.to_thread(service.list_codes, q, limit)
+        return await asyncio.to_thread(service.list_codes, q, limit, category)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
@@ -59,17 +64,37 @@ async def codes(
 async def quotes(
     codes: Annotated[
         str,
-        Query(description="逗号分隔 6 位代码，最多 80 个"),
+        Query(description="逗号分隔：000001 或 SSE:000001 / 000001.SH，最多 80"),
     ],
+    category: Annotated[
+        str | None,
+        Query(description="可选；index/etf 等缺 qdb 时回落 bar_daily"),
+    ] = None,
 ) -> dict:
     code_list = [c.strip() for c in codes.split(",") if c.strip()]
     try:
-        return await asyncio.to_thread(service.quotes, code_list)
+        return await asyncio.to_thread(
+            service.quotes, code_list, category=category
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.exception("cn-equity quotes failed")
         raise HTTPException(status_code=502, detail=f"cn-equity quotes: {e}") from e
+
+
+@endpoints.get("/index-strip")
+async def index_strip() -> dict:
+    """顶栏主流指数报价（同花顺/东财常见六指数）。"""
+    try:
+        return await asyncio.to_thread(service.index_strip)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("cn-equity index-strip failed")
+        raise HTTPException(
+            status_code=502, detail=f"cn-equity index-strip: {e}"
+        ) from e
 
 
 @endpoints.get("/klines/{code}")
@@ -86,6 +111,14 @@ async def klines(
             description="history=已完成 | realtime=盘中未完成 | merged=合成图"
         ),
     ] = "merged",
+    exchange: Annotated[
+        str | None,
+        Query(description="SSE/SZSE/BSE 或 SH/SZ/BJ；指数勿省略"),
+    ] = None,
+    category: Annotated[
+        str | None,
+        Query(description="stock|index|etf|convertible"),
+    ] = None,
 ) -> dict:
     try:
         return await asyncio.to_thread(
@@ -97,6 +130,8 @@ async def klines(
             adjust_type,
             limit,
             view,
+            exchange,
+            category,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
