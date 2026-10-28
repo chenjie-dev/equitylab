@@ -14,6 +14,8 @@ COPY apps/frontend ./apps/frontend
 # file: 依赖指向 ../../packages/qdb-ts，保持相对路径
 WORKDIR /build/apps/frontend
 ENV NEXT_TELEMETRY_DISABLED=1
+# next.config rewrites 编译进 standalone；运行时由容器访问 Docker DNS `gateway`
+ENV GATEWAY_URL=http://gateway:3000
 RUN npm run build
 
 FROM node:20-alpine AS runtime

@@ -358,7 +358,7 @@ services:
       # frontend 反向依赖 gateway；此处不 depends_on frontend，避免循环。FRONTEND_URL 就绪前页面 502。
     networks: [equitylab]
 
-  # Next.js 前端：浏览器走同源 /api/chat；容器内 BFF 经 Docker DNS 访问网关
+  # Next.js 前端：正式入口经 gateway :3000；直连 :3001 时 /api/* rewrite → gateway
   frontend:
     build:
       context: .

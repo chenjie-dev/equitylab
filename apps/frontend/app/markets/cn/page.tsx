@@ -476,11 +476,14 @@ export default function CnEquityPage() {
   const loadKlines = useCallback(
     async (code: string, kt: string, exchange: string, assetClass: CnAssetClass) => {
       if (kt === "intraday") {
+        if (!code?.trim()) return;
         const qs = new URLSearchParams({
           exchange: uiToQdbExchange(exchange),
           category: assetClass,
         });
-        const res = await fetch(`/api/cn-equity/intraday/${code}?${qs}`);
+        const res = await fetch(
+          `/api/cn-equity/intraday/${encodeURIComponent(code.trim())}?${qs}`,
+        );
         if (res.status === 429) return;
         if (!res.ok) throw new Error(`intraday ${res.status}`);
         const body = (await res.json()) as {
