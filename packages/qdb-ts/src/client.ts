@@ -1,5 +1,6 @@
 /**
- * qdb HTTP 客户端（浏览器 / Node）。浏览器订阅读默认走 market-data 代理。
+ * qdb HTTP 客户端（浏览器 / Node）。
+ * 浏览器订阅读默认走 **gateway** `/api/market/qdb/ws`（同源），勿直连 market-data 端口。
  */
 
 import { PRICE_SCALE } from "./scale";
@@ -15,7 +16,7 @@ export type SnapshotRow = Record<string, unknown> & {
 export type QdbClientOptions = {
   /** HTTP 基址，默认 `QDB_URL` / `http://127.0.0.1:9090`（浏览器勿直连容器内网名） */
   baseUrl?: string;
-  /** WS 代理，默认 `NEXT_PUBLIC_MARKET_WS_URL` + `/qdb/ws` 或 `ws://host:3002/qdb/ws` */
+  /** WS 代理，默认同源 gateway `/api/market/qdb/ws`，或 `NEXT_PUBLIC_MARKET_WS_URL` */
   wsProxyUrl?: string;
   timeoutMs?: number;
 };
@@ -30,16 +31,18 @@ function defaultHttpBase(): string {
 function defaultWsProxy(): string {
   if (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_MARKET_WS_URL) {
     const b = process.env.NEXT_PUBLIC_MARKET_WS_URL.replace(/\/$/, "");
-    return b.endsWith("/qdb/ws") ? b : `${b}/qdb/ws`;
+    if (b.endsWith("/qdb/ws")) return b;
+    return `${b}/api/market/qdb/ws`;
   }
   if (typeof process !== "undefined" && process.env?.QDB_WS_PROXY) {
     return process.env.QDB_WS_PROXY.replace(/\/$/, "");
   }
   if (typeof window !== "undefined") {
-    const host = window.location.hostname || "localhost";
-    return `ws://${host}:3002/qdb/ws`;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location.host || "localhost:3000";
+    return `${proto}//${host}/api/market/qdb/ws`;
   }
-  return "ws://127.0.0.1:3002/qdb/ws";
+  return "ws://127.0.0.1:3000/api/market/qdb/ws";
 }
 
 export class Client {

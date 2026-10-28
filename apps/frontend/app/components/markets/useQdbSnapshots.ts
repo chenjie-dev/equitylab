@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 多标的 qdb snapshots 订阅读（collector → /v1/quotes → snapshots → /qdb/ws）。
+ * 多标的 qdb snapshots 订阅读（经 gateway `/api/market/qdb/ws`）。
  * 每标的一条 SUBSCRIBE（qdb WHERE 仅支持单 symbol =）；仅经 `@equitylab/qdb` Client。
  */
 

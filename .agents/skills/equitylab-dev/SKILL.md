@@ -46,7 +46,7 @@ description: >-
 - **工具三要素**：`name` + `description` + Zod/schema + `run`；编排层不得绕过注册表直打下游（调试除外）。改工具面 / eval / harness 时另加载 **equitylab-agent-dev**。  
 - **Stub 诚实**：演示 IC/回测/RAG 必须带 `demo` / mode=stub 或等价标注；禁止写成已生产可用。  
 - **缓存与限流**：报价写缓存默认 TTL 3s；网关限流按 IP 滑动窗口——改默认值时更新 `.env.example` 与 `docs/platform/2026-10-15-containers.md`。  
-- **前缀代理**：网关对 `/api/market`、`/api/research` 剥前缀；`/api/chat` 保留完整路径。改路径时两端一起改并更新 `docs/platform/2026-10-15-api.md`。  
+- **前缀代理**：网关对 `/api/market`、`/api/research` 剥前缀；`/api/cn-equity`→`/cn-equity`、`/api/backtests`→`/backtests`；`/api/chat` 保留完整路径；WS `/api/market/qdb/ws`。浏览器只打 gateway，勿再加 Next BFF 回环。改路径时同步 `docs/platform/2026-10-15-api.md`。  
 - **docs 命名**：`docs/` 下新建文档必须 `YYYY-MM-DD-<标题>.md`（创建日）；见根目录 `AGENTS.md`。  
 - **qdb 最新优先**：动 collector / `qdb_read` / cn-equity 读路径前，对照 `../qdb/docs/manual/server.md` 与 `limits.md`；发现契约变更则改代码并同步本仓 qdb 文档，禁止沿用过时路径。  
 - **qdb 只经客户端**：业务层禁止直连 `QDB_URL`；读写一律 `packages/qdb-*`（见 `AGENTS.md` 硬性约束 §8）。  

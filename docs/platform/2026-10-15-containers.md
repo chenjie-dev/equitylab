@@ -54,7 +54,7 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `CN_EQUITY_KLINE_CODES` | 空→seed | K 线启动回填：空=seed；`all`=全宇宙（极重）；或逗号列表 |
 | `COLLECTOR_INTERVAL_MS` / `QDB_FEED_MS` | `500` | A 股每批报价间隔；全表一轮滞后≈count/batch×interval；币安走 WS |
 | 客户端包 | `packages/qdb-{py,ts,rs}`、`packages/market-py` | Compose 构建 context 为仓库根以 `COPY packages/`；冷库写经 `equitylab_market` |
-| `NEXT_PUBLIC_MARKET_WS_URL` | `ws://localhost:3002` | 前端订 qdb（经 `/qdb/ws`） |
+| `NEXT_PUBLIC_MARKET_WS_URL` | 空（同源） | 订阅读经 gateway `/api/market/qdb/ws`；勿直连 `:3002` |
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
 | `COLLECTOR_HTTP(S)_PROXY` | 空 / `host.docker.internal:18080` | 容器 TLS 异常时走宿主机 CONNECT 代理 |

@@ -19,7 +19,7 @@
 - 读：`GET /v1/snapshots`、`/v1/klines`（含 `limit` / `endTime`）、`/v1/docs`；`GET /v1/ws`（SELECT … SUBSCRIBE）
 - 写：`POST /v1/quotes`（`last` + 可选 `bid_px`/`ask_px`）、`/v1/trades`、`/v1/docs`（含 wait/ready 探测）
 - 三语言公共表面尽量同名：`Client`、`wait_ready`、`snapshots`、`klines`、`get_doc` / `put_docs`、`post_quotes`、`post_trades`、`subscribe`
-- 配置只认 `QDB_URL`（缺省 Compose 内 `http://qdb:9090`）；浏览器订阅读再认 `QDB_WS_PROXY`（缺省 `ws://localhost:3002/qdb/ws`）
+- 配置只认 `QDB_URL`（缺省 Compose 内 `http://qdb:9090`）；浏览器订阅读再认 `NEXT_PUBLIC_MARKET_WS_URL` / 同源 gateway `…/api/market/qdb/ws`
 - 价格整数 `last` / `bid_px` / `ask_px`：包内提供 `PRICE_SCALE=10000` 与 `scale` / `unscale` 工具
 - **不封装**（本仓未用）：`GET /v1/changes`、集群/复制（`/v1/replicate`、`/v1/info`…）；需要时再扩包
 
@@ -39,7 +39,7 @@
 
 - AGENTS：行情只经 qdb；collector 唯一写；改契约前对 `../qdb/docs/manual/server.md` / `limits.md`
 - Compose 内 `QDB_FEED=0`
-- 网关不升级 WebSocket；浏览器订阅读走 market-data `:3002`
+- 浏览器订阅读经 gateway `/api/market/qdb/ws`（网关升级 WS 后转 market-data）
 
 ## Layout（独立包）
 

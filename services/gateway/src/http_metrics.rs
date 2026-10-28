@@ -44,6 +44,12 @@ pub fn path_group(path: &str) -> String {
         return path.to_string();
     }
     let prefixes = [
+        "/api/cn-equity/klines",
+        "/api/cn-equity/quotes",
+        "/api/cn-equity/codes",
+        "/api/cn-equity/five",
+        "/api/cn-equity/intraday",
+        "/api/cn-equity",
         "/api/research/cn-equity/klines",
         "/api/research/cn-equity/quotes",
         "/api/research/cn-equity/codes",
@@ -53,7 +59,9 @@ pub fn path_group(path: &str) -> String {
         "/api/research/rag",
         "/api/research/factors",
         "/api/research/backtests",
+        "/api/backtests",
         "/api/research",
+        "/api/market/qdb/ws",
         "/api/market",
         "/api/chat",
         "/v1",

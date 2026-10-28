@@ -1,5 +1,5 @@
 /**
- * 前端 BFF 统一 X-Trace-Id：沿用入站头或生成 UUID，并打 JSON 日志。
+ * 前端 Trace 工具：沿用入站 `X-Trace-Id` 或生成 UUID，并打 JSON 日志。
  */
 
 import { randomUUID } from "node:crypto";

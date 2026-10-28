@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 经 market-data `/qdb/ws` 订阅 qdb snapshots；协议层用 `@equitylab/qdb`。
+ * 经 gateway `/api/market/qdb/ws` 订阅 qdb snapshots；协议层用 `@equitylab/qdb`。
  */
 
 import { useEffect, useRef } from "react";

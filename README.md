@@ -50,7 +50,7 @@ docker compose up -d --build
 | 入口 | 地址 |
 |---|---|
 | Gateway（推荐统一入口） | http://localhost:3000/health |
-| Frontend（亦可直连） | http://localhost:3001 |
+| Frontend（排障直连；业务请走网关） | http://localhost:3001 |
 | Market Data | http://localhost:3002/health |
 | Grafana / Prometheus | :3003 / :9091 |
 | PostgreSQL / Redis / Qdrant / qdb | :5432 / :16379 / :6333 / :9090 |

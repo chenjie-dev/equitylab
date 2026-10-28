@@ -1,7 +1,7 @@
 //! EquityLab API 网关（Rust / Axum）
 //!
 //! # 职责（MVP）
-//! - 统一对外入口：`/health`、`/api/*`、`/v1/*`、前端页面
+//! - **唯一对外入口**：浏览器 HTTP + WebSocket 均经本服务（后续鉴权挂在此）
 //! - 按路径前缀反向代理到编排层 / 研究层 / 行情服务 / 前端
 //! - 按客户端 IP 的滑动窗口限流
 //! - 统一 `X-Trace-Id` 生成/透传 + JSON 结构化日志
@@ -11,10 +11,11 @@
 //!
 //! # 路由约定
 //! - `/api/chat`、`/v1/*` → Orchestrator（保留完整路径）
-//! - `/api/research/*` → Research（剥掉 `/api/research` 前缀）
-//! - `/api/market/*` → Market-Data（剥掉 `/api/market` 前缀）
-//! - 其余 `/api/*`（含 `/api/cn-equity` BFF）→ Frontend
-//! - 页面 / `_next` / 静态资源 → Frontend
+//! - `/api/research/*` → Research（剥 `/api/research`）
+//! - `/api/cn-equity/*` → Research（改写为 `/cn-equity/*`，产品短路径）
+//! - `/api/backtests/*` → Research（改写为 `/backtests/*`）
+//! - `/api/market/*` → Market-Data（剥 `/api/market`）；WS：`/api/market/qdb/ws`
+//! - 页面 / `_next` / 静态 → Frontend（**不含**业务 API；勿再经 Next BFF 回环）
 
 use axum::{
     body::Body,
@@ -37,16 +38,17 @@ use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
 mod http_metrics;
+mod ws_proxy;
 
 const TRACE_HEADER: &str = "x-trace-id";
 
 /// 网关共享状态：上游基址、HTTP 客户端与限流器。
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     http: reqwest::Client,
     orchestrator_url: String,
     research_url: String,
-    market_data_url: String,
+    pub(crate) market_data_url: String,
     frontend_url: String,
     rate_limiter: Arc<RateLimiter>,
 }
@@ -141,14 +143,51 @@ enum Upstream {
 fn classify(path: &str) -> Upstream {
     if path.starts_with("/api/chat") || path.starts_with("/v1/") {
         Upstream::Orchestrator
-    } else if path.starts_with("/api/research") {
+    } else if path.starts_with("/api/research")
+        || path.starts_with("/api/cn-equity")
+        || path.starts_with("/api/backtests")
+    {
         Upstream::Research
     } else if path.starts_with("/api/market") {
         Upstream::MarketData
     } else {
-        // /api/cn-equity BFF、页面、/_next、favicon 等一律进前端
         Upstream::Frontend
     }
+}
+
+fn rewrite_path(upstream: Upstream, path: &str) -> String {
+    let rewritten = match upstream {
+        Upstream::Orchestrator => path.to_string(),
+        Upstream::Research => {
+            if let Some(rest) = path.strip_prefix("/api/research") {
+                rest.to_string()
+            } else if let Some(rest) = path.strip_prefix("/api/cn-equity") {
+                format!("/cn-equity{rest}")
+            } else if let Some(rest) = path.strip_prefix("/api/backtests") {
+                format!("/backtests{rest}")
+            } else {
+                path.to_string()
+            }
+        }
+        Upstream::MarketData => path
+            .strip_prefix("/api/market")
+            .unwrap_or(path)
+            .to_string(),
+        Upstream::Frontend => path.to_string(),
+    };
+    if rewritten.is_empty() {
+        "/".to_string()
+    } else {
+        rewritten
+    }
+}
+
+fn skip_rate_limit(path: &str) -> bool {
+    // 行情只读 + 前端静态；对话/因子等仍限流
+    path.starts_with("/api/market")
+        || path.starts_with("/api/research/cn-equity")
+        || path.starts_with("/api/cn-equity")
+        || matches!(classify(path), Upstream::Frontend)
 }
 
 /// 反向代理：限流 → 选上游 → 改写路径 → 转发（含 X-Trace-Id）。
@@ -163,14 +202,7 @@ async fn proxy(
         .unwrap_or_else(|| IpAddr::from([127, 0, 0, 1]));
 
     let path = req.uri().path().to_string();
-    // 公开行情只读 + 前端页面/BFF 不计入网关 RPM：
-    // - /api/market：币安/RWA
-    // - /api/research/cn-equity：A 股
-    // - 前端：/_next、页面、/api/cn-equity BFF（静态与列表轮询）
-    let skip_rate_limit = path.starts_with("/api/market")
-        || path.starts_with("/api/research/cn-equity")
-        || matches!(classify(&path), Upstream::Frontend);
-    if !skip_rate_limit && !state.rate_limiter.is_allowed(peer) {
+    if !skip_rate_limit(&path) && !state.rate_limiter.is_allowed(peer) {
         return Err((StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".into()));
     }
     let query = req
@@ -179,22 +211,12 @@ async fn proxy(
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
 
-    let (upstream_base, forward_path) = match classify(&path) {
-        Upstream::Orchestrator => (state.orchestrator_url.as_str(), path.clone()),
-        Upstream::Research => (
-            state.research_url.as_str(),
-            path.replacen("/api/research", "", 1),
-        ),
-        Upstream::MarketData => (
-            state.market_data_url.as_str(),
-            path.replacen("/api/market", "", 1),
-        ),
-        Upstream::Frontend => (state.frontend_url.as_str(), path.clone()),
-    };
-    let forward_path = if forward_path.is_empty() {
-        "/".to_string()
-    } else {
-        forward_path
+    let upstream = classify(&path);
+    let (upstream_base, forward_path) = match upstream {
+        Upstream::Orchestrator => (state.orchestrator_url.as_str(), rewrite_path(upstream, &path)),
+        Upstream::Research => (state.research_url.as_str(), rewrite_path(upstream, &path)),
+        Upstream::MarketData => (state.market_data_url.as_str(), rewrite_path(upstream, &path)),
+        Upstream::Frontend => (state.frontend_url.as_str(), rewrite_path(upstream, &path)),
     };
 
     let url = format!("{upstream_base}{forward_path}{query}");
@@ -279,9 +301,16 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(http_metrics::metrics_handler))
+        .route(
+            "/api/market/qdb/ws",
+            get(ws_proxy::qdb_ws).post(ws_proxy::qdb_ws_http_fallback),
+        )
+        .route(
+            "/api/market/exchanges/qdb/ws",
+            get(ws_proxy::qdb_ws).post(ws_proxy::qdb_ws_http_fallback),
+        )
         .route("/api/{*rest}", any(proxy))
         .route("/v1/{*rest}", any(proxy))
-        // 页面与 Next 静态资源（须在 api 之后注册；catch-all）
         .route("/", any(proxy))
         .route("/{*rest}", any(proxy))
         .layer(from_fn(http_metrics::metrics_middleware))
@@ -298,4 +327,33 @@ async fn main() {
     )
     .await
     .expect("serve");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify, rewrite_path, Upstream};
+
+    #[test]
+    fn rewrites_product_short_paths() {
+        assert!(matches!(
+            classify("/api/cn-equity/codes"),
+            Upstream::Research
+        ));
+        assert_eq!(
+            rewrite_path(Upstream::Research, "/api/cn-equity/codes"),
+            "/cn-equity/codes"
+        );
+        assert_eq!(
+            rewrite_path(Upstream::Research, "/api/backtests/run"),
+            "/backtests/run"
+        );
+        assert_eq!(
+            rewrite_path(Upstream::Research, "/api/research/factors/ic"),
+            "/factors/ic"
+        );
+        assert_eq!(
+            rewrite_path(Upstream::MarketData, "/api/market/quotes/x"),
+            "/quotes/x"
+        );
+    }
 }

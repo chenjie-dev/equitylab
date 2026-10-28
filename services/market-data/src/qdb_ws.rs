@@ -1,5 +1,5 @@
-//! 代理浏览器 WebSocket 到 qdb `GET /v1/ws`（SELECT … SUBSCRIBE）。
-//! 网关不升级 WS；前端直连本服务 `:3002/qdb/ws`。
+//! 代理 WebSocket 到 qdb `GET /v1/ws`（SELECT … SUBSCRIBE）。
+//! 浏览器应经 gateway `/api/market/qdb/ws`；本路径供网关回源与内网调试。
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},

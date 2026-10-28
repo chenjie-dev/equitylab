@@ -86,12 +86,12 @@ docs/<topic>/YYYY-MM-DD-<标题>.md   # 例：market/ platform/ agents/
 6. **报价缓存** TTL≈3s；盘中 WebSocket 推送不进 MCP（后续独立进程）。  
 7. **行情热冷分离 + 读路径零上游**（细则 [`docs/market/2026-10-26-行情模块边界.md`](docs/market/2026-10-26-行情模块边界.md)）： 
    - **授权回源**：`services/collector`（盘中 → qdb + 部分 `market`）、`services/history-ingest`（新浪冷日线 → `market.bar_daily`）、`services/adata-ingest`（adata → 冷表）、`services/akshare-ingest`（akshare → 冷表并行）；其它服务禁止访问公开上游。
-   - **所有读路径**零外部行情 HTTP/WS：盘中/订阅/短窗 → qdb（经 `packages/qdb-*` 或 market-data `/qdb/ws`）；A 股已闭合历史 → research `/cn-equity` 读 `market`（可回落 qdb，须标明 `source`）。缺数据 → 空/503，等 collector 补，**禁止回源**。 
+   - **所有读路径**零外部行情 HTTP/WS：盘中/订阅/短窗 → qdb（经 `packages/qdb-*`；浏览器订阅读经 **gateway** `/api/market/qdb/ws`）；A 股已闭合历史 → research `/cn-equity` 读 `market`（可回落 qdb，须标明 `source`）。缺数据 → 空/503，等 collector 补，**禁止回源**。浏览器 HTTP/WS **只经 gateway**（鉴权挂点）。 
    - **命名**：产品面用 `cn-equity`；`sina`/`adata`/`binance` 只作 `data_source`；禁止产品路由/包名再用 `ashare`。 
    - market-data **不得**再代理上游（如 `/binance/v3/{*}`、`/binance/ws`、RWA bapi）；**不**承担 A 股 `market` 历史读。 
    - Compose 内 `QDB_FEED=0`（不用 qdb 内置采集）。 
    - 前端展示派生（MA/BOLL/MACD 等）只基于已取回序列，不另拉上游。 
-8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读仍经 market-data `/qdb/ws` 代理，但订阅逻辑用 TS 客户端。详见 [`docs/market/2026-10-20-qdb-client-design.md`](docs/market/2026-10-20-qdb-client-design.md)。 
+8. **qdb 只经客户端包**：凡读写 qdb（含新市场、新页面、新服务）必须走 `packages/qdb-py` / `qdb-ts` / `qdb-rs`（`equitylab_qdb` / `@equitylab/qdb` / `equitylab-qdb`）。**业务代码禁止**直接 `requests`/`fetch`/`reqwest` 打 `QDB_URL` 的 `/v1/*`，也禁止自拼 WebSocket URL 订 qdb；缺能力先扩客户端再接业务。浏览器订阅读经 gateway `/api/market/qdb/ws`（再转 market-data），订阅逻辑用 TS 客户端。详见 [`docs/market/2026-10-20-qdb-client-design.md`](docs/market/2026-10-20-qdb-client-design.md)。 
 9. **qdb 用法跟最新手册**：改采集/读路径或升级 `../qdb` 前，必须打开同级仓 `docs/manual/index.md`（及 `server.md` / `limits.md` / `data-model.md`），核对 HTTP、符号、周期、late-tick 等是否已变；本仓 [`docs/market/2026-10-20-qdb-行情库.md`](docs/market/2026-10-20-qdb-行情库.md) 若过时则**先对齐代码再改文档**，不得以 EquityLab 旧说明覆盖 qdb 手册。
 10. **行为变更同步文档**：改路由 / 端口 / 工具名时更新 `docs/platform/YYYY-MM-DD-api.md`（当前为 `docs/platform/2026-10-15-api.md`）与相关注释。  
 11. **生产级迭代（DoD / 分级 / 数据面）**：见下一节；未满足不得声称「功能完成」或进入部署。

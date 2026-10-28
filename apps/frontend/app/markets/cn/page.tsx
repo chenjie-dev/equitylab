@@ -2,7 +2,7 @@
 
 /**
  * A 股行情台（同花顺启发布局）：左列表 | 中图 | 右五档/资金/财务/热榜。
- * 只读 qdb / Postgres 冷库；BFF `/api/cn-equity/*` → Gateway `/api/research/cn-equity/*`。
+ * 只读 qdb / Postgres 冷库；浏览器 `/api/cn-equity/*` 经 gateway 直转 research。
  */
 
 import {

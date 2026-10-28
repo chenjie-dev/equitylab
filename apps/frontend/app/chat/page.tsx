@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 研究对话。经同源 `/api/chat` BFF 转发网关。
+ * 研究对话。经同源 `/api/chat`（gateway → orchestrator）。
  * 首页是现货虚拟币行情，对话从顶栏进入。
  */
 
@@ -57,7 +57,7 @@ export default function ChatPage() {
           <p className="page-kicker">Agent workspace</p>
           <h1 className="page-title">智能研究对话</h1>
           <p className="page-desc">
-            研报问答、因子与行情查询。请求经 BFF → 网关 → 编排层 → 研究 / 行情服务。
+            研报问答、因子与行情查询。请求经网关 → 编排层 → 研究 / 行情服务。
           </p>
         </div>
       </header>
