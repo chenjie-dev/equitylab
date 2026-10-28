@@ -21,6 +21,7 @@ services:
       - ./infra/postgres/migrations/20261026_market_schema.sql:/docker-entrypoint-initdb.d/02_market_schema.sql:ro
       - ./infra/postgres/migrations/20261027_market_schema_adata.sql:/docker-entrypoint-initdb.d/03_market_schema_adata.sql:ro
       - ./infra/postgres/migrations/20261027_market_data_source_akshare.sql:/docker-entrypoint-initdb.d/04_market_data_source_akshare.sql:ro
+      - ./infra/postgres/migrations/20261028_market_data_source_pmc.sql:/docker-entrypoint-initdb.d/05_market_data_source_pmc.sql:ro
     networks: [equitylab]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]

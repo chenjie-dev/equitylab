@@ -52,6 +52,8 @@ docker compose logs -f akshare-ingest
 |---|---|---|
 | `AKSHARE_INGEST_SLEEP_MS` | 800 | 调用间隔（防东财断连） |
 | `AKSHARE_INGEST_CALL_RETRIES` | 3 | 连接类错误指数退避重试 |
+| `AKSHARE_CALENDAR_REPLACE` | 0 | 日历权威为 pmc；`1` 时才用新浪列表 replace |
+| `AKSHARE_CALENDAR_HISTORY` | 0 | 仅在 REPLACE=1 时：`1` 回填历史年 |
 | `AKSHARE_INGEST_INDUSTRY_BOARD_LIMIT` | 80 | 行业板数量 |
 | `AKSHARE_INGEST_INDUSTRY_CONS_LIMIT` | 500 | 每板写入成分上限 |
 | `AKSHARE_INGEST_INDUSTRY_PER_STOCK` | 0 | 是否再扫个股 info 行业链 |

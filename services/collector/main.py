@@ -176,7 +176,10 @@ def main() -> None:
         daemon=True,
     ).start()
 
-    last_vol: dict[str, int] = {}
+    # 成交量锚点：带 trade_date，跨天/跨周/节假日后重锚（见 volume_anchor）
+    from volume_anchor import VolumeState
+
+    last_vol: dict[str, VolumeState] = {}
     cycle = 0
     while True:
         t0 = time.monotonic()
@@ -326,7 +329,7 @@ def backfill_ex(exchange: str, code: str) -> None:
         print(f"backfill {symbol} trades={len(trades)}", flush=True)
 
 
-def poll_index_quotes(last_vol: dict[str, int]) -> None:
+def poll_index_quotes(last_vol: dict) -> None:
     """主流指数报价 → qdb（sh000001 等；与个股 000001 分交易所）。"""
     from equitylab_market.sina import sina_symbol_ex
 
@@ -337,23 +340,38 @@ def poll_index_quotes(last_vol: dict[str, int]) -> None:
     _ingest_sina_hq(parse_sina(text), last_vol, vol_key_prefix="idx:")
 
 
-def poll_quotes(codes: list[str], last_vol: dict[str, int]) -> None:
+def poll_quotes(codes: list[str], last_vol: dict) -> None:
     symbols = ",".join(sina_symbol(c) for c in codes)
     text = requests.get(f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8).content.decode("gb18030", "replace")
     _ingest_sina_hq(parse_sina(text), last_vol)
 
 
+def _shanghai_clock_date() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+    except Exception:
+        return time.strftime("%Y-%m-%d", time.localtime())
+
+
 def _ingest_sina_hq(
     rows: list[dict],
-    last_vol: dict[str, int],
+    last_vol: dict,
     *,
     vol_key_prefix: str = "",
 ) -> None:
-    """把 parse_sina 行写入 quotes / trades / depth docs。"""
+    """把 parse_sina 行写入 quotes / trades / depth docs。
+
+    trades 增量锚定见 `volume_anchor`：跨交易日 / 跨周 / 节假日休市后重锚。
+    """
+    from volume_anchor import next_volume_anchor
+
     quotes = []
     trades = []
     depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
+    clock_date = _shanghai_clock_date()
     for row in rows:
         quotes.append(
             {
@@ -393,23 +411,23 @@ def _ingest_sina_hq(
             )
         vol = int(row["volume"])
         vol_key = f"{vol_key_prefix}{row['exchange']}:{row['code']}"
-        prev = last_vol.get(vol_key)
-        # 首见只记量、不写 trade，避免把「当日累计成交量」整笔打进当前 5m 桶
-        if prev is None:
-            last_vol[vol_key] = vol
-        else:
-            delta = vol - prev if vol > prev else 0
-            last_vol[vol_key] = max(vol, prev)
-            if delta > 0:
-                trades.append(
-                    {
-                        "exchange": row["exchange"],
-                        "code": row["code"],
-                        "ts_ns": now_ns,
-                        "price": scale(row["price"]),
-                        "volume": delta,
-                    }
-                )
+        state, delta, _reason = next_volume_anchor(
+            last_vol.get(vol_key),
+            vol,
+            trade_date=row.get("trade_date"),
+            clock_date=clock_date,
+        )
+        last_vol[vol_key] = state
+        if delta > 0:
+            trades.append(
+                {
+                    "exchange": row["exchange"],
+                    "code": row["code"],
+                    "ts_ns": now_ns,
+                    "price": scale(row["price"]),
+                    "volume": delta,
+                }
+            )
     if quotes:
         post("/v1/quotes", {"items": quotes})
     if trades:
@@ -487,6 +505,15 @@ def parse_sina(body: str) -> list[dict]:
         ask = asks[0]["price"] if asks else (
             num(parts[7]) if len(parts) > 7 else None
         )
+        # 新浪字段：30=日期 YYYY-MM-DD，31=时间 HH:MM:SS（累计量所属交易日）
+        trade_date = ""
+        trade_time = ""
+        if len(parts) > 30 and parts[30]:
+            raw_d = parts[30].strip().replace("/", "-")
+            if len(raw_d) >= 10:
+                trade_date = raw_d[:10]
+        if len(parts) > 31 and parts[31]:
+            trade_time = parts[31].strip()
         rows.append(
             {
                 "exchange": exchange,
@@ -503,6 +530,8 @@ def parse_sina(body: str) -> list[dict]:
                 "asks": asks,
                 "volume": num(parts[8]),
                 "amount": num(parts[9]),
+                "trade_date": trade_date,
+                "trade_time": trade_time,
             }
         )
     return rows

@@ -30,27 +30,59 @@ def _bar_end() -> str:
 
 
 def sync_calendar(ak: Any) -> int:
-    df = util.call_ak(ak.tool_trade_date_hist_sina)
-    rows = util.df_records(df)
-    if not rows:
-        # 回落：东财交易日
-        df = util.call_ak(getattr(ak, "tool_trade_date_hist_em", lambda: None))
-        rows = util.df_records(df)
-    if not rows:
-        print("akshare-ingest calendar empty", flush=True)
-        return 0
-    # sina 列多为 trade_date；全当交易日
-    norm: list[dict[str, Any]] = []
-    for r in rows:
-        day = util.day_s(r.get("trade_date") or r.get("日期") or r.get("date"))
-        if not day:
-            continue
-        norm.append({"trade_date": day, "is_trading_day": True})
+    """日历权威已交给 pandas_market_calendars（adata-ingest / pmc）。
+
+    默认只做 seed-insert 占位，避免与 pmc replace 抢写。
+    应急回退：AKSHARE_CALENDAR_REPLACE=1 时仍可用新浪交易日列表整年 replace。
+    """
     total = 0
+    if util.env_flag("AKSHARE_CALENDAR_REPLACE", "0"):
+        df = util.call_ak(ak.tool_trade_date_hist_sina)
+        rows = util.df_records(df)
+        if not rows:
+            df = util.call_ak(getattr(ak, "tool_trade_date_hist_em", lambda: None))
+            rows = util.df_records(df)
+        by_year: dict[int, set[date]] = {}
+        for r in rows or []:
+            day_s = util.day_s(r.get("trade_date") or r.get("日期") or r.get("date"))
+            if not day_s:
+                continue
+            try:
+                d = date.fromisoformat(day_s[:10])
+            except ValueError:
+                continue
+            by_year.setdefault(d.year, set()).add(d)
+        y0 = date.today().year
+        years = (
+            sorted(set(by_year) | {y0, y0 + 1})
+            if util.env_flag("AKSHARE_CALENDAR_HISTORY", "0")
+            else [y0, y0 + 1]
+        )
+        for year in years:
+            days = by_year.get(year) or set()
+            if not days:
+                continue
+            for ex in ("SSE", "SZSE", "BSE"):
+                n = pg_market.apply_calendar_year_from_trading_days(
+                    ex, days, year=year, source_code=SOURCE
+                )
+                total += n
+                print(
+                    f"akshare-ingest calendar replace {ex} year={year} "
+                    f"trading={len(days)} rows={n}",
+                    flush=True,
+                )
+    else:
+        print(
+            "akshare-ingest calendar skip replace (权威=pmc；"
+            "应急设 AKSHARE_CALENDAR_REPLACE=1)",
+            flush=True,
+        )
     for ex in ("SSE", "SZSE", "BSE"):
-        n = pg_market.apply_calendar_rows(ex, norm, source_code=SOURCE)
-        total += n
-        print(f"akshare-ingest calendar {ex} rows={n}", flush=True)
+        n_seed = pg_market.seed_calendar_weekdays(
+            ex, days_back=30, days_forward=400
+        )
+        print(f"akshare-ingest calendar seed-insert {ex} n={n_seed}", flush=True)
     return total
 
 

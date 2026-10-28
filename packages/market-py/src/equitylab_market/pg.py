@@ -279,7 +279,15 @@ def upsert_calendar_day(
     is_trading_day: bool,
     prev_trading_day: date | str | None = None,
     next_trading_day: date | str | None = None,
+    mode: str = "promote",
 ) -> bool:
+    """写入交易日历一行。
+
+    mode:
+    - ``replace``：上游权威（adata 全年表）；可把误标交易日改回休市
+    - ``promote``：仅允许升为交易日（日线确认）；不降级
+    - ``insert``：粗填/占位；已有行不改（给明年未公布日历用）
+    """
     day = (
         calendar_date
         if isinstance(calendar_date, date)
@@ -306,22 +314,40 @@ def upsert_calendar_day(
     conn = _connect()
     if conn is None:
         return False
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO market.trading_calendar (
-                exchange_code, calendar_date, is_trading_day,
-                prev_trading_day, next_trading_day
-            ) VALUES (%s,%s,%s,%s,%s)
+    m = (mode or "promote").strip().lower()
+    if m == "replace":
+        conflict_sql = """
             ON CONFLICT (exchange_code, calendar_date) DO UPDATE SET
-                is_trading_day = EXCLUDED.is_trading_day
-                    OR market.trading_calendar.is_trading_day,
+                is_trading_day = EXCLUDED.is_trading_day,
                 prev_trading_day = COALESCE(
                     EXCLUDED.prev_trading_day, market.trading_calendar.prev_trading_day
                 ),
                 next_trading_day = COALESCE(
                     EXCLUDED.next_trading_day, market.trading_calendar.next_trading_day
                 )
+        """
+    elif m == "insert":
+        conflict_sql = "ON CONFLICT (exchange_code, calendar_date) DO NOTHING"
+    else:
+        conflict_sql = """
+            ON CONFLICT (exchange_code, calendar_date) DO UPDATE SET
+                is_trading_day = market.trading_calendar.is_trading_day
+                    OR EXCLUDED.is_trading_day,
+                prev_trading_day = COALESCE(
+                    EXCLUDED.prev_trading_day, market.trading_calendar.prev_trading_day
+                ),
+                next_trading_day = COALESCE(
+                    EXCLUDED.next_trading_day, market.trading_calendar.next_trading_day
+                )
+        """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO market.trading_calendar (
+                exchange_code, calendar_date, is_trading_day,
+                prev_trading_day, next_trading_day
+            ) VALUES (%s,%s,%s,%s,%s)
+            {conflict_sql}
             """,
             (exchange_code, day, is_trading_day, prev_d, next_d),
         )
@@ -1525,80 +1551,214 @@ def ingest_sina_klines(
     return {"daily": n_d, "minute": n_m}
 
 
+def _parse_calendar_flag(flag: Any) -> bool:
+    """上游 trade_status / is_open → 是否交易日（勿用 bool(\"0\")）。"""
+    if isinstance(flag, str):
+        return flag.strip().lower() in ("1", "true", "yes", "交易", "交易日", "open")
+    if flag is None:
+        return True
+    return flag in (1, True) or (isinstance(flag, (int, float)) and int(flag) == 1)
+
+
+def _parse_calendar_day(raw_day: Any) -> date | None:
+    if raw_day is None or raw_day == "":
+        return None
+    if isinstance(raw_day, date) and not isinstance(raw_day, datetime):
+        return raw_day
+    if isinstance(raw_day, datetime):
+        return raw_day.date()
+    try:
+        return date.fromisoformat(str(raw_day)[:10].replace("/", "-"))
+    except ValueError:
+        s = "".join(ch for ch in str(raw_day) if ch.isdigit())
+        if len(s) < 8:
+            return None
+        return date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+
+
+def _bulk_upsert_calendar_days(
+    exchange_code: str,
+    day_flags: list[tuple[date, bool]],
+    *,
+    mode: str = "replace",
+) -> int:
+    """批量写入 trading_calendar；mode 同 upsert_calendar_day。"""
+    if not day_flags:
+        return 0
+    conn = _connect()
+    if conn is None:
+        return 0
+    m = (mode or "promote").strip().lower()
+    if m == "replace":
+        conflict_sql = """
+            ON CONFLICT (exchange_code, calendar_date) DO UPDATE SET
+                is_trading_day = EXCLUDED.is_trading_day
+        """
+    elif m == "insert":
+        conflict_sql = "ON CONFLICT (exchange_code, calendar_date) DO NOTHING"
+    else:
+        conflict_sql = """
+            ON CONFLICT (exchange_code, calendar_date) DO UPDATE SET
+                is_trading_day = market.trading_calendar.is_trading_day
+                    OR EXCLUDED.is_trading_day
+        """
+    from psycopg2.extras import execute_values
+
+    rows = [(exchange_code, day, is_td) for day, is_td in day_flags]
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            f"""
+            INSERT INTO market.trading_calendar (
+                exchange_code, calendar_date, is_trading_day
+            ) VALUES %s
+            {conflict_sql}
+            """,
+            rows,
+            template="(%s,%s,%s)",
+            page_size=500,
+        )
+    return len(rows)
+
+
 def apply_calendar_rows(
     exchange_code: str,
     rows: list[dict[str, Any]],
     *,
     source_code: str = "adata",
+    mode: str = "replace",
 ) -> int:
-    """按上游交易日历行写入 trading_calendar。
+    """按上游交易日历行写入 trading_calendar（默认 replace，可纠正节假日）。
 
     每行至少含 calendar_date / trade_date / date；
     is_trading_day 缺省时看 trade_status / is_open（1/true/交易日）。
     """
-    n = 0
+    day_flags: list[tuple[date, bool]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        raw_day = (
+        day = _parse_calendar_day(
             row.get("calendar_date")
             or row.get("trade_date")
             or row.get("date")
             or row.get("cal_date")
         )
-        if not raw_day:
+        if day is None:
             continue
-        day = (
-            raw_day
-            if isinstance(raw_day, date)
-            else date.fromisoformat(str(raw_day)[:10])
-        )
         flag = row.get("is_trading_day")
         if flag is None:
             flag = row.get("trade_status", row.get("is_open", row.get("is_trade_date")))
-        if isinstance(flag, str):
-            is_td = flag.strip().lower() in ("1", "true", "yes", "交易", "交易日", "open")
-        elif flag is None:
-            is_td = True
-        else:
-            is_td = bool(flag)
-        if upsert_calendar_day(exchange_code, day, is_trading_day=is_td):
-            n += 1
+        day_flags.append((day, _parse_calendar_flag(flag)))
+    n = _bulk_upsert_calendar_days(exchange_code, day_flags, mode=mode)
     if n:
+        relink_calendar_neighbors(exchange_code)
         set_watermark(
             source_code,
             "calendar",
             exchange_code,
             watermark_day=datetime.now(SH).date(),
-            detail={"n": n},
+            detail={"n": n, "mode": mode},
         )
     return n
+
+
+def apply_calendar_year_from_trading_days(
+    exchange_code: str,
+    trading_days: set[date],
+    *,
+    year: int,
+    source_code: str = "akshare",
+) -> int:
+    """仅有「交易日列表」的上游：整年写齐，列表外标休市（含周末/节假日）。"""
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+    day_flags: list[tuple[date, bool]] = []
+    d = start
+    while d <= end:
+        day_flags.append((d, d in trading_days))
+        d += timedelta(days=1)
+    n = _bulk_upsert_calendar_days(exchange_code, day_flags, mode="replace")
+    if n:
+        relink_calendar_neighbors(exchange_code)
+        set_watermark(
+            source_code,
+            "calendar",
+            exchange_code,
+            watermark_day=datetime.now(SH).date(),
+            detail={"year": year, "trading_days": len(trading_days), "n": n},
+        )
+    return n
+
+
+def relink_calendar_neighbors(exchange_code: str) -> int:
+    """按交易日序列回填 prev/next；休市日清空邻居指针。"""
+    conn = _connect()
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE market.trading_calendar
+            SET prev_trading_day = NULL, next_trading_day = NULL
+            WHERE exchange_code = %s
+              AND NOT is_trading_day
+              AND (prev_trading_day IS NOT NULL OR next_trading_day IS NOT NULL)
+            """,
+            (exchange_code,),
+        )
+        cleared = int(cur.rowcount or 0)
+        cur.execute(
+            """
+            WITH ordered AS (
+                SELECT calendar_date,
+                       lag(calendar_date) OVER (ORDER BY calendar_date) AS prev_d,
+                       lead(calendar_date) OVER (ORDER BY calendar_date) AS next_d
+                FROM market.trading_calendar
+                WHERE exchange_code = %s AND is_trading_day
+            )
+            UPDATE market.trading_calendar AS t
+            SET prev_trading_day = o.prev_d,
+                next_trading_day = o.next_d
+            FROM ordered AS o
+            WHERE t.exchange_code = %s
+              AND t.calendar_date = o.calendar_date
+              AND (
+                    t.prev_trading_day IS DISTINCT FROM o.prev_d
+                 OR t.next_trading_day IS DISTINCT FROM o.next_d
+              )
+            """,
+            (exchange_code, exchange_code),
+        )
+        return cleared + int(cur.rowcount or 0)
 
 
 def seed_calendar_weekdays(
     exchange_code: str,
     *,
     days_back: int = 400,
-    days_forward: int = 30,
+    days_forward: int = 400,
 ) -> int:
-    """按工作日粗填交易日历（节假日日后由日线覆盖为确认交易日）。"""
+    """按工作日粗填占位（insert-only）。
+
+    不覆盖 adata/akshare 已写入的权威行；用于明年日历尚未公布时的前瞻占位。
+    节假日以权威日历 replace 为准。
+    """
     today = datetime.now(SH).date()
     start = today - timedelta(days=days_back)
     end = today + timedelta(days=days_forward)
-    n = 0
+    day_flags: list[tuple[date, bool]] = []
     d = start
     while d <= end:
         # 周一=0 … 周日=6
-        is_td = d.weekday() < 5
-        if upsert_calendar_day(exchange_code, d, is_trading_day=is_td):
-            n += 1
+        day_flags.append((d, d.weekday() < 5))
         d += timedelta(days=1)
+    n = _bulk_upsert_calendar_days(exchange_code, day_flags, mode="insert")
     set_watermark(
         "manual",
         "calendar",
         exchange_code,
         watermark_day=today,
-        detail={"seed": "weekdays", "n": n},
+        detail={"seed": "weekdays_insert", "n": n, "forward": days_forward},
     )
     return n
 

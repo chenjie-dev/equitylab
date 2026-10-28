@@ -59,22 +59,41 @@ def _import_adata():
     return adata
 
 
-def sync_calendar(adata) -> int:
-    """深交所交易日历写入 SSE/SZSE/BSE（同一自然日规则）。"""
-    total = 0
-    try:
-        df = adata.stock.info.trade_calendar()
-    except Exception as exc:
-        print(f"adata-ingest calendar fetch failed: {exc}", flush=True)
-        return 0
-    rows = _df_records(df)
-    if not rows:
-        print("adata-ingest calendar empty", flush=True)
-        return 0
+def sync_calendar(_adata=None) -> int:
+    """交易日历权威：pandas_market_calendars（SSE）→ SSE/SZSE/BSE。
+
+    今年 + 明年；明年若库内仍是「纯工作日」则跳过 replace，改 seed-insert 占位。
+    adata 参数保留以兼容旧调用，不再用作日历源。
+    """
+    from equitylab_market import pmc_calendar
+
+    result = pmc_calendar.sync_cn_equity_calendar()
+    for row in result.get("detail") or []:
+        if row.get("error"):
+            print(
+                f"adata-ingest calendar pmc year={row.get('year')} "
+                f"failed: {row['error']}",
+                flush=True,
+            )
+        elif row.get("skipped"):
+            print(
+                f"adata-ingest calendar pmc year={row.get('year')} "
+                f"skipped={row['skipped']} trading_days={row.get('trading_days')}",
+                flush=True,
+            )
+        else:
+            print(
+                f"adata-ingest calendar pmc {row.get('exchange')} "
+                f"year={row.get('year')} trading={row.get('trading_days')} "
+                f"rows={row.get('n')}",
+                flush=True,
+            )
+    total = int(result.get("total") or 0)
     for ex in ("SSE", "SZSE", "BSE"):
-        n = pg_market.apply_calendar_rows(ex, rows, source_code=SOURCE)
-        total += n
-        print(f"adata-ingest calendar {ex} rows={n}", flush=True)
+        n_seed = pg_market.seed_calendar_weekdays(
+            ex, days_back=30, days_forward=400
+        )
+        print(f"adata-ingest calendar seed-insert {ex} n={n_seed}", flush=True)
     return total
 
 
