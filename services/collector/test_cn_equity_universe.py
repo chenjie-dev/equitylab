@@ -27,12 +27,14 @@ def test_merge_seed_adds_etf_and_keeps_hs_a():
 def test_quote_rotator_prepends_seed_and_caps_sina_batch():
     seed = [f"{i:06d}" for i in range(1, 23)]  # 22
     rotate = [f"{i:06d}" for i in range(100000, 100200)]
-    rot = QuoteRotator(seed + rotate, seed=seed, batch=80, prepend_seed=True)
+    rot = QuoteRotator(seed + rotate, seed=seed, batch=100, prepend_seed=True)
+    rot.seed_prepend_n = 12  # 显式：默认热门 12，旋转批更大
     batch = rot.next_batch()
     assert len(batch) <= SINA_HQ_BATCH_MAX
-    assert len(batch) == 100  # 22 seed + 78 rotate (room under sina cap)
+    assert len(batch) == 100  # 12 hot seed + 88 rotate（吃满新浪硬顶）
     assert batch[0] == "000001"
-    assert set(seed).issubset(set(batch))
+    assert set(seed[:12]).issubset(set(batch))
+    assert seed[12] not in batch  # 超出 prepend 的 seed 走旋转队列
     batch2 = rot.next_batch()
     assert batch2[0] == "000001"
     assert batch != batch2

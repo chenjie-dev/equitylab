@@ -23,11 +23,13 @@ def test_pick_gaps_orders_lowest_coverage_first():
         {"exchange": "SSE", "code": "600519", "name": "茅台"},
         {"exchange": "SZSE", "code": "000001", "name": "平安"},
         {"exchange": "SSE", "code": "601318", "name": "平安保险"},
+        {"exchange": "SSE", "code": "980023", "name": "指数垃圾"},
     ]
     coverage = {
         ("SSE", "600519"): {"count": 120, "min_day": None, "max_day": None},
         ("SZSE", "000001"): {"count": 10, "min_day": None, "max_day": None},
         ("SSE", "601318"): {"count": 0, "min_day": None, "max_day": None},
+        ("SSE", "980023"): {"count": 0, "min_day": None, "max_day": None},
     }
     gaps = hi.pick_gaps(universe, coverage, limit=10)
     assert [g["code"] for g in gaps] == ["601318", "000001"]

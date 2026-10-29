@@ -6,6 +6,7 @@ from equitylab_market.sina import sina_symbol
 from equitylab_market.symbols import (
     cn_equity_exchange,
     code6,
+    is_cn_listed_equity,
     map_adata_exchange,
     map_index_exchange,
 )
@@ -17,6 +18,16 @@ def test_cn_equity_exchange_bse_before_sse_nine():
     assert cn_equity_exchange("830879") == "BSE"
     assert cn_equity_exchange("920088") == "BSE"
     assert cn_equity_exchange("900901") == "SSE"
+
+
+def test_is_cn_listed_equity_filters_index_segments():
+    assert is_cn_listed_equity("600519")
+    assert is_cn_listed_equity("000001")
+    assert is_cn_listed_equity("900901")
+    assert is_cn_listed_equity("830879")
+    assert not is_cn_listed_equity("980023")
+    assert not is_cn_listed_equity("399001")
+    assert not is_cn_listed_equity("395001")
 
 
 def test_sina_symbol():

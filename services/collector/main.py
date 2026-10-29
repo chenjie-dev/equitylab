@@ -72,9 +72,13 @@ def main() -> None:
         post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
         rotator = cn_u.QuoteRotator(codes, seed=seed)
         pm.set_universe(len(codes))
-        # 每批实际旋转量 ≈ min(batch, 100-seed)；估算全表一轮滞后
+        # 每批实际旋转量 ≈ min(batch, 100-热门seed)；估算全表一轮滞后
         rotate_n = max(1, len(codes) - len(seed))
-        per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - len(seed)))
+        seed_slots = cn_u.quote_seed_prepend_n()
+        per_tick = max(
+            1,
+            min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - seed_slots),
+        )
         lag_s = (rotate_n / per_tick) * INTERVAL if codes else 0.0
         pm.set_full_cycle_seconds(lag_s)
         print(

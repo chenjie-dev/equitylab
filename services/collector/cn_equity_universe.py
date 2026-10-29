@@ -53,8 +53,18 @@ def universe_mode() -> str:
 
 
 def quote_batch_size() -> int:
-    n = int(os.environ.get("CN_EQUITY_QUOTE_BATCH", "80"))
+    # 默认吃满「100 − 热门 seed」席位，缩短全表一轮（配合 CN_EQUITY_QUOTE_SEED_N）
+    n = int(os.environ.get("CN_EQUITY_QUOTE_BATCH", "100"))
     return max(1, min(SINA_HQ_BATCH_MAX, n))
+
+
+def quote_seed_prepend_n() -> int:
+    """每 tick 前置热门 seed 只数；默认 12，给旋转批留出更多席位（新浪硬顶 100）。"""
+    try:
+        n = int(os.environ.get("CN_EQUITY_QUOTE_SEED_N", "12"))
+    except ValueError:
+        n = 12
+    return max(0, min(SINA_HQ_BATCH_MAX - 1, n))
 
 
 def universe_refresh_sec() -> float:
@@ -178,6 +188,9 @@ def fetch_hs_a_universe(
                 continue
             code = _code6(str(row.get("code") or ""))
             if code == "000000":
+                continue
+            # 980/399/395 为指数段，新浪偶发混入 hs_a；无日线且拖慢补数
+            if code.startswith(("980", "399", "395")):
                 continue
             sym = str(row.get("symbol") or "")
             if sym.startswith("bj"):
@@ -309,6 +322,7 @@ class QuoteRotator:
         self.seed = list(seed or [])
         self.batch = batch if batch is not None else quote_batch_size()
         self.prepend_seed = prepend_seed
+        self.seed_prepend_n = quote_seed_prepend_n()
         self._i = 0
         self._seed_set = set(self.seed)
         self._rotate = [c for c in self.codes if c not in self._seed_set] or list(self.codes)
@@ -328,8 +342,13 @@ class QuoteRotator:
         rotate = self._rotate
         if not rotate:
             return list(self.codes)[:SINA_HQ_BATCH_MAX]
-        # 预留 seed 名额，避免截断导致旋转指针空转漏票
-        seed_n = len(self.seed) if self.prepend_seed and self.seed else 0
+        # 预留热门 seed 名额（默认前 N 只），避免 22 种子吃光 100 硬顶拖慢全表一轮
+        hot = (
+            self.seed[: self.seed_prepend_n]
+            if self.prepend_seed and self.seed and self.seed_prepend_n > 0
+            else []
+        )
+        seed_n = len(hot)
         room = max(1, SINA_HQ_BATCH_MAX - seed_n)
         take = min(max(1, self.batch), room, len(rotate))
         chunk: list[str] = []
@@ -337,5 +356,5 @@ class QuoteRotator:
             chunk.append(rotate[self._i % len(rotate)])
             self._i = (self._i + 1) % len(rotate)
         if seed_n:
-            return list(dict.fromkeys([*self.seed, *chunk]))
+            return list(dict.fromkeys([*hot, *chunk]))
         return chunk

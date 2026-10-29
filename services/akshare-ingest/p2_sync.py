@@ -19,16 +19,19 @@ def sync_capital_flow(ak: Any, universe: list[dict[str, str]]) -> int:
     total = 0
     for item in universe:
         code = item["code"]
+        ex = item["exchange"]
+        # stock_fund_flow_individual 是排行接口（symbol=即时/3日…），禁止当个股回退
+        if ex == "BSE":
+            market = "bj"
+        elif ex == "SSE":
+            market = "sh"
+        else:
+            market = "sz"
         df = util.call_ak(
             ak.stock_individual_fund_flow,
             stock=code,
-            market="sh" if item["exchange"] == "SSE" else "sz",
+            market=market,
         )
-        if df is None:
-            df = util.call_ak(
-                getattr(ak, "stock_fund_flow_individual", lambda **k: None),
-                symbol=code,
-            )
         for row in util.df_records(df):
             day = util.day_s(row.get("日期") or row.get("date") or row.get("trade_date"))
             if not day:

@@ -12,6 +12,20 @@ def code6(raw: str) -> str | None:
     return None if out == "000000" else out
 
 
+def is_cn_listed_equity(code: str) -> bool:
+    """是否可作为 A 股现货（含 ETF/B 股）进 cn-equity 宇宙 / 冷日线补数。
+
+    排除误混入的指数段：980*（见 map_index_exchange）、399/395 深证指数。
+    北交所 4/8/92、沪 5/6/9（含 900 B 股）、深主板/创业板照常接受。
+    """
+    c = code6(code) or ""
+    if not c:
+        return False
+    if c.startswith(("980", "399", "395")):
+        return False
+    return True
+
+
 def cn_equity_exchange(code: str) -> str:
     """6 位 A 股码 → SSE / SZSE / BSE。
 

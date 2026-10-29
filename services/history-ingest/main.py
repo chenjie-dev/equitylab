@@ -14,7 +14,7 @@ from typing import Any
 
 from equitylab_market import pg as pg_market
 from equitylab_market.sina import daily_klines as sina_daily_klines
-from equitylab_market.symbols import cn_equity_exchange, code6
+from equitylab_market.symbols import cn_equity_exchange, code6, is_cn_listed_equity
 from equitylab_qdb import Client
 
 CODES_DOC_KEY = "cn-equity:codes"
@@ -54,7 +54,7 @@ def load_universe() -> list[dict[str, str]]:
                 if not isinstance(item, dict):
                     continue
                 c = code6(str(item.get("code") or item.get("stock_code") or ""))
-                if not c:
+                if not c or not is_cn_listed_equity(c):
                     continue
                 ex_raw = str(item.get("exchange") or "").upper()
                 if ex_raw not in ("SSE", "SZSE", "BSE"):
@@ -81,6 +81,7 @@ def load_universe() -> list[dict[str, str]]:
     return [
         {"exchange": ex, "code": code, "name": ""}
         for (ex, code) in sorted(cov.keys())
+        if is_cn_listed_equity(code)
     ]
 
 
@@ -117,6 +118,8 @@ def pick_gaps(
     gaps: list[dict[str, Any]] = []
     for item in universe:
         ex, code = item["exchange"], item["code"]
+        if not is_cn_listed_equity(code):
+            continue
         cov = coverage.get((ex, code)) or {"count": 0, "min_day": None, "max_day": None}
         cnt = int(cov.get("count") or 0)
         scope = f"{ex}:{code}"
@@ -157,7 +160,8 @@ def fill_one(gap: dict[str, Any]) -> dict[str, Any]:
         # 上游返回了棒但不在覆盖窗口（常见：退市/长期停更）
         status = "exhausted"
     elif written == 0:
-        status = "fail"
+        # 空响应多为非现货/无 K 线码（如 980*）；长退避，避免占满 BATCH_FILL
+        status = "exhausted"
     else:
         status = "fail"  # 写了但仍不足 MIN_BARS：短退避后再试
     pg_market.set_watermark(

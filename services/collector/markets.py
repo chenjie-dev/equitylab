@@ -86,7 +86,8 @@ RWA_ENGINE_QUOTES_HOT_ONLY = os.environ.get(
 RWA_KLINE_INTERVALS = [
     s.strip()
     for s in os.environ.get(
-        "RWA_KLINE_INTERVALS", "1h,1d,15m,5m,4h,1m,12h"
+        # 默认少周期：全市场×多周期会把 write_gate docs 队列打满，拖垮现货/A 股及时性
+        "RWA_KLINE_INTERVALS", "1h,1d,15m,5m"
     ).split(",")
     if s.strip()
 ]

@@ -106,6 +106,9 @@ class BinanceWsFeed:
         self._last_msg = 0.0
         self._started = False
         self._stop = threading.Event()
+        # CONNECT 代理 502 后改直连；稳定收包后再允许代理
+        self._prefer_direct = False
+        self._last_proxy_err = False
 
     def start(self) -> None:
         if self._started or not self.symbols:
@@ -142,6 +145,11 @@ class BinanceWsFeed:
             root = root[: -len("/ws")]
         return f"{root}/stream?streams={'/'.join(parts)}"
 
+    def _proxy_kwargs(self) -> dict[str, Any]:
+        if self._prefer_direct:
+            return {}
+        return _http_proxy_kwargs()
+
     def _run_forever(self) -> None:
         try:
             import websocket
@@ -152,42 +160,61 @@ class BinanceWsFeed:
         if BINANCE_WS_FALLBACK and BINANCE_WS_FALLBACK != BINANCE_WS:
             bases.append(BINANCE_WS_FALLBACK)
         backoff = 1.0
+        base_i = 0
+        # 短连接不把 backoff 清零，避免代理抖动时 1s 狂重连
+        healthy_reset_sec = max(15.0, STALE_SEC * 2)
         while not self._stop.is_set():
-            connected = False
-            for base in bases:
-                url = self._stream_url(base)
-                try:
-                    print(f"binance ws connecting {base} …", flush=True)
-                    app = websocket.WebSocketApp(
-                        url,
-                        on_message=self._on_message,
-                        on_error=self._on_error,
-                        on_close=self._on_close,
-                        on_open=lambda _ws: print(f"binance ws open {base}", flush=True),
-                    )
-                    connected = True
-                    backoff = 1.0
-                    # ping 由库处理；Binance 约 3min 发 ping
-                    # Docker Desktop 出网 TLS 异常时走宿主机 CONNECT 代理（见 HTTPS_PROXY）
-                    app.run_forever(
-                        ping_interval=60,
-                        ping_timeout=20,
-                        **_http_proxy_kwargs(),
-                    )
-                except Exception as exc:
-                    print(f"binance ws {base} failed: {exc}", flush=True)
-                if self._stop.is_set():
-                    return
-            if not connected:
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30)
+            base = bases[base_i % len(bases)]
+            url = self._stream_url(base)
+            opened_at = time.monotonic()
+            msgs_before = self._last_msg
+            try:
+                mode = "direct" if self._prefer_direct else "proxy-or-direct"
+                print(f"binance ws connecting {base} ({mode}) …", flush=True)
+                app = websocket.WebSocketApp(
+                    url,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                    on_open=lambda _ws: print(f"binance ws open {base}", flush=True),
+                )
+                # ping 由库处理；Binance 约 3min 发 ping
+                # Docker Desktop 出网 TLS 异常时走宿主机 CONNECT 代理（见 HTTPS_PROXY）
+                app.run_forever(
+                    ping_interval=60,
+                    ping_timeout=20,
+                    **self._proxy_kwargs(),
+                )
+            except Exception as exc:
+                print(f"binance ws {base} failed: {exc}", flush=True)
+                if "502" in str(exc) or "CONNECT" in str(exc).upper():
+                    self._prefer_direct = True
+                    self._last_proxy_err = True
+            if self._stop.is_set():
+                return
+            lived = time.monotonic() - opened_at
+            got_msgs = self._last_msg > msgs_before
+            if got_msgs and lived >= healthy_reset_sec:
+                backoff = 1.0
+                if self._prefer_direct and not self._last_proxy_err:
+                    # 直连已稳定；下次可再试代理（环境恢复）
+                    self._prefer_direct = False
+                self._last_proxy_err = False
             else:
-                print(f"binance ws reconnect in {backoff:.0f}s", flush=True)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30)
+                # 短命连接：轮换 endpoint，拉长退避
+                base_i += 1
+                if self._last_proxy_err:
+                    self._prefer_direct = True
+            print(f"binance ws reconnect in {backoff:.0f}s", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
 
     def _on_error(self, _ws: Any, err: Any) -> None:
+        text = str(err)
         print(f"binance ws error: {err}", flush=True)
+        if "502" in text or "CONNECT" in text.upper():
+            self._prefer_direct = True
+            self._last_proxy_err = True
 
     def _on_close(self, _ws: Any, status: Any, msg: Any) -> None:
         print(f"binance ws closed status={status} msg={msg}", flush=True)
