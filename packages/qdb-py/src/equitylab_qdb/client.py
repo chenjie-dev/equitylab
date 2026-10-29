@@ -148,7 +148,11 @@ class Client:
         return int(r.json().get("written") or 0)
 
     def post_json(self, path: str, body: dict[str, Any], timeout: float | None = None) -> Any:
-        """兼容旧 collector `post(path, body)`。"""
+        """经本 Client 发 POST（collector write_gate 用）。
+
+        新代码优先 ``post_quotes`` / ``post_trades`` / ``put_docs``；
+        仅允许已在 qdb ``server.md`` 登记的 ``/v1/*`` 写路径。
+        """
         r = self._session.post(
             f"{self.base_url}{path}",
             json=body,
