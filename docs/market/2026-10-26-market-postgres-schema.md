@@ -63,7 +63,7 @@
 ## 6. 写入与迁移
 
 - **collector / history-ingest**：经 `packages/market-py`（`equitylab_market.pg` / `.sina`）写 `bar_*`、水位、日历；history-ingest 持续扫日线缺口。
-- **交易日历权威**：[pandas_market_calendars](https://github.com/rsheftel/pandas_market_calendars)（`data_source=pmc`），由 `adata-ingest` 调用 `equitylab_market.pmc_calendar` 以 `mode=replace` 写 **今年 + 明年**。库内用日历名 **`SSE`** 覆盖 SSE/SZSE/BSE（A 股休市一致；勿用库的 `BSE`=孟买）。明年若会话≈纯工作日则跳过 replace，改 seed-insert。`akshare-ingest` 默认**不** replace（`AKSHARE_CALENDAR_REPLACE=1` 才应急回退）。collector `seed_calendar_weekdays` 仅为 **insert 占位**。写入后窗口函数回填 `prev`/`next`。
+- **交易日历权威**：[pandas_market_calendars](https://github.com/rsheftel/pandas_market_calendars)（`data_source=pmc`），由 `adata-ingest` 调用 `equitylab_market.pmc_calendar` 以 `mode=replace` 写 **今年 + 明年**。库内用日历名 **`SSE`** 覆盖 SSE/SZSE/BSE（A 股休市一致；勿用库的 `BSE`=孟买）。明年若会话≈纯工作日则跳过 replace，改 seed-insert。`akshare-ingest` 默认**不** replace（`AKSHARE_CALENDAR_REPLACE=1` 才应急回退）。collector `seed_calendar_weekdays` 仅为 **insert 占位**；盘中经 `session_calendar` **读** SSE 日历门禁（休市不写 A 股 trades）。写入后窗口函数回填 `prev`/`next`。
 - **research**：`/cn-equity/klines` 历史优先读 PG，不足回落 qdb；盘中 realtime 仍 qdb。
 - **新卷**：`init.sql` + `02_market_schema.sql` 挂载执行。
 - **已有卷**：执行 `migrations/20261026_market_schema.sql`；可选将旧 `public.klines` 导入后 `DROP`。

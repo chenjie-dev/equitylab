@@ -3,10 +3,10 @@
 须覆盖：
 - 跨交易日（含隔夜）
 - 跨周（周五→周一）
-- 节假日休市后再开（日历日跳跃）
+- 节假日休市后再开（日历日跳跃 / trading_calendar）
 - 同日累计量回落/重置
 
-原则：锚点带 `trade_date`；日期变化或量回落只重锚、不把整段累计量灌进当前 5m。
+原则：锚点带 `trade_date`；日期变化、非交易日或量回落只重锚、不把整段累计量灌进当前 5m。
 """
 
 from __future__ import annotations
@@ -29,14 +29,19 @@ def next_volume_anchor(
     *,
     trade_date: Optional[str] = None,
     clock_date: Optional[str] = None,
+    is_trading_day: Optional[bool] = None,
 ) -> Tuple[VolumeState, int, str]:
     """返回 (新状态, 本拍 trade 增量, 原因)。
 
-    原因：`first` | `date_change` | `clock_rollover` | `vol_reset` | `delta`
+    原因：`first` | `date_change` | `clock_rollover` | `vol_reset` | `non_trading` | `delta`
     """
     vol = int(vol)
     td = (trade_date or "").strip()[:10] or None
     clock = (clock_date or "").strip()[:10] or None
+
+    if is_trading_day is False:
+        # 休市：只重锚，禁止假增量进 5m
+        return VolumeState(td or clock or (prev.trade_date if prev else ""), vol), 0, "non_trading"
 
     if prev is None:
         return VolumeState(td or clock or "", vol), 0, "first"

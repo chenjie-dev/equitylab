@@ -10,7 +10,7 @@ COPY services/collector/requirements.txt .
 RUN pip install --no-cache-dir /tmp/qdb-py /tmp/market-py \
     && pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/qdb-py /tmp/market-py
-COPY services/collector/main.py services/collector/markets.py services/collector/binance_ws.py services/collector/retention.py services/collector/write_gate.py services/collector/cn_equity_universe.py services/collector/prom_metrics.py ./
+COPY services/collector/main.py services/collector/markets.py services/collector/binance_ws.py services/collector/retention.py services/collector/write_gate.py services/collector/cn_equity_universe.py services/collector/prom_metrics.py services/collector/volume_anchor.py services/collector/session_calendar.py ./
 USER appuser
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "main.py"]

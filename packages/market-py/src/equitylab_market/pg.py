@@ -272,6 +272,70 @@ def upsert_adjust_factor(
     return True
 
 
+def _as_calendar_day(calendar_date: date | str) -> date:
+    if isinstance(calendar_date, date) and not isinstance(calendar_date, datetime):
+        return calendar_date
+    if isinstance(calendar_date, datetime):
+        return calendar_date.date()
+    return date.fromisoformat(str(calendar_date)[:10])
+
+
+def is_trading_day(exchange_code: str, calendar_date: date | str) -> bool | None:
+    """读 `market.trading_calendar`；库不可用或无行时返回 None。"""
+    day = _as_calendar_day(calendar_date)
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_trading_day FROM market.trading_calendar
+            WHERE exchange_code=%s AND calendar_date=%s
+            """,
+            (exchange_code, day),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return bool(row[0])
+
+
+def load_trading_days(
+    exchange_code: str,
+    start: date | str,
+    end: date | str,
+) -> set[date] | None:
+    """窗口内交易日集合；库不可用返回 None（空表返回空 set）。"""
+    start_d = _as_calendar_day(start)
+    end_d = _as_calendar_day(end)
+    if end_d < start_d:
+        start_d, end_d = end_d, start_d
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT calendar_date FROM market.trading_calendar
+            WHERE exchange_code=%s
+              AND calendar_date BETWEEN %s AND %s
+              AND is_trading_day
+            ORDER BY calendar_date
+            """,
+            (exchange_code, start_d, end_d),
+        )
+        rows = cur.fetchall()
+    out: set[date] = set()
+    for (d,) in rows:
+        if isinstance(d, datetime):
+            out.add(d.date())
+        elif isinstance(d, date):
+            out.add(d)
+        else:
+            out.add(date.fromisoformat(str(d)[:10]))
+    return out
+
+
 def upsert_calendar_day(
     exchange_code: str,
     calendar_date: date | str,
@@ -288,11 +352,7 @@ def upsert_calendar_day(
     - ``promote``：仅允许升为交易日（日线确认）；不降级
     - ``insert``：粗填/占位；已有行不改（给明年未公布日历用）
     """
-    day = (
-        calendar_date
-        if isinstance(calendar_date, date)
-        else date.fromisoformat(str(calendar_date)[:10])
-    )
+    day = _as_calendar_day(calendar_date)
     prev_d = (
         None
         if prev_trading_day is None

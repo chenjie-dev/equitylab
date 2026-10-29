@@ -13,6 +13,8 @@ def test_disabled_without_database_url(monkeypatch):
     assert pg.ensure_security("SSE", "600519") is None
     assert pg.upsert_bar_daily("SSE", "600519", "2024-01-02", {"close": 1}) is False
     assert pg.set_watermark("sina", "bar_daily", "SSE:600519") is False
+    assert pg.is_trading_day("SSE", "2026-10-08") is None
+    assert pg.load_trading_days("SSE", "2026-01-01", "2026-01-31") is None
 
 
 def test_period_guard(monkeypatch):

@@ -176,13 +176,16 @@ def main() -> None:
         daemon=True,
     ).start()
 
-    # 成交量锚点：带 trade_date，跨天/跨周/节假日后重锚（见 volume_anchor）
+    # 成交量锚点：带 trade_date + trading_calendar（见 volume_anchor / session_calendar）
     from volume_anchor import VolumeState
+    import session_calendar as sess_cal
 
+    sess_cal.refresh(force=True)
     last_vol: dict[str, VolumeState] = {}
     cycle = 0
     while True:
         t0 = time.monotonic()
+        session_day = sess_cal.is_cn_session_day()
         if not skip_cn_equity and rotator is not None:
             try:
                 batch = rotator.next_batch()
@@ -215,11 +218,13 @@ def main() -> None:
             n = len(rotator.codes) if rotator else 0
             print(
                 f"collector tick cycle={cycle} cn_equity_ms={elapsed_ms} "
-                f"cn_equity_n={n} binance_ws={'up' if ws_ok else 'down'}",
+                f"cn_equity_n={n} session_day={session_day} "
+                f"binance_ws={'up' if ws_ok else 'down'}",
                 flush=True,
             )
         cycle += 1
-        remain = INTERVAL - (time.monotonic() - t0)
+        sleep_for = sess_cal.poll_interval_sec(INTERVAL)
+        remain = sleep_for - (time.monotonic() - t0)
         if remain > 0:
             time.sleep(remain)
 
@@ -363,15 +368,17 @@ def _ingest_sina_hq(
 ) -> None:
     """把 parse_sina 行写入 quotes / trades / depth docs。
 
-    trades 增量锚定见 `volume_anchor`：跨交易日 / 跨周 / 节假日休市后重锚。
+    trades：volume_anchor + trading_calendar；非交易日不写 trades（quotes/docs 仍更新）。
     """
     from volume_anchor import next_volume_anchor
+    import session_calendar as sess_cal
 
     quotes = []
     trades = []
     depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
     clock_date = _shanghai_clock_date()
+    session_day = sess_cal.is_cn_session_day(clock_date)
     for row in rows:
         quotes.append(
             {
@@ -416,9 +423,11 @@ def _ingest_sina_hq(
             vol,
             trade_date=row.get("trade_date"),
             clock_date=clock_date,
+            is_trading_day=session_day,
         )
         last_vol[vol_key] = state
-        if delta > 0:
+        # 休市日禁止 trades 进 qdb（防假 5m）；quotes 仍刷最新价
+        if session_day and delta > 0:
             trades.append(
                 {
                     "exchange": row["exchange"],

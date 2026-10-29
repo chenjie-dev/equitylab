@@ -61,3 +61,16 @@ def test_vol_reset_same_reported_date():
         prev, 800, trade_date="2026-10-28", clock_date="2026-10-28"
     )
     assert reason == "vol_reset" and delta == 0 and st.volume == 800
+
+
+def test_non_trading_day_blocks_delta():
+    prev = VolumeState("2026-10-09", 5_000_000)
+    st, delta, reason = next_volume_anchor(
+        prev,
+        5_100_000,
+        trade_date="2026-10-10",
+        clock_date="2026-10-10",
+        is_trading_day=False,
+    )
+    assert reason == "non_trading" and delta == 0
+    assert st.volume == 5_100_000

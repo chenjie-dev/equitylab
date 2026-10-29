@@ -7,9 +7,9 @@
 
 ## 已做 / 未做 / 已知风险 / 复验命令
 
-- 已做：权威源改为 `pandas_market_calendars`（`pmc`）；adata-ingest 写今年+明年；akshare 默认不抢写；seed insert-only；2026=242，2027 SSE 日历 246 已 replace
-- 未做：volume_anchor / 盘中门禁尚未消费日历；PMC 2027 完整度依赖上游发版
-- 已知风险：库内 `BSE` 是孟买——本仓北交所用 SSE 日历映射；collector 旧镜像 promote seed 仍危险
+- 已做：权威源 `pmc`；adata 写今年+明年；collector **消费日历**（`session_calendar` + `volume_anchor.is_trading_day`；休市不写 A 股 trades、拉长 poll）
+- 未做：前端休市徽标（P1）；PMC 2027 完整度依赖上游发版
+- 已知风险：库不可用时回落工作日启发式；库内 `BSE`=孟买勿混用
 - 复验命令：见下
 
 ```bash
@@ -31,6 +31,7 @@ WHERE exchange_code='SSE' AND calendar_date IN ('2026-01-01','2026-10-01','2026-
 | 2026 权威日历在 PG（含休市） | pass | 三所 `y2026_td=242`；元旦/国庆 `f`，10-08 `t`；watermark `pmc` |
 | 明年继续写 | pass | 2027 全表 365 行、SSE 日历 trading=246 replace |
 | seed 不覆盖权威节假日 | pass | sync 后再 seed，仍 242 |
+| collector 消费日历门禁 | pass | 日志 `session_calendar loaded` + `session_day=True`；休市 `non_trading` 单测 |
 
 ## 冒烟
 
