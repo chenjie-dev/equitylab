@@ -15,7 +15,7 @@
 | 属于 `market` | 不属于 `market` |
 |---|---|
 | 已闭合 `bar_daily` / `bar_minute` | 盘中未闭合棒、WebSocket 会话（→ qdb） |
-| `adjust_factor` / `trading_calendar` / `suspend` | 币安/RWA 盘中流（→ qdb；读经 market-data） |
+| `adjust_factor` / `trading_calendar` / `suspend` | 币安/RWA **盘中**流（→ qdb）；币安**已闭合** K 亦落 `bar_*`（`BINANCE`），见 [热冷分离](./2026-10-30-binance-热冷分离.md) |
 | `security` / `data_source` / `ingest_watermark` | 研报向量、会话审计（其它表/库） |
 | 板块/成分/股本/行业/分红/资金流/财务/舆情冷表 | 三大报明细、公告原文、当日分时（见完整域文） |
 

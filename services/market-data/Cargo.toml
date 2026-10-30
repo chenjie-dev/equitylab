@@ -21,3 +21,9 @@ futures-util = "0.3"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
+# 币安冷历史只读 market.bar_*（BINANCE）；编译期不绑库
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio-rustls",
+  "postgres",
+  "chrono",
+] }

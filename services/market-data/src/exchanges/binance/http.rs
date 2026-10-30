@@ -201,8 +201,33 @@ pub async fn trades(Query(q): Query<TradesQuery>) -> Result<Json<Value>, (Status
 pub async fn klines(Query(q): Query<KlinesQuery>) -> Result<Json<Value>, (StatusCode, String)> {
     let symbol = normalize_symbol(&q.symbol);
     let limit = q.limit.clamp(1, 1500);
-    let rows =
-        crate::qdb_read::binance_klines(&symbol, &q.interval, limit, q.end_time).await;
+    // 冷历史 PG；最新窗口拼 qdb 当日末棒（左滑 endTime 只读 PG）
+    let qdb_tail = if q.end_time.is_none() {
+        crate::qdb_read::binance_last_bar(&symbol, &q.interval).await
+    } else {
+        None
+    };
+    let rows = crate::pg_binance::merged_klines(
+        &symbol,
+        &q.interval,
+        limit,
+        q.end_time,
+        qdb_tail,
+    )
+    .await;
+    // PG 尚未回补时短暂回落 qdb docs，避免首屏全空（标日志；非长期权威）
+    if rows.is_empty() {
+        let fallback =
+            crate::qdb_read::binance_klines(&symbol, &q.interval, limit, q.end_time).await;
+        if !fallback.is_empty() {
+            tracing::debug!(
+                symbol = %symbol,
+                interval = %q.interval,
+                "BINANCE klines: PG empty, temporary qdb docs fallback"
+            );
+            return Ok(Json(Value::Array(fallback)));
+        }
+    }
     Ok(Json(Value::Array(rows)))
 }
 

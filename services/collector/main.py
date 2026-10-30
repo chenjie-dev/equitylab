@@ -128,6 +128,15 @@ def main() -> None:
     except Exception as exc:
         print(f"pg_market calendar seed failed: {exc}", flush=True)
 
+    # 币安冷库只打 REST+PG，不占 qdb write_gate；与 A 股 seed 回填并行，
+    # 避免被 cn_equity 阻塞导致现货历史长期空。
+    threading.Thread(
+        target=_binance_pg_backfill_worker,
+        args=(markets,),
+        name="collector-binance-pg",
+        daemon=True,
+    ).start()
+
     if not skip_cn_equity and kline_codes:
         print(
             f"collector cn_equity backfill {len(kline_codes)} symbols "
@@ -281,6 +290,13 @@ def _universe_refresh_worker(seed: list[str], rotator: cn_u.QuoteRotator) -> Non
             )
         except Exception as exc:
             print(f"cn_equity universe refresh failed: {exc}", flush=True)
+
+
+def _binance_pg_backfill_worker(markets: object) -> None:
+    try:
+        markets.backfill_binance_pg()  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"binance PG backfill failed: {exc}", flush=True)
 
 
 def _market_backfill_worker(markets: object) -> None:

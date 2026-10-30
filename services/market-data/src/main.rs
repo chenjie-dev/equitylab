@@ -11,11 +11,13 @@
 //! - `MARKET_PROVIDER`：`mock` | `binance`（读 qdb）；`alphafeed` 保留但拒绝外呼
 //! - `BINANCE_REST_URL` / `BINANCE_WS_URL`
 //! - `QDB_URL`：只读行情与 `/qdb/ws` 代理目标
+//! - `DATABASE_URL`：币安冷 K 线读 `market.bar_*`（仅 BINANCE）
 
 mod cache;
 mod exchanges;
 mod handlers;
 mod http_metrics;
+mod pg_binance;
 mod providers;
 mod qdb_read;
 mod qdb_ws;
@@ -66,6 +68,7 @@ async fn main() {
     });
 
     let _metrics = http_metrics::init("market-data");
+    pg_binance::init().await;
 
     let state = Arc::new(AppState { provider, cache });
 

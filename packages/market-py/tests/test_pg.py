@@ -23,17 +23,26 @@ def test_period_guard(monkeypatch):
     pg._warned = True
     from datetime import datetime, timezone
 
+    # 非法周期在连库前拒写；30m/1h 等币安周期现已合法
     assert (
         pg.upsert_bar_minute(
             "SSE",
             "600519",
-            "30m",
+            "2m",
             datetime.now(timezone.utc),
             "2024-01-02",
             {"close": 1},
         )
         is False
     )
+    assert pg.normalize_bar_period("60m") == "1h"
+
+
+def test_upsert_binance_klines_noop_without_db(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    pg._conn = None
+    assert pg.upsert_binance_klines("BTCUSDT", "15m", []) == 0
+    assert pg.list_binance_bars("BTCUSDT", "15m") == []
 
 
 def test_ingest_empty_lists(monkeypatch):

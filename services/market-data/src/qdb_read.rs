@@ -18,20 +18,35 @@ pub async fn klines(symbol: &str, period: &str) -> Vec<Value> {
     client().klines(symbol, period).await
 }
 
-/// 把 qdb K 线折成币安数组：`[openTime, open, high, low, close, volume]`。
-///
-/// 优先读 collector 写入的 `binance:kline:{symbol}:{interval}` docs（可含历史）；
-/// 引擎聚合 K 线受 late-tick 限制，水位推进后无法靠回补 trades 填满首屏。
-///
-/// - `limit`：目标根数（折叠后）
-/// - `end_time_ms`：只要开盘时间 ≤ 该毫秒的桶（向前翻页时传「当前最老一根 - 1」）
+/// 取 docs / 引擎折叠后的**最后一根**（供与 PG 历史拼接当日未闭合棒）。
+pub async fn binance_last_bar(symbol: &str, interval: &str) -> Option<Value> {
+    let key = format!("binance:kline:{symbol}:{interval}");
+    if let Some(doc) = doc(&key).await {
+        if let Some(rows) = doc_kline_rows(&doc) {
+            return rows.into_iter().last();
+        }
+    }
+    let (period, group) = map_interval(interval);
+    let raw_limit = group.saturating_mul(2).max(2).min(64);
+    let rows = client()
+        .klines_window(
+            &format!("BINANCE:{symbol}"),
+            period,
+            Some(raw_limit),
+            None,
+        )
+        .await;
+    let folded = fold(&rows, group);
+    folded.last().and_then(to_binance_row)
+}
+
+/// 旧路径：仅 qdb docs/引擎（历史权威已迁 PG；保留给排障）。
 pub async fn binance_klines(
     symbol: &str,
     interval: &str,
     limit: usize,
     end_time_ms: Option<u64>,
 ) -> Vec<Value> {
-    // 与 collector docs 保留上限对齐，禁止一次拉爆内存
     let limit = limit.clamp(1, 500);
     let key = format!("binance:kline:{symbol}:{interval}");
     if let Some(doc) = doc(&key).await {
@@ -48,7 +63,6 @@ pub async fn binance_klines(
         }
     }
     let (period, group) = map_interval(interval);
-    // 折叠会吞掉 group 根原生桶，多取一点原生行
     let raw_limit = limit.saturating_mul(group).saturating_add(group).min(5_000);
     let rows = client()
         .klines_window(

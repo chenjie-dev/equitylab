@@ -22,6 +22,7 @@ services:
       - ./infra/postgres/migrations/20261027_market_schema_adata.sql:/docker-entrypoint-initdb.d/03_market_schema_adata.sql:ro
       - ./infra/postgres/migrations/20261027_market_data_source_akshare.sql:/docker-entrypoint-initdb.d/04_market_data_source_akshare.sql:ro
       - ./infra/postgres/migrations/20261028_market_data_source_pmc.sql:/docker-entrypoint-initdb.d/05_market_data_source_pmc.sql:ro
+      - ./infra/postgres/migrations/20261030_market_binance_bars.sql:/docker-entrypoint-initdb.d/06_market_binance_bars.sql:ro
     networks: [equitylab]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -121,12 +122,14 @@ services:
       RWA_ENGINE_QUOTES_HOT_ONLY: ${RWA_ENGINE_QUOTES_HOT_ONLY:-1}
       QDB_WRITE_FLUSH_MS: ${QDB_WRITE_FLUSH_MS:-25}
       # 过密 REST K 线回填会占住 qdb 引擎锁；可按需加大间隔或只留 1m
-      BINANCE_KLINE_INTERVALS: ${BINANCE_KLINE_INTERVALS:-1m,5m,15m,1h,4h,1d}
+      BINANCE_KLINE_INTERVALS: ${BINANCE_KLINE_INTERVALS:-1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d,3d,1w,1M}
+      BINANCE_KLINE_PG_BACKFILL_PAGES: ${BINANCE_KLINE_PG_BACKFILL_PAGES:-10}
       BINANCE_KLINE_PAUSE_SEC: ${BINANCE_KLINE_PAUSE_SEC:-1.0}
       BINANCE_KLINE_LIMIT: ${BINANCE_KLINE_LIMIT:-180}
       RWA_KLINE_LIMIT: ${RWA_KLINE_LIMIT:-200}
       BINANCE_KLINE_REFRESH: ${BINANCE_KLINE_REFRESH:-8}
-      BINANCE_KLINE_BACKFILL: ${BINANCE_KLINE_BACKFILL:-0}
+      # 默认 1：启动向 PG 冷回补已闭合棒（历史权威）；0=只靠 feed 短窗
+      BINANCE_KLINE_BACKFILL: ${BINANCE_KLINE_BACKFILL:-1}
       BINANCE_KLINE_WRITE_TRADES: ${BINANCE_KLINE_WRITE_TRADES:-0}
       BINANCE_WS_WRITE_TRADES: ${BINANCE_WS_WRITE_TRADES:-1}
       BINANCE_WS_WRITE_QUOTES: ${BINANCE_WS_WRITE_QUOTES:-1}

@@ -3,6 +3,7 @@
 /**
  * Wind 式公开行情台：红涨绿跌 · 推送最新价 · 闪烁 · ↑↓ 切票。
  * 币安式壳：顶栏热门条（SiteHeader）+ `?symbol=` 切票；仅公开数据。
+ * K 线：历史 Postgres（market.bar_*）+ 当日末棒 qdb；经 `/api/market/binance/klines`。
  */
 
 import {

@@ -57,6 +57,10 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `NEXT_PUBLIC_MARKET_WS_URL` | 空（同源） | 订阅读经 gateway `/api/market/qdb/ws`；勿直连 `:3002` |
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
+| `BINANCE_KLINE_BACKFILL` | `1` | 启动向 PG 翻页回补闭合棒；`0`=只靠 feed |
+| `BINANCE_KLINE_PG_BACKFILL_PAGES` | `10` | 每 symbol×interval 最多页（每页≤1000） |
+| `BINANCE_KLINE_INTERVALS` | 全周期列表 | 与现货台对齐；写入 `market.bar_*` |
+| `BINANCE_KLINE_LIMIT` | `180` | qdb docs 短窗硬顶（非 PG 深度） |
 | `COLLECTOR_HTTP(S)_PROXY` | 空 / `host.docker.internal:18080` | 容器 TLS 异常时走宿主机 CONNECT 代理 |
 | `RATE_LIMIT_PER_MINUTE` | 120 | 网关滑动窗口；`/api/market/*` 与 `/api/research/cn-equity/*` 豁免 |
 | `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | 空 | 有 Key 时标记已配置；MVP 仍返回工具摘要 |
@@ -98,7 +102,7 @@ docker compose down
 | `network … active endpoints` | 旧容器（如历史 `equitylab-api`）占网 | `docker rm -f <容器>` 后重试 |
 | market-data 日志 Redis warn | 启动瞬间 Redis 未就绪或 URL 错 | 检查 `REDIS_URL=redis://redis:6379`；无缓存仍可返回报价 |
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
-| 行情空 / 只有几根 K 线 | collector 未写 docs，或引擎 late-tick | Spot 看 `binance:kline:*`；`logs collector`；见 [qdb 排障](../market/2026-10-20-qdb-行情库.md) |
+| 币安 K 线浅 / 左滑空 | PG 未回补或 `BINANCE_KLINE_BACKFILL=0` | `SELECT count(*) … exchange_code='BINANCE'`；`logs collector` 找 `binance PG backfill`；见 [热冷分离](../market/2026-10-30-binance-热冷分离.md) |
 | A 股 `/markets/cn` 或 `SSE:600519` 快照一直空 | `.env` 留着 `COLLECTOR_SKIP_CN_EQUITY=1`（排障应急未关回） | 设 `COLLECTOR_SKIP_CN_EQUITY=0`（或删掉该行，compose 默认 0）；`docker compose up -d --force-recreate collector`；日志应有 `cn_equity=N` 而非 `cn_equity=skip`；再 curl `http://localhost:9090/v1/snapshots?symbols=SSE:600519` |
 | 非 seed 票历史 K 很少 / `source=qdb` 短窗 | `history-ingest` 未跑或刚起步 | `docker compose logs history-ingest` 应有 `cover=` / `fill=`；PG：`SELECT count(*) FROM market.bar_daily`；设 `HISTORY_INGEST_SKIP=0` |
 | A 股有数但价格落后新浪 / 倒退 | write_gate quotes FIFO 积压，过期 last 盖回快照 | collector `write_gate` quotes 按 `exchange:code` 只留最新；日志 `q_pending` 应≈标的数；对比新浪 `hq.sinajs.cn/list=sh600519` vs `localhost:9090/v1/snapshots?symbols=SSE:600519`，盘中 \|lag\| 宜 <1 元 |

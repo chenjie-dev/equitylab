@@ -92,14 +92,17 @@ RWA_KLINE_INTERVALS = [
     ).split(",")
     if s.strip()
 ]
-# 现货 K 线：WS 不订 kline；须 REST 持续补齐（读路径 map 到这些 period）
-_kline_iv_raw = os.environ.get("BINANCE_KLINE_INTERVALS", "1m,5m,15m,1h,4h,1d").strip()
+# 现货 K 线：全周期落 PG 冷库；qdb docs 仅短窗兼容；当日未闭合棒靠 REST 刷新
+_kline_iv_raw = os.environ.get(
+    "BINANCE_KLINE_INTERVALS",
+    "1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d,3d,1w,1M",
+).strip()
 BINANCE_KLINE_INTERVALS = (
     []
     if _kline_iv_raw.lower() in ("", "0", "off", "none", "-")
     else [s.strip() for s in _kline_iv_raw.split(",") if s.strip()]
 )
-# docs / REST 只保留最近 N 根（硬顶），覆盖写入，禁止无限堆积
+# docs 短窗硬顶（历史权威改 market.bar_*）
 _BINANCE_KLINE_LIMIT_MAX = 500
 BINANCE_KLINE_LIMIT = min(
     _BINANCE_KLINE_LIMIT_MAX,
@@ -107,6 +110,13 @@ BINANCE_KLINE_LIMIT = min(
 )
 BINANCE_KLINE_REFRESH = max(2, int(os.environ.get("BINANCE_KLINE_REFRESH", "8")))
 BINANCE_KLINE_PAUSE = float(os.environ.get("BINANCE_KLINE_PAUSE_SEC", "1.0"))
+# PG 冷回补：每 symbol×interval 向更早翻页次数（每页≤1000）
+BINANCE_KLINE_PG_BACKFILL_PAGES = max(
+    1, int(os.environ.get("BINANCE_KLINE_PG_BACKFILL_PAGES", "10"))
+)
+BINANCE_KLINE_PG_BACKFILL_PAUSE = float(
+    os.environ.get("BINANCE_KLINE_PG_BACKFILL_PAUSE_SEC", "0.25")
+)
 _RWA_KLINE_LIMIT_MAX = 300
 RWA_KLINE_DOC_LIMIT = min(
     _RWA_KLINE_LIMIT_MAX,
@@ -124,29 +134,47 @@ _binance_kline_i = 0
 _HOT_TICKERS = {t.upper() for t in RWA_TICKERS}
 
 
-def backfill_markets() -> None:
-    # 启动全量回填会长时间占住 qdb engine（apply_trades+fsync），饿死 /v1/klines。
-    # 持续刷新走 start_binance_kline_feed；缺历史时再显式开 BINANCE_KLINE_BACKFILL=1。
-    do_backfill = os.environ.get("BINANCE_KLINE_BACKFILL", "0").strip().lower() not in (
+def _binance_pg_backfill_enabled() -> bool:
+    return os.environ.get("BINANCE_KLINE_BACKFILL", "1").strip().lower() not in (
         "0",
         "false",
         "no",
         "off",
-        "",
     )
+
+
+def backfill_binance_pg() -> None:
+    """只写 Postgres 冷库（不碰 qdb）。可与 A 股 seed 回填并行，避免被 cn_equity 阻塞。"""
     if not BINANCE_KLINE_INTERVALS:
-        print("binance kline backfill skipped (BINANCE_KLINE_INTERVALS=off)", flush=True)
-    elif not do_backfill:
+        print("binance kline PG backfill skipped (BINANCE_KLINE_INTERVALS=off)", flush=True)
+        return
+    if not _binance_pg_backfill_enabled():
         print(
-            "binance kline backfill skipped (BINANCE_KLINE_BACKFILL=0; feed still runs)",
+            "binance kline PG backfill skipped (BINANCE_KLINE_BACKFILL=0; feed still runs)",
             flush=True,
         )
-    else:
+        return
+    print(
+        f"binance PG backfill start symbols={len(BINANCE_SYMBOLS)} "
+        f"intervals={len(BINANCE_KLINE_INTERVALS)} pages={BINANCE_KLINE_PG_BACKFILL_PAGES}",
+        flush=True,
+    )
+    for symbol in BINANCE_SYMBOLS:
+        try:
+            _backfill_binance_pg(symbol)
+        except Exception as exc:
+            print(f"binance PG backfill {symbol} failed: {exc}", flush=True)
+    print("binance PG backfill done", flush=True)
+
+
+def backfill_markets() -> None:
+    # 冷历史 PG 由 backfill_binance_pg 早启；此处只补 docs 短窗 + RWA。
+    if BINANCE_KLINE_INTERVALS:
         for symbol in BINANCE_SYMBOLS:
             try:
                 _backfill_binance(symbol)
             except Exception as exc:
-                print(f"binance backfill {symbol} failed: {exc}", flush=True)
+                print(f"binance docs backfill {symbol} failed: {exc}", flush=True)
     if RWA_WORKERS <= 0 and RWA_KLINE_WORKERS <= 0:
         print("rwa backfill skipped (RWA workers=0)", flush=True)
         return
@@ -280,6 +308,44 @@ def _binance_kline_worker() -> None:
         time.sleep(BINANCE_KLINE_PAUSE)
 
 
+def _backfill_binance_pg(symbol: str) -> None:
+    """向更早翻页写入 market.bar_*（已闭合）；每 interval 最多 PG_BACKFILL_PAGES 页。"""
+    from equitylab_market import pg as pg_market
+
+    if not pg_market.enabled():
+        print(f"binance PG backfill {symbol} skipped (no DATABASE_URL)", flush=True)
+        return
+    total = 0
+    for interval in BINANCE_KLINE_INTERVALS:
+        end_ms: int | None = None
+        got = 0
+        for _page in range(BINANCE_KLINE_PG_BACKFILL_PAGES):
+            rows = _binance_klines(symbol, interval, 1000, end_time_ms=end_ms)
+            if not rows:
+                break
+            n = pg_market.upsert_binance_klines(
+                symbol, interval, rows, drop_open=True, name=symbol
+            )
+            got += n
+            total += n
+            try:
+                oldest = int(rows[0][0])
+            except (TypeError, ValueError, IndexError):
+                break
+            end_ms = oldest - 1
+            if len(rows) < 1000:
+                break
+            if BINANCE_KLINE_PG_BACKFILL_PAUSE > 0:
+                time.sleep(BINANCE_KLINE_PG_BACKFILL_PAUSE)
+        if got:
+            print(
+                f"binance PG backfill {symbol}:{interval} closed_bars≈{got}",
+                flush=True,
+            )
+    if total:
+        print(f"binance PG backfill {symbol} total_closed≈{total}", flush=True)
+
+
 def _store_binance_klines(
     symbol: str,
     interval: str,
@@ -288,10 +354,9 @@ def _store_binance_klines(
     only_missing: bool,
     keep_last: int | None = None,
 ) -> int:
-    """REST K 线 → docs（读路径主源）；可选再写 trades 喂引擎聚合。
+    """REST K 线 → PG 闭合棒（冷权威）+ docs 短窗（兼容）+ 可选 trades。
 
-    qdb 对早于当前桶的成交只进 ticks 不进 K 线（late-tick），水位已被 live
-    推到「现在」后无法靠回补 trades 填历史。图表历史一律读 `binance:kline:*` docs。
+    历史读路径改走 market.bar_*；docs 不再作长期主副本。
     """
     qsym = f"BINANCE:{symbol}"
     retain = min(limit, BINANCE_KLINE_LIMIT, _BINANCE_KLINE_LIMIT_MAX)
@@ -302,6 +367,15 @@ def _store_binance_klines(
     rows = filter_binance_kline_rows(rows[-retain:])
     if not rows:
         return 0
+    try:
+        from equitylab_market import pg as pg_market
+
+        if pg_market.enabled():
+            pg_market.upsert_binance_klines(
+                symbol, interval, rows, drop_open=True, name=symbol
+            )
+    except Exception as exc:
+        print(f"binance PG write {symbol}:{interval} failed: {exc}", flush=True)
     _put_docs([{"key": f"binance:kline:{symbol}:{interval}", "value": {"data": rows}}])
     write_trades = os.environ.get("BINANCE_KLINE_WRITE_TRADES", "0").strip().lower() not in (
         "0",
@@ -986,12 +1060,21 @@ def _ensure_tokens() -> list[dict]:
         return []
 
 
-def _binance_klines(symbol: str, interval: str, limit: int) -> list[list]:
-    data = _binance_get(
-        "/api/v3/klines",
-        {"symbol": symbol, "interval": interval, "limit": limit},
-        timeout=20,
-    )
+def _binance_klines(
+    symbol: str,
+    interval: str,
+    limit: int,
+    *,
+    end_time_ms: int | None = None,
+) -> list[list]:
+    params: dict[str, Any] = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": min(max(int(limit), 1), 1000),
+    }
+    if end_time_ms is not None:
+        params["endTime"] = int(end_time_ms)
+    data = _binance_get("/api/v3/klines", params, timeout=20)
     return data if isinstance(data, list) else []
 
 

@@ -10,15 +10,15 @@
 | 仅市场数据 URL（REST / WS，免 Key） | https://developers.binance.com/docs/zh-CN/binance-spot-api-docs/faqs/market_data_only |
 | 现货 REST / 市场流（完整规范） | 从文档中心进入 **Spot → REST API / WebSocket Streams** |
 
-EquityLab **只接**「仅市场数据」面。读路径不回源：`collector` 写入 qdb，market-data 只读 qdb。本仓落点见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**改读写前先核对同级 `../qdb/docs/manual/` 最新手册**，保持用法不滞后。
+EquityLab **只接**「仅市场数据」面。读路径不回源。**2026-10-30 起现货 K 线热冷分离**（对齐 A 股）：已闭合历史 → Postgres `market.bar_*`；当日未闭合 / 报价盘口 → qdb。详见 [binance 热冷分离](./2026-10-30-binance-热冷分离.md)。qdb 用法见 [2026-10-20-qdb-行情库.md](./2026-10-20-qdb-行情库.md)；**改读写前先核对同级 `../qdb/docs/manual/`**。
 
 - 采集回源（仅 collector）：
-  - REST：`BINANCE_REST_URL`（默认 `api.binance.com`，回落 `data-api`）用于 backfill / WS 断流兜底
-  - **WS → qdb**：`BINANCE_WS_URL` combined stream（`bookTicker`/`trade`/`depth20@100ms`/`ticker`）写 `POST /v1/quotes` 与 docs
-- 读路径：**禁止** market-data 回源；`/binance/v3/{*}` 与 `/binance/ws` 已拒绝上游。订阅读只用 `/qdb/ws`
-- 读：`QDB_URL`（默认 `http://qdb:9090`）。ticker / depth / trades 来自 `GET /v1/docs`，K 线来自 docs/`GET /v1/klines`（`BINANCE:{SYMBOL}`）
+  - REST：`BINANCE_REST_URL` → 闭合 K 线 upsert `market.bar_*`；短窗仍写 `binance:kline:*` docs（兼容）
+  - **WS → qdb**：`BINANCE_WS_URL` combined stream 写 quotes / depth / trades docs
+- 读路径：**禁止** market-data 回源；`/binance/klines` = PG 历史 +（无 endTime）qdb 末棒；ticker/depth/trades 仍 docs；订阅读 `/qdb/ws`
+- RWA/Ondo **本轮未做** PG 冷库（仍 qdb）
 
-不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。qdb 原生周期为 `1m/5m/15m/1h/4h/1d`；`3m/30m/2h/6h/12h/3d/1w/1M` 由读路径折叠。
+不接签名账户、下单、合约/期权等需 Key 或交易权限的接口。
 
 ## 代币化美股（Ondo RWA）
 

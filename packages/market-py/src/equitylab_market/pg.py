@@ -125,6 +125,35 @@ def ensure_security(
     return inner
 
 
+# bar_minute 允许的周期（含币安）；1d 走 bar_daily；60m 与 1h 等价存 1h
+_BAR_MINUTE_PERIODS = frozenset(
+    {
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "60m",
+        "2h",
+        "4h",
+        "6h",
+        "12h",
+        "3d",
+        "1w",
+        "1M",
+    }
+)
+
+
+def normalize_bar_period(period: str) -> str:
+    """统一周期名：60m→1h。"""
+    p = (period or "").strip()
+    if p == "60m":
+        return "1h"
+    return p
+
+
 def upsert_bar_daily(
     exchange_code: str,
     secu_code: str,
@@ -171,7 +200,7 @@ def upsert_bar_daily(
                 _dec(bar.get("high")),
                 _dec(bar.get("low")),
                 _dec(bar.get("close")),
-                _bigint(bar.get("volume")),
+                _dec(bar.get("volume")),
                 _dec(bar.get("amount")),
                 source_code,
             ),
@@ -189,11 +218,15 @@ def upsert_bar_minute(
     *,
     source_code: str = "sina",
     name: str = "",
+    secu_category: str = "stock",
 ) -> bool:
-    """写入 / 覆盖一根分钟线；bar_time 须为 aware UTC 或带时区。"""
-    if period not in ("1m", "5m", "15m", "60m"):
+    """写入 / 覆盖一根分钟/多周期线；bar_time 须为 aware UTC 或带时区。"""
+    period = normalize_bar_period(period)
+    if period not in _BAR_MINUTE_PERIODS:
         return False
-    inner = ensure_security(exchange_code, secu_code, name=name)
+    inner = ensure_security(
+        exchange_code, secu_code, name=name, secu_category=secu_category
+    )
     if inner is None:
         return False
     day = trading_day if isinstance(trading_day, date) else date.fromisoformat(str(trading_day)[:10])
@@ -231,12 +264,158 @@ def upsert_bar_minute(
                 _dec(bar.get("high")),
                 _dec(bar.get("low")),
                 _dec(bar.get("close")),
-                _bigint(bar.get("volume")),
+                _dec(bar.get("volume")),
                 _dec(bar.get("amount")),
                 source_code,
             ),
         )
     return True
+
+
+def upsert_binance_klines(
+    secu_code: str,
+    interval: str,
+    rows: list[Any],
+    *,
+    drop_open: bool = True,
+    name: str = "",
+) -> int:
+    """币安 REST kline 数组 → market.bar_*（只写已闭合棒）。
+
+    每行至少 ``[openTime_ms, o, h, l, c, volume, closeTime_ms, quoteVolume, ...]``。
+    ``drop_open=True`` 时丢弃 closeTime ≥ now 的末棒（未闭合）。
+    """
+    if not rows:
+        return 0
+    code = str(secu_code or "").strip().upper()
+    if not code:
+        return 0
+    iv = normalize_bar_period(interval)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    written = 0
+    for raw in rows:
+        if not isinstance(raw, (list, tuple)) or len(raw) < 6:
+            continue
+        try:
+            open_ms = int(raw[0])
+            close_ms = int(raw[6]) if len(raw) > 6 else open_ms
+        except (TypeError, ValueError):
+            continue
+        if drop_open and close_ms >= now_ms:
+            continue
+        bar = {
+            "open": raw[1],
+            "high": raw[2],
+            "low": raw[3],
+            "close": raw[4],
+            "volume": raw[5],
+            "amount": raw[7] if len(raw) > 7 else None,
+        }
+        bar_time = datetime.fromtimestamp(open_ms / 1000.0, tz=timezone.utc)
+        day = bar_time.date()
+        if iv == "1d":
+            ok = upsert_bar_daily(
+                "BINANCE",
+                code,
+                day,
+                bar,
+                source_code="binance",
+                name=name or code,
+                secu_category="crypto",
+            )
+        else:
+            ok = upsert_bar_minute(
+                "BINANCE",
+                code,
+                iv,
+                bar_time,
+                day,
+                bar,
+                source_code="binance",
+                name=name or code,
+                secu_category="crypto",
+            )
+        if ok:
+            written += 1
+    if written:
+        set_watermark(
+            "binance",
+            f"binance_bar_{iv}",
+            code,
+            watermark_ts=datetime.now(timezone.utc),
+            detail={"rows": written, "interval": iv},
+        )
+    return written
+
+
+def list_binance_bars(
+    secu_code: str,
+    interval: str,
+    *,
+    limit: int = 500,
+    end_time_ms: int | None = None,
+) -> list[list[Any]]:
+    """读 BINANCE 冷棒，返回币安风格数组（升序）。仅 exchange=BINANCE。"""
+    code = str(secu_code or "").strip().upper()
+    if not code:
+        return []
+    iv = normalize_bar_period(interval)
+    lim = max(1, min(int(limit or 500), 1500))
+    conn = _connect()
+    if conn is None:
+        return []
+    out: list[list[Any]] = []
+    with conn.cursor() as cur:
+        if iv == "1d":
+            cur.execute(
+                """
+                SELECT
+                    (EXTRACT(EPOCH FROM (bd.trading_day::timestamp AT TIME ZONE 'UTC'))
+                        * 1000)::bigint AS open_ms,
+                    bd.open, bd.high, bd.low, bd.close, bd.volume, bd.amount
+                FROM market.bar_daily bd
+                JOIN market.security s ON s.inner_code = bd.inner_code
+                WHERE s.exchange_code = 'BINANCE' AND s.secu_code = %s
+                  AND (%s::bigint IS NULL
+                       OR (EXTRACT(EPOCH FROM (bd.trading_day::timestamp AT TIME ZONE 'UTC'))
+                           * 1000) <= %s)
+                ORDER BY bd.trading_day DESC
+                LIMIT %s
+                """,
+                (code, end_time_ms, end_time_ms, lim),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT
+                    (EXTRACT(EPOCH FROM bm.bar_time) * 1000)::bigint AS open_ms,
+                    bm.open, bm.high, bm.low, bm.close, bm.volume, bm.amount
+                FROM market.bar_minute bm
+                JOIN market.security s ON s.inner_code = bm.inner_code
+                WHERE s.exchange_code = 'BINANCE' AND s.secu_code = %s
+                  AND bm.period = %s
+                  AND (%s::bigint IS NULL
+                       OR (EXTRACT(EPOCH FROM bm.bar_time) * 1000) <= %s)
+                ORDER BY bm.bar_time DESC
+                LIMIT %s
+                """,
+                (code, iv, end_time_ms, end_time_ms, lim),
+            )
+        rows = cur.fetchall()
+    for open_ms, o, h, l, c, vol, amt in reversed(rows):
+        out.append(
+            [
+                int(open_ms),
+                str(o) if o is not None else "0",
+                str(h) if h is not None else "0",
+                str(l) if l is not None else "0",
+                str(c) if c is not None else "0",
+                str(vol) if vol is not None else "0",
+                int(open_ms),
+                str(amt) if amt is not None else "0",
+            ]
+        )
+    return out
 
 
 def upsert_adjust_factor(
