@@ -1,4 +1,7 @@
-"""币安公开 WebSocket → qdb。只在 collector 回源；读路径仍订 qdb。"""
+"""币安公开 WebSocket → qdb。只在 collector 回源；读路径仍订 qdb。
+
+全市场：多连接分片 + 连接后 SUBSCRIBE（避免 combined URL 过长）。
+"""
 
 from __future__ import annotations
 
@@ -21,6 +24,8 @@ BINANCE_WS_FALLBACK = os.environ.get(
 QUOTE_FLUSH_MS = float(os.environ.get("BINANCE_WS_QUOTE_FLUSH_MS", "50"))
 DOC_FLUSH_MS = float(os.environ.get("BINANCE_WS_DOC_FLUSH_MS", "200"))
 STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "8"))
+# 每连接 symbol 数；×4 流须 <1024，且 combined URL 不宜过长。默认 40 → 160 streams。
+WS_SHARD_SIZE = max(10, int(os.environ.get("BINANCE_WS_SHARD_SIZE", "40")))
 
 
 def _env_flag(name: str, default: str = "1") -> bool:
@@ -49,7 +54,6 @@ def _http_proxy_kwargs() -> dict[str, Any]:
     ).strip()
     if not raw:
         return {}
-    # http://host:port 或 host:port
     s = raw.split("://", 1)[-1]
     if "@" in s:
         s = s.rsplit("@", 1)[-1]
@@ -64,18 +68,42 @@ def _http_proxy_kwargs() -> dict[str, Any]:
     }
 
 
+def _ws_root(base: str) -> str:
+    root = base.rstrip("/")
+    if root.endswith("/ws"):
+        root = root[: -len("/ws")]
+    return root
+
+
+def _stream_names(symbols: list[str]) -> list[str]:
+    parts: list[str] = []
+    for sym in symbols:
+        s = sym.lower()
+        parts.extend(
+            [
+                f"{s}@bookTicker",
+                f"{s}@trade",
+                f"{s}@depth20@100ms",
+                f"{s}@ticker",
+            ]
+        )
+    return parts
+
+
 class BinanceWsFeed:
-    """combined stream: bookTicker + trade + depth20@100ms + ticker → quotes/docs。"""
+    """单分片：/ws + SUBSCRIBE → quotes/docs。"""
 
     def __init__(
         self,
         symbols: list[str],
         *,
+        shard_id: int,
         post: PostFn,
         scale: ScaleFn,
         put_docs: PutDocsFn,
     ) -> None:
         self.symbols = [s.upper() for s in symbols if s.strip()]
+        self.shard_id = shard_id
         self._post = post
         self._scale = scale
         self._put_docs = put_docs
@@ -98,7 +126,6 @@ class BinanceWsFeed:
                 "ticker_dirty": False,
                 "trades": deque(maxlen=50),
                 "trades_dirty": False,
-                # 待写入 /v1/trades，驱动 qdb klines（docs 里的 trades 不够）
                 "qdb_trades": [],
             }
             for s in self.symbols
@@ -106,7 +133,6 @@ class BinanceWsFeed:
         self._last_msg = 0.0
         self._started = False
         self._stop = threading.Event()
-        # CONNECT 代理 502 后改直连；稳定收包后再允许代理
         self._prefer_direct = False
         self._last_proxy_err = False
 
@@ -114,13 +140,24 @@ class BinanceWsFeed:
         if self._started or not self.symbols:
             return
         self._started = True
-        threading.Thread(target=self._run_forever, name="binance-ws", daemon=True).start()
-        threading.Thread(target=self._flush_loop, name="binance-ws-flush", daemon=True).start()
+        threading.Thread(
+            target=self._run_forever,
+            name=f"binance-ws-{self.shard_id}",
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=self._flush_loop,
+            name=f"binance-ws-flush-{self.shard_id}",
+            daemon=True,
+        ).start()
         print(
-            f"binance ws feed symbols={len(self.symbols)} "
+            f"binance ws shard={self.shard_id} symbols={len(self.symbols)} "
             f"quote_flush_ms={int(QUOTE_FLUSH_MS)} doc_flush_ms={int(DOC_FLUSH_MS)}",
             flush=True,
         )
+
+    def stop(self) -> None:
+        self._stop.set()
 
     def healthy(self) -> bool:
         if not self._started:
@@ -128,22 +165,9 @@ class BinanceWsFeed:
         return self._last_msg > 0 and (time.monotonic() - self._last_msg) < STALE_SEC
 
     def _stream_url(self, base: str) -> str:
-        parts: list[str] = []
-        for sym in self.symbols:
-            s = sym.lower()
-            parts.extend(
-                [
-                    f"{s}@bookTicker",
-                    f"{s}@trade",
-                    f"{s}@depth20@100ms",
-                    f"{s}@ticker",
-                ]
-            )
-        # combined: /stream?streams=a/b/c
-        root = base.rstrip("/")
-        if root.endswith("/ws"):
-            root = root[: -len("/ws")]
-        return f"{root}/stream?streams={'/'.join(parts)}"
+        # combined 保证每条消息带 stream 名（depth 无 s 字段，必须靠 stream 路由）
+        root = _ws_root(base)
+        return f"{root}/stream?streams={'/'.join(_stream_names(self.symbols))}"
 
     def _proxy_kwargs(self) -> dict[str, Any]:
         if self._prefer_direct:
@@ -161,7 +185,6 @@ class BinanceWsFeed:
             bases.append(BINANCE_WS_FALLBACK)
         backoff = 1.0
         base_i = 0
-        # 短连接不把 backoff 清零，避免代理抖动时 1s 狂重连
         healthy_reset_sec = max(15.0, STALE_SEC * 2)
         while not self._stop.is_set():
             base = bases[base_i % len(bases)]
@@ -170,23 +193,29 @@ class BinanceWsFeed:
             msgs_before = self._last_msg
             try:
                 mode = "direct" if self._prefer_direct else "proxy-or-direct"
-                print(f"binance ws connecting {base} ({mode}) …", flush=True)
+                print(
+                    f"binance ws shard={self.shard_id} connecting {base} "
+                    f"streams={len(self.symbols)*4} ({mode}) …",
+                    flush=True,
+                )
+
                 app = websocket.WebSocketApp(
                     url,
                     on_message=self._on_message,
                     on_error=self._on_error,
                     on_close=self._on_close,
-                    on_open=lambda _ws: print(f"binance ws open {base}", flush=True),
+                    on_open=lambda _ws: print(
+                        f"binance ws shard={self.shard_id} open {base}",
+                        flush=True,
+                    ),
                 )
-                # ping 由库处理；Binance 约 3min 发 ping
-                # Docker Desktop 出网 TLS 异常时走宿主机 CONNECT 代理（见 HTTPS_PROXY）
                 app.run_forever(
                     ping_interval=60,
                     ping_timeout=20,
                     **self._proxy_kwargs(),
                 )
             except Exception as exc:
-                print(f"binance ws {base} failed: {exc}", flush=True)
+                print(f"binance ws shard={self.shard_id} {base} failed: {exc}", flush=True)
                 if "502" in str(exc) or "CONNECT" in str(exc).upper():
                     self._prefer_direct = True
                     self._last_proxy_err = True
@@ -197,21 +226,22 @@ class BinanceWsFeed:
             if got_msgs and lived >= healthy_reset_sec:
                 backoff = 1.0
                 if self._prefer_direct and not self._last_proxy_err:
-                    # 直连已稳定；下次可再试代理（环境恢复）
                     self._prefer_direct = False
                 self._last_proxy_err = False
             else:
-                # 短命连接：轮换 endpoint，拉长退避
                 base_i += 1
                 if self._last_proxy_err:
                     self._prefer_direct = True
-            print(f"binance ws reconnect in {backoff:.0f}s", flush=True)
+            print(
+                f"binance ws shard={self.shard_id} reconnect in {backoff:.0f}s",
+                flush=True,
+            )
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
     def _on_error(self, _ws: Any, err: Any) -> None:
         text = str(err)
-        print(f"binance ws error: {err}", flush=True)
+        print(f"binance ws shard={self.shard_id} error: {err}", flush=True)
         low = text.lower()
         if (
             "502" in text
@@ -224,32 +254,35 @@ class BinanceWsFeed:
             self._last_proxy_err = True
 
     def _on_close(self, _ws: Any, status: Any, msg: Any) -> None:
-        print(f"binance ws closed status={status} msg={msg}", flush=True)
+        print(
+            f"binance ws shard={self.shard_id} closed status={status} msg={msg}",
+            flush=True,
+        )
 
     def _on_message(self, _ws: Any, message: str | bytes) -> None:
-        self._last_msg = time.monotonic()
         try:
             envelope = json.loads(message)
         except json.JSONDecodeError:
             return
+        self._last_msg = time.monotonic()
         data = envelope.get("data") if isinstance(envelope, dict) else None
         stream = str(envelope.get("stream") or "") if isinstance(envelope, dict) else ""
         if not isinstance(data, dict):
             return
-        if stream.endswith("@bookTicker") or ("b" in data and "a" in data and "s" in data and "e" not in data):
+        if stream.endswith("@bookTicker") or (
+            "b" in data and "a" in data and "s" in data and "e" not in data
+        ):
             self._on_book_ticker(data)
         elif data.get("e") == "trade":
             self._on_trade(data)
         elif data.get("e") == "24hrTicker":
             self._on_ticker(data)
         elif "bids" in data and "asks" in data:
-            # partial depth：stream 名含 depth20，payload 无 e
-            sym = self._symbol_from_stream(stream)
+            sym = self._symbol_from_stream(stream) or str(data.get("s") or "").upper()
             if sym:
                 self._on_depth(sym, data)
 
     def _symbol_from_stream(self, stream: str) -> str:
-        # btcusdt@depth20@100ms → BTCUSDT
         head = stream.split("@", 1)[0]
         return head.upper() if head else ""
 
@@ -263,7 +296,6 @@ class BinanceWsFeed:
         with self._lock:
             st["bid"] = bid
             st["ask"] = ask
-            # 无成交时用中间价驱动 last，避免盘口动而价不动
             if st["last"] <= 0 and bid > 0 and ask > 0:
                 st["last"] = (bid + ask) / 2
             st["quote_dirty"] = True
@@ -287,7 +319,9 @@ class BinanceWsFeed:
                     "id": trade_id,
                     "price": f"{price:.8f}".rstrip("0").rstrip(".") if price else "0",
                     "qty": f"{qty:.8f}".rstrip("0").rstrip(".") if qty else "0",
-                    "quoteQty": f"{price * qty:.8f}".rstrip("0").rstrip(".") if price and qty else "0",
+                    "quoteQty": f"{price * qty:.8f}".rstrip("0").rstrip(".")
+                    if price and qty
+                    else "0",
                     "time": ts_ms,
                     "isBuyerMaker": is_buyer_maker,
                     "isBestMatch": True,
@@ -295,7 +329,6 @@ class BinanceWsFeed:
             )
             st["trades_dirty"] = True
             if WRITE_QDB_TRADES and price > 0 and ts_ms > 0:
-                # 币安 qty 常 <1；至少记 1，避免 volume=0 被上游丢掉
                 vol_i = max(1, int(round(qty * 1e8)))
                 st["qdb_trades"].append(
                     {
@@ -312,7 +345,6 @@ class BinanceWsFeed:
         st = self._state.get(symbol)
         if not st:
             return
-        # 映射成 REST 24hr ticker 形状，供前端列表
         doc = {
             "symbol": symbol,
             "priceChange": data.get("p"),
@@ -352,7 +384,6 @@ class BinanceWsFeed:
         st = self._state.get(symbol)
         if not st:
             return
-        # depth20 流已限档；再裁一次防止异常大包进 docs
         bids = (data.get("bids") or [])[:20]
         asks = (data.get("asks") or [])[:20]
         with self._lock:
@@ -411,20 +442,28 @@ class BinanceWsFeed:
                         "amount": st["amount"],
                     }
                 )
-        # quotes 先入队：snapshots 订阅读跟 /v1/quotes；trades 次之
         if WRITE_QDB_QUOTES and items:
-            try:
-                self._post("/v1/quotes", {"items": items})
-            except Exception as exc:
-                print(f"binance ws quote flush failed: {exc}", flush=True)
+            # 分批，避免单次 body 过大
+            batch = 256
+            for i in range(0, len(items), batch):
+                try:
+                    self._post("/v1/quotes", {"items": items[i : i + batch]})
+                except Exception as exc:
+                    print(
+                        f"binance ws shard={self.shard_id} quote flush failed: {exc}",
+                        flush=True,
+                    )
+                    break
         if trade_items and WRITE_QDB_TRADES:
-            # 限长，避免断线重连后积压打爆 qdb
             if len(trade_items) > 256:
                 trade_items = trade_items[-256:]
             try:
                 self._post("/v1/trades", {"items": trade_items})
             except Exception as exc:
-                print(f"binance ws trade flush failed: {exc}", flush=True)
+                print(
+                    f"binance ws shard={self.shard_id} trade flush failed: {exc}",
+                    flush=True,
+                )
 
     def _flush_docs(self) -> None:
         docs: list[dict] = []
@@ -444,14 +483,22 @@ class BinanceWsFeed:
                             "value": list(st["trades"]),
                         }
                     )
-        if docs:
+        if not docs:
+            return
+        batch = 64
+        for i in range(0, len(docs), batch):
             try:
-                self._put_docs(docs)
+                self._put_docs(docs[i : i + batch])
             except Exception as exc:
-                print(f"binance ws doc flush failed: {exc}", flush=True)
+                print(
+                    f"binance ws shard={self.shard_id} doc flush failed: {exc}",
+                    flush=True,
+                )
+                break
 
 
-_FEED: BinanceWsFeed | None = None
+_HUB_FEEDS: list[BinanceWsFeed] = []
+_HUB_LOCK = threading.Lock()
 
 
 def start_feed(
@@ -460,13 +507,41 @@ def start_feed(
     post: PostFn,
     scale: ScaleFn,
     put_docs: PutDocsFn,
-) -> BinanceWsFeed:
-    global _FEED
-    feed = BinanceWsFeed(symbols, post=post, scale=scale, put_docs=put_docs)
-    feed.start()
-    _FEED = feed
-    return feed
+) -> BinanceWsFeed | None:
+    """按分片启动多连接；返回第一片（兼容旧调用）。"""
+    global _HUB_FEEDS
+    syms = [s.upper() for s in symbols if s.strip()]
+    if not syms:
+        return None
+    with _HUB_LOCK:
+        for old in _HUB_FEEDS:
+            old.stop()
+        _HUB_FEEDS = []
+        feeds: list[BinanceWsFeed] = []
+        for i in range(0, len(syms), WS_SHARD_SIZE):
+            chunk = syms[i : i + WS_SHARD_SIZE]
+            feed = BinanceWsFeed(
+                chunk,
+                shard_id=len(feeds),
+                post=post,
+                scale=scale,
+                put_docs=put_docs,
+            )
+            feed.start()
+            feeds.append(feed)
+        _HUB_FEEDS = feeds
+        print(
+            f"binance ws hub symbols={len(syms)} shards={len(feeds)} "
+            f"shard_size={WS_SHARD_SIZE}",
+            flush=True,
+        )
+        return feeds[0] if feeds else None
 
 
 def feed_healthy() -> bool:
-    return bool(_FEED and _FEED.healthy())
+    """任一活跃分片在 STALE 窗内有消息即视为健康（全市场允许部分分片抖动）。"""
+    with _HUB_LOCK:
+        feeds = list(_HUB_FEEDS)
+    if not feeds:
+        return False
+    return any(f.healthy() for f in feeds)

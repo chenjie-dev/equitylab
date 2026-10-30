@@ -128,14 +128,29 @@ def main() -> None:
     except Exception as exc:
         print(f"pg_market calendar seed failed: {exc}", flush=True)
 
-    # 币安冷库只打 REST+PG，不占 qdb write_gate；与 A 股 seed 回填并行，
-    # 避免被 cn_equity 阻塞导致现货历史长期空。
+    # 先解析全市场宇宙并写 catalog，再启 PG 慢补 / WS（勿用默认 16 种子开跑）
+    try:
+        markets.resolve_binance_universe(publish=True)  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"binance universe bootstrap failed: {exc}", flush=True)
+
+    # 币安冷库只打 REST+PG，不占 qdb write_gate；与 A 股 seed 回填并行。
     threading.Thread(
         target=_binance_pg_backfill_worker,
         args=(markets,),
         name="collector-binance-pg",
         daemon=True,
     ).start()
+
+    # 现货报价优先：全市场 WS 在 A 股 seed 回填前启动（write_gate 报价优先于 trades）
+    try:
+        markets.start_binance_ws()  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"binance ws start failed: {exc}", flush=True)
+    try:
+        markets.start_binance_kline_feed()  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"binance kline feed start failed: {exc}", flush=True)
 
     if not skip_cn_equity and kline_codes:
         print(
@@ -174,14 +189,7 @@ def main() -> None:
     else:
         print("collector cn_equity backfill skipped (COLLECTOR_SKIP_CN_EQUITY)", flush=True)
 
-    try:
-        markets.start_binance_ws()
-    except Exception as exc:
-        print(f"binance ws start failed: {exc}", flush=True)
-    try:
-        markets.start_binance_kline_feed()
-    except Exception as exc:
-        print(f"binance kline feed start failed: {exc}", flush=True)
+    # binance ws / kline feed 已在 cn_equity 回填前启动
     try:
         markets.start_rwa_feed()
     except Exception as exc:

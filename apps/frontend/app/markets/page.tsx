@@ -36,18 +36,43 @@ import { useQdbSnapshots } from "../components/markets/useQdbSnapshots";
 import { useVisibilityPolling } from "../components/markets/useVisibilityPolling";
 import { formatLocalTime } from "../../lib/time";
 
-const WATCHLIST = [
-  ...HOT_SYMBOLS,
-  "POLUSDT",
-  "LTCUSDT",
-  "NEARUSDT",
-  "UNIUSDT",
-  "ATOMUSDT",
-  "APTUSDT",
+/** 列表/订阅批大小；全市场不全量一次性订 snapshots */
+const LIST_TICKER_CHUNK = 80;
+const SNAP_MAX = 120;
+
+type CatalogRow = {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+};
+
+const QUOTE_SUFFIXES = [
+  "FDUSD",
+  "USDT",
+  "USDC",
+  "TUSD",
+  "BUSD",
+  "BTC",
+  "ETH",
+  "BNB",
+  "EUR",
+  "TRY",
+  "BRL",
+  "DAI",
 ] as const;
 
-function isWatchSymbol(s: string): s is (typeof WATCHLIST)[number] {
-  return (WATCHLIST as readonly string[]).includes(s);
+function parsePair(sym: string): { base: string; quote: string } {
+  const u = sym.toUpperCase();
+  for (const q of QUOTE_SUFFIXES) {
+    if (u.endsWith(q) && u.length > q.length) {
+      return { base: u.slice(0, -q.length), quote: q };
+    }
+  }
+  return { base: u, quote: "" };
+}
+
+function isSpotSymbol(s: string): boolean {
+  return /^[A-Z0-9]{5,25}$/.test(s.trim().toUpperCase());
 }
 
 const INTERVALS = [
@@ -125,13 +150,49 @@ function priceDigits(price: string | number): number {
   return 6;
 }
 
-function pairLabel(sym: string): string {
-  if (sym.endsWith("USDT")) return `${sym.slice(0, -4)}/USDT`;
-  return sym;
+function pairLabel(sym: string, meta?: CatalogRow | null): string {
+  if (meta?.baseAsset && meta?.quoteAsset) {
+    return `${meta.baseAsset}/${meta.quoteAsset}`;
+  }
+  const { base, quote } = parsePair(sym);
+  return quote ? `${base}/${quote}` : sym;
 }
 
-function baseAsset(sym: string): string {
-  return sym.endsWith("USDT") ? sym.slice(0, -4) : sym;
+function baseAsset(sym: string, meta?: CatalogRow | null): string {
+  if (meta?.baseAsset) return meta.baseAsset;
+  return parsePair(sym).base;
+}
+
+function quoteAsset(sym: string, meta?: CatalogRow | null): string {
+  if (meta?.quoteAsset) return meta.quoteAsset;
+  return parsePair(sym).quote || "USDT";
+}
+
+function emptyTicker(symbol: string): Ticker {
+  return {
+    symbol,
+    lastPrice: "0",
+    priceChange: "0",
+    priceChangePercent: "0",
+    highPrice: "0",
+    lowPrice: "0",
+    volume: "0",
+    quoteVolume: "0",
+  };
+}
+
+async function fetchTickersChunk(symbols: string[]): Promise<Ticker[]> {
+  if (!symbols.length) return [];
+  const out: Ticker[] = [];
+  for (let i = 0; i < symbols.length; i += LIST_TICKER_CHUNK) {
+    const part = symbols.slice(i, i + LIST_TICKER_CHUNK);
+    const q = encodeURIComponent(JSON.stringify(part));
+    const res = await fetch(`/api/market/binance/ticker/24hr?symbols=${q}`);
+    if (!res.ok) continue;
+    const rows = (await res.json()) as Ticker[];
+    if (Array.isArray(rows)) out.push(...rows);
+  }
+  return out;
 }
 
 export default function MarketsPage() {
@@ -151,12 +212,12 @@ export default function MarketsPage() {
 function MarketsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawSymbol = searchParams.get("symbol") || "BTCUSDT";
-  const symbol = isWatchSymbol(rawSymbol) ? rawSymbol : "BTCUSDT";
+  const rawSymbol = (searchParams.get("symbol") || "BTCUSDT").toUpperCase();
+  const symbol = isSpotSymbol(rawSymbol) ? rawSymbol : "BTCUSDT";
 
   const setSymbol = useCallback(
     (next: string) => {
-      const sym = isWatchSymbol(next) ? next : "BTCUSDT";
+      const sym = isSpotSymbol(next) ? next.toUpperCase() : "BTCUSDT";
       const params = new URLSearchParams(searchParams.toString());
       if (params.get("symbol") === sym) return;
       params.set("symbol", sym);
@@ -169,6 +230,7 @@ function MarketsPageInner() {
     if (rawSymbol !== symbol) setSymbol(symbol);
   }, [rawSymbol, symbol, setSymbol]);
 
+  const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [interval, setIntervalTf] = useState<Interval>("15m");
   const [ticker, setTicker] = useState<Ticker | null>(null);
   const [list, setList] = useState<Ticker[]>([]);
@@ -184,10 +246,10 @@ function MarketsPageInner() {
   const [favs, setFavs] = useState<Set<string>>(
     () => new Set(["BTCUSDT", "ETHUSDT"]),
   );
-  const [mktTab, setMktTab] = useState<"fav" | "usdt">("usdt");
+  const [mktTab, setMktTab] = useState<"fav" | "usdt" | "all">("usdt");
   const [pairOpen, setPairOpen] = useState(false);
   const [pairQuery, setPairQuery] = useState("");
-  const [pairTab, setPairTab] = useState<"fav" | "usdt">("usdt");
+  const [pairTab, setPairTab] = useState<"fav" | "usdt" | "all">("usdt");
   const pairPickerRef = useRef<HTMLDivElement | null>(null);
   const pairSearchRef = useRef<HTMLInputElement | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("book");
@@ -208,26 +270,88 @@ function MarketsPageInner() {
   /** 折叠周期或引擎无 trade 时 docs 尾刷；原生周期优先 klines SUBSCRIBE */
   const klineTick = useVisibilityPolling(30_000);
 
+  const catalogBySym = useMemo(() => {
+    const m = new Map<string, CatalogRow>();
+    for (const row of catalog) m.set(row.symbol, row);
+    return m;
+  }, [catalog]);
+
+  const catalogSyms = useMemo(
+    () => (catalog.length ? catalog.map((c) => c.symbol) : [...HOT_SYMBOLS]),
+    [catalog],
+  );
+
+  const metaOf = useCallback(
+    (sym: string) => catalogBySym.get(sym) ?? null,
+    [catalogBySym],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/market/binance/exchangeInfo");
+        if (!res.ok) return;
+        const info = (await res.json()) as {
+          symbols?: Array<{
+            symbol?: string;
+            status?: string;
+            baseAsset?: string;
+            quoteAsset?: string;
+          }>;
+        };
+        const rows: CatalogRow[] = [];
+        for (const s of info.symbols ?? []) {
+          const symbol = String(s.symbol || "").toUpperCase();
+          if (!symbol || (s.status && s.status !== "TRADING")) continue;
+          rows.push({
+            symbol,
+            baseAsset: String(s.baseAsset || parsePair(symbol).base),
+            quoteAsset: String(s.quoteAsset || parsePair(symbol).quote || "USDT"),
+          });
+        }
+        if (!cancelled && rows.length) setCatalog(rows);
+      } catch {
+        /* catalog 暂缺时用 HOT */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const listFocusSyms = useMemo(() => {
+    const set = new Set<string>([...HOT_SYMBOLS, symbol, ...favs]);
+    let pool = catalogSyms;
+    if (mktTab === "fav") pool = pool.filter((s) => favs.has(s));
+    else if (mktTab === "usdt") {
+      pool = pool.filter((s) => (catalogBySym.get(s)?.quoteAsset || parsePair(s).quote) === "USDT");
+    }
+    const q = query.trim().toUpperCase();
+    if (q) {
+      pool = pool.filter((s) => {
+        const m = catalogBySym.get(s);
+        return (
+          s.includes(q) ||
+          (m?.baseAsset || "").includes(q) ||
+          pairLabel(s, m).toUpperCase().includes(q)
+        );
+      });
+    }
+    for (const s of pool.slice(0, LIST_TICKER_CHUNK)) set.add(s);
+    return [...set].slice(0, SNAP_MAX);
+  }, [catalogSyms, catalogBySym, favs, mktTab, query, symbol]);
+
   const snapSymbols = useMemo(
-    () => WATCHLIST.map((s) => `BINANCE:${s}`),
-    [],
+    () => listFocusSyms.map((s) => `BINANCE:${s}`),
+    [listFocusSyms],
   );
 
   const loadList = useCallback(async () => {
-    const symbols = encodeURIComponent(JSON.stringify([...WATCHLIST]));
-    const res = await fetch(
-      `/api/market/binance/ticker/24hr?symbols=${symbols}`,
-    );
-    if (!res.ok) return;
-    const all = (await res.json()) as Ticker[];
-    if (!Array.isArray(all)) return;
-    const order = new Map(WATCHLIST.map((s, i) => [s, i]));
-    const rows = [...all].sort(
-      (a, b) =>
-        (order.get(a.symbol as (typeof WATCHLIST)[number]) ?? 99) -
-        (order.get(b.symbol as (typeof WATCHLIST)[number]) ?? 99),
-    );
-    // 保留订阅覆盖的 lastPrice，避免 docs 轮询盖掉推送价
+    const want = listFocusSyms;
+    const all = await fetchTickersChunk(want);
+    const bySym = new Map(all.map((t) => [t.symbol, t]));
+    const rows = want.map((s) => bySym.get(s) || emptyTicker(s));
     setList((prev) => {
       const live = new Map(prev.map((t) => [t.symbol, t.lastPrice]));
       return rows.map((t) => ({
@@ -235,7 +359,7 @@ function MarketsPageInner() {
         lastPrice: live.get(t.symbol) || t.lastPrice,
       }));
     });
-  }, []);
+  }, [listFocusSyms]);
 
   // docs 列表只补涨跌/量；last 以 snapshots 为准
   useEffect(() => {
@@ -257,7 +381,7 @@ function MarketsPageInner() {
     const code = row.symbol.includes(":")
       ? row.symbol.split(":").slice(1).join(":")
       : row.symbol;
-    if (!isWatchSymbol(code)) return;
+    if (!isSpotSymbol(code)) return;
     const last = String(row.last);
     startTransition(() => {
       setList((prev) =>
@@ -352,7 +476,7 @@ function MarketsPageInner() {
 
   const prefetchSymbol = useCallback(
     (sym: string) => {
-      if (!isWatchSymbol(sym)) return;
+      if (!isSpotSymbol(sym)) return;
       const key = klineCacheKey("spot", sym, interval);
       prefetchKlines(key, (signal) =>
         fetchSpotKlines(sym, interval, KLINE_PAGE, signal),
@@ -500,31 +624,27 @@ function MarketsPageInner() {
   }, [list, query, mktTab, favs]);
 
   const pairPickerList = useMemo(() => {
-    let rows = list.length
-      ? list
-      : WATCHLIST.map(
-          (s) =>
-            ({
-              symbol: s,
-              lastPrice: "0",
-              priceChange: "0",
-              priceChangePercent: "0",
-              highPrice: "0",
-              lowPrice: "0",
-              volume: "0",
-              quoteVolume: "0",
-            }) satisfies Ticker,
-        );
-    if (pairTab === "fav") rows = rows.filter((t) => favs.has(t.symbol));
+    let syms = catalogSyms;
+    if (pairTab === "fav") syms = syms.filter((s) => favs.has(s));
+    else if (pairTab === "usdt") {
+      syms = syms.filter(
+        (s) => (catalogBySym.get(s)?.quoteAsset || parsePair(s).quote) === "USDT",
+      );
+    }
     const q = pairQuery.trim().toUpperCase();
-    if (!q) return rows;
-    return rows.filter(
-      (t) =>
-        t.symbol.includes(q) ||
-        pairLabel(t.symbol).toUpperCase().includes(q) ||
-        baseAsset(t.symbol).includes(q),
-    );
-  }, [list, pairQuery, pairTab, favs]);
+    if (q) {
+      syms = syms.filter((s) => {
+        const m = catalogBySym.get(s);
+        return (
+          s.includes(q) ||
+          (m?.baseAsset || "").includes(q) ||
+          pairLabel(s, m).toUpperCase().includes(q)
+        );
+      });
+    }
+    const byList = new Map(list.map((t) => [t.symbol, t]));
+    return syms.slice(0, 200).map((s) => byList.get(s) || emptyTicker(s));
+  }, [catalogSyms, catalogBySym, list, pairQuery, pairTab, favs]);
 
   useEffect(() => {
     if (!pairOpen) return;
@@ -612,9 +732,11 @@ function MarketsPageInner() {
                 }
               >
                 <span className="bn-pair-trigger-base">
-                  {baseAsset(symbol)}
+                  {baseAsset(symbol, metaOf(symbol))}
                 </span>
-                <span className="bn-pair-trigger-quote">/USDT</span>
+                <span className="bn-pair-trigger-quote">
+                  /{quoteAsset(symbol, metaOf(symbol))}
+                </span>
                 <span
                   className={
                     pairOpen ? "bn-pair-caret open" : "bn-pair-caret"
@@ -659,6 +781,19 @@ function MarketsPageInner() {
                       onClick={() => setPairTab("usdt")}
                     >
                       USDT
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={pairTab === "all"}
+                      className={
+                        pairTab === "all"
+                          ? "bn-pair-tab active"
+                          : "bn-pair-tab"
+                      }
+                      onClick={() => setPairTab("all")}
+                    >
+                      全部
                     </button>
                   </div>
                   <div className="bn-pair-cols">
@@ -708,8 +843,12 @@ function MarketsPageInner() {
                             onMouseEnter={() => prefetchSymbol(t.symbol)}
                           >
                             <span className="bn-pair-row-name">
-                              <em>{baseAsset(t.symbol)}</em>
-                              <span>/USDT</span>
+                              <em>
+                                {baseAsset(t.symbol, metaOf(t.symbol))}
+                              </em>
+                              <span>
+                                /{quoteAsset(t.symbol, metaOf(t.symbol))}
+                              </span>
                             </span>
                             <span className="bn-pair-row-px bn-mono">
                               {fmt(
@@ -834,6 +973,13 @@ function MarketsPageInner() {
             >
               USDT
             </button>
+            <button
+              type="button"
+              className={mktTab === "all" ? "bn-tab active" : "bn-tab"}
+              onClick={() => setMktTab("all")}
+            >
+              全部
+            </button>
           </div>
           <input
             className="bn-search"
@@ -890,6 +1036,11 @@ function MarketsPageInner() {
             palette="wind"
             onNeedHistory={historyDone ? undefined : () => void loadOlderKlines()}
           />
+          {!klineLoading && !klines.length ? (
+            <p className="bn-empty">
+              暂无冷历史（后台回补中）；报价/盘口仍实时
+            </p>
+          ) : null}
         </section>
 
         <aside className="bn-right bn-right-quotes">

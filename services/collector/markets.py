@@ -50,14 +50,34 @@ def _rwa_proxies() -> dict[str, str] | None:
         "HTTPS_PROXY",
         "https_proxy",
     )
-BINANCE_SYMBOLS = [
-    s.strip().upper()
-    for s in os.environ.get(
-        "BINANCE_SYMBOLS",
-        "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,DOTUSDT,LINKUSDT,POLUSDT,LTCUSDT,NEARUSDT,UNIUSDT,ATOMUSDT,APTUSDT",
-    ).split(",")
-    if s.strip()
+# 默认 all = exchangeInfo 全 TRADING 现货；显式逗号列表仍可种子/排障。
+_BINANCE_SYMBOLS_ENV = os.environ.get("BINANCE_SYMBOLS", "all").strip()
+_SEED_SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "DOTUSDT",
+    "LINKUSDT",
+    "POLUSDT",
+    "LTCUSDT",
+    "NEARUSDT",
+    "UNIUSDT",
+    "ATOMUSDT",
+    "APTUSDT",
 ]
+BINANCE_SYMBOLS: list[str] = list(_SEED_SYMBOLS)
+BINANCE_UNIVERSE_REFRESH_SEC = max(
+    300, int(os.environ.get("BINANCE_UNIVERSE_REFRESH_SEC", "21600"))
+)
+# 全市场冷补：每轮只翻 1 页，靠慢 worker 持续推进（避免启动堵死）
+BINANCE_KLINE_PG_SLOW = os.environ.get(
+    "BINANCE_KLINE_PG_SLOW", "1"
+).strip().lower() not in ("0", "false", "no", "off")
 RWA_TICKERS = [
     s.strip().upper()
     for s in os.environ.get(
@@ -110,12 +130,18 @@ BINANCE_KLINE_LIMIT = min(
 )
 BINANCE_KLINE_REFRESH = max(2, int(os.environ.get("BINANCE_KLINE_REFRESH", "8")))
 BINANCE_KLINE_PAUSE = float(os.environ.get("BINANCE_KLINE_PAUSE_SEC", "1.0"))
-# PG 冷回补：每 symbol×interval 向更早翻页次数（每页≤1000）
+# PG 冷回补：每 symbol×interval 向更早翻页次数（每页≤1000）；全市场默认少页
 BINANCE_KLINE_PG_BACKFILL_PAGES = max(
-    1, int(os.environ.get("BINANCE_KLINE_PG_BACKFILL_PAGES", "10"))
+    1,
+    int(
+        os.environ.get(
+            "BINANCE_KLINE_PG_BACKFILL_PAGES",
+            "2" if _BINANCE_SYMBOLS_ENV.lower() in ("all", "*", "full") else "10",
+        )
+    ),
 )
 BINANCE_KLINE_PG_BACKFILL_PAUSE = float(
-    os.environ.get("BINANCE_KLINE_PG_BACKFILL_PAUSE_SEC", "0.25")
+    os.environ.get("BINANCE_KLINE_PG_BACKFILL_PAUSE_SEC", "0.35")
 )
 _RWA_KLINE_LIMIT_MAX = 300
 RWA_KLINE_DOC_LIMIT = min(
@@ -144,7 +170,7 @@ def _binance_pg_backfill_enabled() -> bool:
 
 
 def backfill_binance_pg() -> None:
-    """只写 Postgres 冷库（不碰 qdb）。可与 A 股 seed 回填并行，避免被 cn_equity 阻塞。"""
+    """只写 Postgres 冷库（不碰 qdb）。全市场默认慢队列；小名单可一次翻页。"""
     if not BINANCE_KLINE_INTERVALS:
         print("binance kline PG backfill skipped (BINANCE_KLINE_INTERVALS=off)", flush=True)
         return
@@ -154,12 +180,17 @@ def backfill_binance_pg() -> None:
             flush=True,
         )
         return
+    n = len(BINANCE_SYMBOLS)
     print(
-        f"binance PG backfill start symbols={len(BINANCE_SYMBOLS)} "
-        f"intervals={len(BINANCE_KLINE_INTERVALS)} pages={BINANCE_KLINE_PG_BACKFILL_PAGES}",
+        f"binance PG backfill start symbols={n} "
+        f"intervals={len(BINANCE_KLINE_INTERVALS)} pages={BINANCE_KLINE_PG_BACKFILL_PAGES} "
+        f"mode={'slow' if BINANCE_KLINE_PG_SLOW or n > 64 else 'bulk'}",
         flush=True,
     )
-    for symbol in BINANCE_SYMBOLS:
+    if BINANCE_KLINE_PG_SLOW or n > 64:
+        _binance_pg_slow_loop()
+        return
+    for symbol in list(BINANCE_SYMBOLS):
         try:
             _backfill_binance_pg(symbol)
         except Exception as exc:
@@ -167,10 +198,39 @@ def backfill_binance_pg() -> None:
     print("binance PG backfill done", flush=True)
 
 
+def _binance_pg_slow_loop() -> None:
+    """全市场：symbol×interval 轮转，每步最多 1 页，不阻塞报价。"""
+    i = 0
+    while True:
+        syms = list(BINANCE_SYMBOLS)
+        ivs = list(BINANCE_KLINE_INTERVALS)
+        if not syms or not ivs:
+            time.sleep(5.0)
+            continue
+        symbol = syms[i % len(syms)]
+        interval = ivs[(i // max(len(syms), 1)) % len(ivs)]
+        i += 1
+        try:
+            n = _backfill_binance_pg_one_page(symbol, interval)
+            if n and i % 50 == 0:
+                print(
+                    f"binance PG slow {symbol}:{interval} closed≈{n} step={i}",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"binance PG slow {symbol}:{interval} failed: {exc}", flush=True)
+        time.sleep(max(BINANCE_KLINE_PG_BACKFILL_PAUSE, 0.15))
+
+
 def backfill_markets() -> None:
-    # 冷历史 PG 由 backfill_binance_pg 早启；此处只补 docs 短窗 + RWA。
+    # 冷历史 PG 由 backfill_binance_pg 早启；docs 短窗只补种子（全市场靠 feed）。
     if BINANCE_KLINE_INTERVALS:
-        for symbol in BINANCE_SYMBOLS:
+        docs_syms = (
+            [s for s in _SEED_SYMBOLS if s in set(BINANCE_SYMBOLS)]
+            if len(BINANCE_SYMBOLS) > 64
+            else list(BINANCE_SYMBOLS)
+        )
+        for symbol in docs_syms:
             try:
                 _backfill_binance(symbol)
             except Exception as exc:
@@ -205,10 +265,151 @@ def backfill_markets() -> None:
 
 
 def start_binance_ws() -> None:
-    """启动币安 combined stream（报价/盘口/成交 docs）；失败时 REST 兜底。"""
+    """分片 WS（报价/盘口/成交）；宇宙应已由 main bootstrap；失败时 REST 兜底。"""
     from binance_ws import start_feed
 
+    if len(BINANCE_SYMBOLS) <= len(_SEED_SYMBOLS):
+        resolve_binance_universe(publish=True)
+    else:
+        publish_binance_exchange_info()
     start_feed(BINANCE_SYMBOLS, post=post, scale=scale, put_docs=_put_docs)
+    threading.Thread(
+        target=_binance_universe_refresh_worker,
+        name="collector-binance-universe",
+        daemon=True,
+    ).start()
+
+
+def resolve_binance_universe(*, publish: bool = True) -> list[str]:
+    """BINANCE_SYMBOLS=all|显式列表 → 更新模块级 BINANCE_SYMBOLS。"""
+    global BINANCE_SYMBOLS
+    raw = _BINANCE_SYMBOLS_ENV
+    if raw.lower() in ("all", "*", "full", ""):
+        try:
+            rows = _fetch_exchange_info_symbols()
+            if rows:
+                BINANCE_SYMBOLS = rows
+                print(
+                    f"binance universe mode=all count={len(BINANCE_SYMBOLS)} "
+                    f"(exchangeInfo TRADING spot)",
+                    flush=True,
+                )
+            else:
+                print(
+                    "binance universe exchangeInfo empty; keep seed",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"binance universe resolve failed ({exc}); keep seed", flush=True)
+    else:
+        BINANCE_SYMBOLS = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        print(
+            f"binance universe mode=list count={len(BINANCE_SYMBOLS)}",
+            flush=True,
+        )
+    if not BINANCE_SYMBOLS:
+        BINANCE_SYMBOLS = list(_SEED_SYMBOLS)
+    if publish:
+        publish_binance_exchange_info()
+    return list(BINANCE_SYMBOLS)
+
+
+def _fetch_exchange_info_symbols() -> list[str]:
+    data = _binance_get("/api/v3/exchangeInfo", timeout=20)
+    if not isinstance(data, dict):
+        return []
+    out: list[str] = []
+    for row in data.get("symbols") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").upper() != "TRADING":
+            continue
+        # 现货：permissions 含 SPOT，或缺省当现货（vision 精简 payload）
+        perms = row.get("permissions")
+        if isinstance(perms, list) and perms and "SPOT" not in perms:
+            continue
+        if row.get("isSpotTradingAllowed") is False:
+            continue
+        sym = str(row.get("symbol") or "").upper().strip()
+        if sym:
+            out.append(sym)
+    # 热门靠前，便于慢补优先
+    seed_rank = {s: i for i, s in enumerate(_SEED_SYMBOLS)}
+    out = sorted(set(out), key=lambda s: (seed_rank.get(s, 10_000), s))
+    return out
+
+
+def publish_binance_exchange_info() -> None:
+    """写精简 exchangeInfo 到 qdb，供 market-data / 前端目录（禁止读路径回源）。"""
+    try:
+        raw = _binance_get("/api/v3/exchangeInfo", timeout=20)
+    except Exception as exc:
+        # 无上游时仍发布当前宇宙，避免前端空目录
+        print(f"binance exchangeInfo fetch failed: {exc}; publish slim", flush=True)
+        raw = None
+    symbols_meta: list[dict[str, Any]] = []
+    want = set(BINANCE_SYMBOLS)
+    if isinstance(raw, dict):
+        for row in raw.get("symbols") or []:
+            if not isinstance(row, dict):
+                continue
+            sym = str(row.get("symbol") or "").upper()
+            if sym not in want:
+                continue
+            symbols_meta.append(
+                {
+                    "symbol": sym,
+                    "status": row.get("status") or "TRADING",
+                    "baseAsset": row.get("baseAsset"),
+                    "quoteAsset": row.get("quoteAsset"),
+                }
+            )
+    if not symbols_meta:
+        symbols_meta = [
+            {"symbol": s, "status": "TRADING", "baseAsset": s, "quoteAsset": ""}
+            for s in BINANCE_SYMBOLS
+        ]
+    doc = {
+        "timezone": (raw or {}).get("timezone", "UTC") if isinstance(raw, dict) else "UTC",
+        "serverTime": int(time.time() * 1000),
+        "symbols": symbols_meta,
+        "count": len(symbols_meta),
+        "source": "collector",
+    }
+    _put_docs([{"key": "binance:exchangeInfo", "value": doc}])
+    _put_docs(
+        [
+            {
+                "key": "binance:symbols",
+                "value": {
+                    "count": len(BINANCE_SYMBOLS),
+                    "symbols": list(BINANCE_SYMBOLS),
+                    "source": "collector",
+                },
+            }
+        ]
+    )
+    print(f"binance catalog published symbols={len(symbols_meta)}", flush=True)
+
+
+def _binance_universe_refresh_worker() -> None:
+    while True:
+        time.sleep(BINANCE_UNIVERSE_REFRESH_SEC)
+        try:
+            before = set(BINANCE_SYMBOLS)
+            resolve_binance_universe(publish=True)
+            after = set(BINANCE_SYMBOLS)
+            if before != after:
+                print(
+                    f"binance universe changed +{len(after - before)} "
+                    f"-{len(before - after)}; restart ws",
+                    flush=True,
+                )
+                from binance_ws import start_feed
+
+                start_feed(BINANCE_SYMBOLS, post=post, scale=scale, put_docs=_put_docs)
+        except Exception as exc:
+            print(f"binance universe refresh failed: {exc}", flush=True)
 
 
 def start_rwa_feed() -> None:
@@ -306,6 +507,20 @@ def _binance_kline_worker() -> None:
         except Exception as exc:
             print(f"binance kline {symbol}:{interval} failed: {exc}", flush=True)
         time.sleep(BINANCE_KLINE_PAUSE)
+
+
+def _backfill_binance_pg_one_page(symbol: str, interval: str) -> int:
+    """单页闭合棒 → PG（慢队列一步）。"""
+    from equitylab_market import pg as pg_market
+
+    if not pg_market.enabled():
+        return 0
+    rows = _binance_klines(symbol, interval, 1000)
+    if not rows:
+        return 0
+    return pg_market.upsert_binance_klines(
+        symbol, interval, rows, drop_open=True, name=symbol
+    )
 
 
 def _backfill_binance_pg(symbol: str) -> None:
@@ -453,22 +668,26 @@ def _poll_binance_tickers() -> None:
     import json
 
     rows: list[Any] = []
-    try:
-        data = _binance_get(
-            "/api/v3/ticker/24hr",
-            {"symbols": json.dumps(BINANCE_SYMBOLS, separators=(",", ":"))},
-            timeout=5,
-        )
-        rows = [data] if isinstance(data, dict) else list(data or [])
-    except Exception as batch_exc:
-        print(f"binance batch ticker failed ({batch_exc}); per-symbol", flush=True)
-        for symbol in BINANCE_SYMBOLS:
-            try:
-                one = _binance_get("/api/v3/ticker/24hr", {"symbol": symbol}, timeout=4)
-                if isinstance(one, dict):
-                    rows.append(one)
-            except Exception as exc:
-                print(f"binance ticker {symbol} failed: {exc}", flush=True)
+    # 全市场分批；币安 symbols 参数不宜过长
+    chunk = 80
+    syms = list(BINANCE_SYMBOLS)
+    for i in range(0, len(syms), chunk):
+        part = syms[i : i + chunk]
+        try:
+            data = _binance_get(
+                "/api/v3/ticker/24hr",
+                {"symbols": json.dumps(part, separators=(",", ":"))},
+                timeout=8,
+            )
+            if isinstance(data, dict):
+                rows.append(data)
+            else:
+                rows.extend(list(data or []))
+        except Exception as batch_exc:
+            print(
+                f"binance batch ticker failed ({batch_exc}); skip chunk@{i}",
+                flush=True,
+            )
     docs = []
     quotes = []
     now_ns = int(__import__("time").time() * 1_000_000_000)

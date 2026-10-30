@@ -57,8 +57,11 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `NEXT_PUBLIC_MARKET_WS_URL` | 空（同源） | 订阅读经 gateway `/api/market/qdb/ws`；勿直连 `:3002` |
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
-| `BINANCE_KLINE_BACKFILL` | `1` | 启动向 PG 翻页回补闭合棒；`0`=只靠 feed |
-| `BINANCE_KLINE_PG_BACKFILL_PAGES` | `10` | 每 symbol×interval 最多页（每页≤1000） |
+| `BINANCE_SYMBOLS` | `all` | `all`=exchangeInfo 全 TRADING 现货；或逗号列表 |
+| `BINANCE_WS_SHARD_SIZE` | `80` | 每 WS 连接订约 N 对（×4 流） |
+| `BINANCE_KLINE_BACKFILL` | `1` | 启动向 PG 慢补闭合棒；`0`=只靠 feed |
+| `BINANCE_KLINE_PG_SLOW` | `1` | 全市场轮转每步 1 页 |
+| `BINANCE_KLINE_PG_BACKFILL_PAGES` | `2` | 小名单 bulk 时每 interval 最多页 |
 | `BINANCE_KLINE_INTERVALS` | 全周期列表 | 与现货台对齐；写入 `market.bar_*` |
 | `BINANCE_KLINE_LIMIT` | `180` | qdb docs 短窗硬顶（非 PG 深度） |
 | `COLLECTOR_HTTP(S)_PROXY` | 空 / `host.docker.internal:18080` | 容器 TLS 异常时走宿主机 CONNECT 代理 |
