@@ -184,6 +184,11 @@ function MarketsPageInner() {
     () => new Set(["BTCUSDT", "ETHUSDT"]),
   );
   const [mktTab, setMktTab] = useState<"fav" | "usdt">("usdt");
+  const [pairOpen, setPairOpen] = useState(false);
+  const [pairQuery, setPairQuery] = useState("");
+  const [pairTab, setPairTab] = useState<"fav" | "usdt">("usdt");
+  const pairPickerRef = useRef<HTMLDivElement | null>(null);
+  const pairSearchRef = useRef<HTMLInputElement | null>(null);
   const [rightTab, setRightTab] = useState<RightTab>("book");
   const [bookLimit, setBookLimit] = useState(16);
   const [historyDone, setHistoryDone] = useState(false);
@@ -493,6 +498,52 @@ function MarketsPageInner() {
     return rows;
   }, [list, query, mktTab, favs]);
 
+  const pairPickerList = useMemo(() => {
+    let rows = list.length
+      ? list
+      : WATCHLIST.map(
+          (s) =>
+            ({
+              symbol: s,
+              lastPrice: "0",
+              priceChange: "0",
+              priceChangePercent: "0",
+              highPrice: "0",
+              lowPrice: "0",
+              volume: "0",
+              quoteVolume: "0",
+            }) satisfies Ticker,
+        );
+    if (pairTab === "fav") rows = rows.filter((t) => favs.has(t.symbol));
+    const q = pairQuery.trim().toUpperCase();
+    if (!q) return rows;
+    return rows.filter(
+      (t) =>
+        t.symbol.includes(q) ||
+        pairLabel(t.symbol).toUpperCase().includes(q) ||
+        baseAsset(t.symbol).includes(q),
+    );
+  }, [list, pairQuery, pairTab, favs]);
+
+  useEffect(() => {
+    if (!pairOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const el = pairPickerRef.current;
+      if (el && !el.contains(e.target as Node)) setPairOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPairOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    const id = window.setTimeout(() => pairSearchRef.current?.focus(), 0);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.clearTimeout(id);
+    };
+  }, [pairOpen]);
+
   const listIds = useMemo(
     () => filteredList.map((t) => t.symbol),
     [filteredList],
@@ -542,18 +593,151 @@ function MarketsPageInner() {
       <header className="bn-top">
         <div className="bn-top-pair">
           <div className="bn-top-name">
-            <select
-              className="bn-pair-select"
-              value={symbol}
-              onChange={(e) => setSymbol(e.target.value)}
-              aria-label="Trading pair"
-            >
-              {WATCHLIST.map((s) => (
-                <option key={s} value={s}>
-                  {pairLabel(s)}
-                </option>
-              ))}
-            </select>
+            <div className="bn-pair-picker" ref={pairPickerRef}>
+              <button
+                type="button"
+                className={pairOpen ? "bn-pair-trigger open" : "bn-pair-trigger"}
+                aria-expanded={pairOpen}
+                aria-haspopup="listbox"
+                aria-label="选择交易对"
+                onClick={() =>
+                  setPairOpen((o) => {
+                    if (!o) {
+                      setPairQuery("");
+                      setPairTab("usdt");
+                    }
+                    return !o;
+                  })
+                }
+              >
+                <span className="bn-pair-trigger-base">
+                  {baseAsset(symbol)}
+                </span>
+                <span className="bn-pair-trigger-quote">/USDT</span>
+                <span
+                  className={
+                    pairOpen ? "bn-pair-caret open" : "bn-pair-caret"
+                  }
+                  aria-hidden
+                />
+              </button>
+              {pairOpen ? (
+                <div className="bn-pair-panel" role="listbox">
+                  <div className="bn-pair-search-wrap">
+                    <span className="bn-pair-search-ico" aria-hidden />
+                    <input
+                      ref={pairSearchRef}
+                      className="bn-pair-search"
+                      placeholder="搜索"
+                      value={pairQuery}
+                      onChange={(e) => setPairQuery(e.target.value)}
+                      aria-label="搜索交易对"
+                    />
+                  </div>
+                  <div className="bn-pair-tabs" role="tablist">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={pairTab === "fav"}
+                      className={
+                        pairTab === "fav" ? "bn-pair-tab active" : "bn-pair-tab"
+                      }
+                      onClick={() => setPairTab("fav")}
+                    >
+                      自选
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={pairTab === "usdt"}
+                      className={
+                        pairTab === "usdt"
+                          ? "bn-pair-tab active"
+                          : "bn-pair-tab"
+                      }
+                      onClick={() => setPairTab("usdt")}
+                    >
+                      USDT
+                    </button>
+                  </div>
+                  <div className="bn-pair-cols">
+                    <span>名称</span>
+                    <span>最新价</span>
+                    <span>涨跌幅</span>
+                  </div>
+                  <div className="bn-pair-list">
+                    {pairPickerList.map((t) => {
+                      const pct = Number(t.priceChangePercent);
+                      const up = Number.isFinite(pct) ? pct >= 0 : true;
+                      const active = t.symbol === symbol;
+                      return (
+                        <div
+                          key={t.symbol}
+                          className={
+                            active
+                              ? "bn-pair-row active"
+                              : "bn-pair-row"
+                          }
+                          role="option"
+                          aria-selected={active}
+                        >
+                          <button
+                            type="button"
+                            className={
+                              favs.has(t.symbol)
+                                ? "bn-star-sm on"
+                                : "bn-star-sm"
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFav(t.symbol);
+                            }}
+                            title="自选"
+                            aria-label="自选"
+                          >
+                            ★
+                          </button>
+                          <button
+                            type="button"
+                            className="bn-pair-row-pick"
+                            onClick={() => {
+                              setSymbol(t.symbol);
+                              setPairOpen(false);
+                            }}
+                            onMouseEnter={() => prefetchSymbol(t.symbol)}
+                          >
+                            <span className="bn-pair-row-name">
+                              <em>{baseAsset(t.symbol)}</em>
+                              <span>/USDT</span>
+                            </span>
+                            <span className="bn-pair-row-px bn-mono">
+                              {fmt(
+                                t.lastPrice,
+                                priceDigits(t.lastPrice),
+                              )}
+                            </span>
+                            <span
+                              className={
+                                up
+                                  ? "bn-pair-row-chg up"
+                                  : "bn-pair-row-chg down"
+                              }
+                            >
+                              {Number.isFinite(pct)
+                                ? `${up ? "+" : ""}${fmt(pct, 2)}%`
+                                : "—"}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {!pairPickerList.length ? (
+                      <p className="bn-empty">无匹配交易对</p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               className={favs.has(symbol) ? "bn-star on" : "bn-star"}
