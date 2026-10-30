@@ -151,6 +151,11 @@ def main() -> None:
         markets.start_binance_kline_feed()  # type: ignore[attr-defined]
     except Exception as exc:
         print(f"binance kline feed start failed: {exc}", flush=True)
+    # 冷盘口 REST 不依赖 A 股回填结束
+    try:
+        markets.start_binance_cold_book_feed()  # type: ignore[attr-defined]
+    except Exception as exc:
+        print(f"binance cold book start failed: {exc}", flush=True)
 
     if not skip_cn_equity and kline_codes:
         print(

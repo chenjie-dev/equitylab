@@ -58,7 +58,9 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `BINANCE_REST_URL` / `BINANCE_REST_FALLBACK` | `data-api` / `api.binance.com` | **仅** collector；backfill / WS 断流兜底 |
 | `BINANCE_WS_URL` / `BINANCE_WS_FALLBACK` | data-stream / stream.binance.com | collector 订流写 qdb |
 | `BINANCE_SYMBOLS` | `all` | `all`=exchangeInfo 全 TRADING 现货；或逗号列表 |
-| `BINANCE_WS_SHARD_SIZE` | `80` | 每 WS 连接订约 N 对（×4 流） |
+| `BINANCE_WS_SHARD_SIZE` | `40` | 每 WS 连接订约 N 对 |
+| `BINANCE_WS_SHARD_STAGGER_SEC` | `0.25` | 分片错峰启动，降重连风暴 |
+| `BINANCE_WS_HOT` | 空 | 额外热门（种子外）；热门四流 @100ms |
 | `BINANCE_KLINE_BACKFILL` | `1` | 启动向 PG 慢补闭合棒；`0`=只靠 feed |
 | `BINANCE_KLINE_PG_SLOW` | `1` | 全市场轮转每步 1 页 |
 | `BINANCE_KLINE_PG_BACKFILL_PAGES` | `2` | 小名单 bulk 时每 interval 最多页 |

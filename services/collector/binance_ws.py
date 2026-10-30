@@ -1,6 +1,10 @@
 """币安公开 WebSocket → qdb。只在 collector 回源；读路径仍订 qdb。
 
-全市场：多连接分片 + 连接后 SUBSCRIBE（避免 combined URL 过长）。
+全市场优化（运行态证据）：
+- 全量 depth@100ms ×1300+ 对会打满 write_gate docs、触发分片断线。
+- 热门：bookTicker+trade+depth20@100ms+ticker（实时盘口）
+- 冷端（含 USDT）：仅 bookTicker+ticker；盘口/成交由 collector REST 轮转慢补
+  （全市场 depth WS 会打满 write_gate，已用运行态数据证实）
 """
 
 from __future__ import annotations
@@ -20,12 +24,12 @@ BINANCE_WS = os.environ.get("BINANCE_WS_URL", "wss://data-stream.binance.vision"
 BINANCE_WS_FALLBACK = os.environ.get(
     "BINANCE_WS_FALLBACK", "wss://stream.binance.com:9443"
 ).rstrip("/")
-# 报价合并间隔：对齐 qdb live_rows ~50ms，避免每笔 bookTicker 打爆 HTTP
 QUOTE_FLUSH_MS = float(os.environ.get("BINANCE_WS_QUOTE_FLUSH_MS", "50"))
-DOC_FLUSH_MS = float(os.environ.get("BINANCE_WS_DOC_FLUSH_MS", "200"))
-STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "8"))
-# 每连接 symbol 数；×4 流须 <1024，且 combined URL 不宜过长。默认 40 → 160 streams。
+DOC_FLUSH_MS = float(os.environ.get("BINANCE_WS_DOC_FLUSH_MS", "400"))
+STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "12"))
+# combined URL 长度约束：热分片可更小；冷端流更少可略大
 WS_SHARD_SIZE = max(10, int(os.environ.get("BINANCE_WS_SHARD_SIZE", "40")))
+WS_SHARD_STAGGER_SEC = float(os.environ.get("BINANCE_WS_SHARD_STAGGER_SEC", "0.25"))
 
 
 def _env_flag(name: str, default: str = "1") -> bool:
@@ -37,13 +41,11 @@ def _env_flag(name: str, default: str = "1") -> bool:
     )
 
 
-# 1=写入 /v1/trades|/v1/quotes；0=只写 docs（避免引擎锁饿死 /v1/klines）
-WRITE_QDB_TRADES = _env_flag("BINANCE_WS_WRITE_TRADES", "1")
+WRITE_QDB_TRADES = _env_flag("BINANCE_WS_WRITE_TRADES", "0")
 WRITE_QDB_QUOTES = _env_flag("BINANCE_WS_WRITE_QUOTES", "1")
 
 
 def _http_proxy_kwargs() -> dict[str, Any]:
-    """websocket-client 不读环境代理；优先 COLLECTOR_HTTPS_PROXY（宿主机出网旁路）。"""
     raw = (
         os.environ.get("COLLECTOR_HTTPS_PROXY")
         or os.environ.get("HTTPS_PROXY")
@@ -75,38 +77,49 @@ def _ws_root(base: str) -> str:
     return root
 
 
-def _stream_names(symbols: list[str]) -> list[str]:
+# hot | cold
+Tier = str
+
+
+def _stream_names(symbols: list[str], tier: Tier) -> list[str]:
     parts: list[str] = []
     for sym in symbols:
         s = sym.lower()
-        parts.extend(
-            [
-                f"{s}@bookTicker",
-                f"{s}@trade",
-                f"{s}@depth20@100ms",
-                f"{s}@ticker",
-            ]
-        )
+        if tier == "hot":
+            parts.extend(
+                [
+                    f"{s}@bookTicker",
+                    f"{s}@trade",
+                    f"{s}@depth20@100ms",
+                    f"{s}@ticker",
+                ]
+            )
+        else:
+            parts.extend([f"{s}@bookTicker", f"{s}@ticker"])
     return parts
 
 
 class BinanceWsFeed:
-    """单分片：/ws + SUBSCRIBE → quotes/docs。"""
+    """单分片 combined stream → quotes/docs。"""
 
     def __init__(
         self,
         symbols: list[str],
         *,
         shard_id: int,
+        tier: Tier,
         post: PostFn,
         scale: ScaleFn,
         put_docs: PutDocsFn,
+        put_docs_low: PutDocsFn | None = None,
     ) -> None:
         self.symbols = [s.upper() for s in symbols if s.strip()]
         self.shard_id = shard_id
+        self.tier = tier
         self._post = post
         self._scale = scale
         self._put_docs = put_docs
+        self._put_docs_low = put_docs_low or put_docs
         self._lock = threading.Lock()
         self._state: dict[str, dict[str, Any]] = {
             s: {
@@ -136,25 +149,35 @@ class BinanceWsFeed:
         self._prefer_direct = False
         self._last_proxy_err = False
 
-    def start(self) -> None:
+    def start(self, *, delay_sec: float = 0.0) -> None:
         if self._started or not self.symbols:
             return
         self._started = True
+
+        def _boot() -> None:
+            if delay_sec > 0:
+                time.sleep(delay_sec)
+            if self._stop.is_set():
+                return
+            threading.Thread(
+                target=self._run_forever,
+                name=f"binance-ws-{self.shard_id}",
+                daemon=True,
+            ).start()
+            threading.Thread(
+                target=self._flush_loop,
+                name=f"binance-ws-flush-{self.shard_id}",
+                daemon=True,
+            ).start()
+            print(
+                f"binance ws shard={self.shard_id} tier={self.tier} "
+                f"symbols={len(self.symbols)} streams={len(_stream_names(self.symbols, self.tier))}",
+                flush=True,
+            )
+
         threading.Thread(
-            target=self._run_forever,
-            name=f"binance-ws-{self.shard_id}",
-            daemon=True,
+            target=_boot, name=f"binance-ws-boot-{self.shard_id}", daemon=True
         ).start()
-        threading.Thread(
-            target=self._flush_loop,
-            name=f"binance-ws-flush-{self.shard_id}",
-            daemon=True,
-        ).start()
-        print(
-            f"binance ws shard={self.shard_id} symbols={len(self.symbols)} "
-            f"quote_flush_ms={int(QUOTE_FLUSH_MS)} doc_flush_ms={int(DOC_FLUSH_MS)}",
-            flush=True,
-        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -165,9 +188,8 @@ class BinanceWsFeed:
         return self._last_msg > 0 and (time.monotonic() - self._last_msg) < STALE_SEC
 
     def _stream_url(self, base: str) -> str:
-        # combined 保证每条消息带 stream 名（depth 无 s 字段，必须靠 stream 路由）
         root = _ws_root(base)
-        return f"{root}/stream?streams={'/'.join(_stream_names(self.symbols))}"
+        return f"{root}/stream?streams={'/'.join(_stream_names(self.symbols, self.tier))}"
 
     def _proxy_kwargs(self) -> dict[str, Any]:
         if self._prefer_direct:
@@ -195,10 +217,9 @@ class BinanceWsFeed:
                 mode = "direct" if self._prefer_direct else "proxy-or-direct"
                 print(
                     f"binance ws shard={self.shard_id} connecting {base} "
-                    f"streams={len(self.symbols)*4} ({mode}) …",
+                    f"tier={self.tier} ({mode}) …",
                     flush=True,
                 )
-
                 app = websocket.WebSocketApp(
                     url,
                     on_message=self._on_message,
@@ -260,11 +281,11 @@ class BinanceWsFeed:
         )
 
     def _on_message(self, _ws: Any, message: str | bytes) -> None:
+        self._last_msg = time.monotonic()
         try:
             envelope = json.loads(message)
         except json.JSONDecodeError:
             return
-        self._last_msg = time.monotonic()
         data = envelope.get("data") if isinstance(envelope, dict) else None
         stream = str(envelope.get("stream") or "") if isinstance(envelope, dict) else ""
         if not isinstance(data, dict):
@@ -443,7 +464,6 @@ class BinanceWsFeed:
                     }
                 )
         if WRITE_QDB_QUOTES and items:
-            # 分批，避免单次 body 过大
             batch = 256
             for i in range(0, len(items), batch):
                 try:
@@ -466,39 +486,48 @@ class BinanceWsFeed:
                 )
 
     def _flush_docs(self) -> None:
-        docs: list[dict] = []
+        hi_docs: list[dict] = []
+        lo_docs: list[dict] = []
         with self._lock:
             for symbol, st in self._state.items():
-                if st["depth_dirty"] and st["depth"] is not None:
-                    st["depth_dirty"] = False
-                    docs.append({"key": f"binance:depth:{symbol}", "value": st["depth"]})
                 if st["ticker_dirty"] and st["ticker_doc"] is not None:
                     st["ticker_dirty"] = False
-                    docs.append({"key": f"binance:ticker:{symbol}", "value": st["ticker_doc"]})
+                    hi_docs.append(
+                        {"key": f"binance:ticker:{symbol}", "value": st["ticker_doc"]}
+                    )
+                if st["depth_dirty"] and st["depth"] is not None:
+                    st["depth_dirty"] = False
+                    lo_docs.append({"key": f"binance:depth:{symbol}", "value": st["depth"]})
                 if st["trades_dirty"] and st["trades"]:
                     st["trades_dirty"] = False
-                    docs.append(
+                    lo_docs.append(
                         {
                             "key": f"binance:trades:{symbol}",
                             "value": list(st["trades"]),
                         }
                     )
-        if not docs:
-            return
-        batch = 64
-        for i in range(0, len(docs), batch):
-            try:
-                self._put_docs(docs[i : i + batch])
-            except Exception as exc:
-                print(
-                    f"binance ws shard={self.shard_id} doc flush failed: {exc}",
-                    flush=True,
-                )
-                break
+        for docs, put in ((hi_docs, self._put_docs), (lo_docs, self._put_docs_low)):
+            if not docs:
+                continue
+            batch = 64
+            for i in range(0, len(docs), batch):
+                try:
+                    put(docs[i : i + batch])
+                except Exception as exc:
+                    print(
+                        f"binance ws shard={self.shard_id} doc flush failed: {exc}",
+                        flush=True,
+                    )
+                    break
 
 
 _HUB_FEEDS: list[BinanceWsFeed] = []
 _HUB_LOCK = threading.Lock()
+_HOT_SET: set[str] = set()
+
+
+def classify_symbol(symbol: str, hot: set[str]) -> Tier:
+    return "hot" if symbol.upper() in hot else "cold"
 
 
 def start_feed(
@@ -507,41 +536,63 @@ def start_feed(
     post: PostFn,
     scale: ScaleFn,
     put_docs: PutDocsFn,
+    put_docs_low: PutDocsFn | None = None,
+    hot_symbols: list[str] | None = None,
 ) -> BinanceWsFeed | None:
-    """按分片启动多连接；返回第一片（兼容旧调用）。"""
-    global _HUB_FEEDS
+    """按热/冷分层 + 分片启动；错峰连接。"""
+    global _HUB_FEEDS, _HOT_SET
     syms = [s.upper() for s in symbols if s.strip()]
     if not syms:
         return None
+    hot = {s.upper() for s in (hot_symbols or []) if s.strip()}
+    _HOT_SET = set(hot)
+
+    buckets: dict[Tier, list[str]] = {"hot": [], "cold": []}
+    for s in syms:
+        buckets[classify_symbol(s, hot)].append(s)
+
     with _HUB_LOCK:
         for old in _HUB_FEEDS:
             old.stop()
         _HUB_FEEDS = []
         feeds: list[BinanceWsFeed] = []
-        for i in range(0, len(syms), WS_SHARD_SIZE):
-            chunk = syms[i : i + WS_SHARD_SIZE]
-            feed = BinanceWsFeed(
-                chunk,
-                shard_id=len(feeds),
-                post=post,
-                scale=scale,
-                put_docs=put_docs,
-            )
-            feed.start()
-            feeds.append(feed)
+        shard_i = 0
+        for tier, group in buckets.items():
+            if not group:
+                continue
+            # 冷端每对仅 2 流，分片可略大以减少连接数
+            size = WS_SHARD_SIZE if tier == "hot" else max(WS_SHARD_SIZE, 80)
+            for i in range(0, len(group), size):
+                chunk = group[i : i + size]
+                feed = BinanceWsFeed(
+                    chunk,
+                    shard_id=shard_i,
+                    tier=tier,
+                    post=post,
+                    scale=scale,
+                    put_docs=put_docs,
+                    put_docs_low=put_docs_low,
+                )
+                feed.start(delay_sec=shard_i * WS_SHARD_STAGGER_SEC)
+                feeds.append(feed)
+                shard_i += 1
         _HUB_FEEDS = feeds
         print(
             f"binance ws hub symbols={len(syms)} shards={len(feeds)} "
-            f"shard_size={WS_SHARD_SIZE}",
+            f"hot={len(buckets['hot'])} cold={len(buckets['cold'])} "
+            f"shard_size={WS_SHARD_SIZE} stagger_s={WS_SHARD_STAGGER_SEC}",
             flush=True,
         )
         return feeds[0] if feeds else None
 
 
 def feed_healthy() -> bool:
-    """任一活跃分片在 STALE 窗内有消息即视为健康（全市场允许部分分片抖动）。"""
     with _HUB_LOCK:
         feeds = list(_HUB_FEEDS)
     if not feeds:
         return False
     return any(f.healthy() for f in feeds)
+
+
+def hot_set() -> set[str]:
+    return set(_HOT_SET)

@@ -265,17 +265,33 @@ def backfill_markets() -> None:
 
 
 def start_binance_ws() -> None:
-    """分片 WS（报价/盘口/成交）；宇宙应已由 main bootstrap；失败时 REST 兜底。"""
+    """分层分片 WS；宇宙应已由 main bootstrap；失败时 REST 兜底。"""
     from binance_ws import start_feed
 
     if len(BINANCE_SYMBOLS) <= len(_SEED_SYMBOLS):
         resolve_binance_universe(publish=True)
     else:
         publish_binance_exchange_info()
-    start_feed(BINANCE_SYMBOLS, post=post, scale=scale, put_docs=_put_docs)
+    hot = list(_SEED_SYMBOLS)
+    extra_hot = os.environ.get("BINANCE_WS_HOT", "").strip()
+    if extra_hot:
+        hot.extend(s.strip().upper() for s in extra_hot.split(",") if s.strip())
+    start_feed(
+        BINANCE_SYMBOLS,
+        post=post,
+        scale=scale,
+        put_docs=lambda items: _put_docs(items, priority="high"),
+        put_docs_low=lambda items: _put_docs(items, priority="low"),
+        hot_symbols=hot,
+    )
     threading.Thread(
         target=_binance_universe_refresh_worker,
         name="collector-binance-universe",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_binance_catalog_heal_worker,
+        name="collector-binance-catalog-heal",
         daemon=True,
     ).start()
 
@@ -392,6 +408,23 @@ def publish_binance_exchange_info() -> None:
     print(f"binance catalog published symbols={len(symbols_meta)}", flush=True)
 
 
+def _restart_binance_ws() -> None:
+    from binance_ws import start_feed
+
+    hot = list(_SEED_SYMBOLS)
+    extra_hot = os.environ.get("BINANCE_WS_HOT", "").strip()
+    if extra_hot:
+        hot.extend(s.strip().upper() for s in extra_hot.split(",") if s.strip())
+    start_feed(
+        BINANCE_SYMBOLS,
+        post=post,
+        scale=scale,
+        put_docs=lambda items: _put_docs(items, priority="high"),
+        put_docs_low=lambda items: _put_docs(items, priority="low"),
+        hot_symbols=hot,
+    )
+
+
 def _binance_universe_refresh_worker() -> None:
     while True:
         time.sleep(BINANCE_UNIVERSE_REFRESH_SEC)
@@ -405,11 +438,31 @@ def _binance_universe_refresh_worker() -> None:
                     f"-{len(before - after)}; restart ws",
                     flush=True,
                 )
-                from binance_ws import start_feed
-
-                start_feed(BINANCE_SYMBOLS, post=post, scale=scale, put_docs=_put_docs)
+                _restart_binance_ws()
         except Exception as exc:
             print(f"binance universe refresh failed: {exc}", flush=True)
+
+
+def _binance_catalog_heal_worker() -> None:
+    """qdb 重建后 catalog 易丢；周期检查并重发 exchangeInfo。"""
+    while True:
+        time.sleep(60.0)
+        try:
+            from main import qdb
+
+            doc = qdb.get_doc("binance:exchangeInfo")
+            count = 0
+            if isinstance(doc, dict):
+                count = int(doc.get("count") or len(doc.get("symbols") or []))
+            want = len(BINANCE_SYMBOLS)
+            if want > 64 and count < max(64, want // 2):
+                print(
+                    f"binance catalog heal: qdb count={count} want={want}; republish",
+                    flush=True,
+                )
+                publish_binance_exchange_info()
+        except Exception as exc:
+            print(f"binance catalog heal failed: {exc}", flush=True)
 
 
 def start_rwa_feed() -> None:
@@ -431,6 +484,48 @@ def start_binance_kline_feed() -> None:
     ).start()
 
 
+def start_binance_cold_book_feed() -> None:
+    """独立线程：非热门 depth/trades REST 轮转（不阻塞于 cn_equity 回填）。"""
+    threading.Thread(
+        target=_binance_cold_book_worker,
+        name="collector-binance-cold-book",
+        daemon=True,
+    ).start()
+
+
+def _binance_cold_book_worker() -> None:
+    from binance_ws import hot_set
+
+    i = 0
+    print("binance cold book REST feed start", flush=True)
+    while True:
+        hot = hot_set()
+        cold = [s for s in BINANCE_SYMBOLS if s not in hot]
+        if not cold:
+            time.sleep(2.0)
+            continue
+        # 非 USDT 优先；其中 BTC/ETH 计价再提前（ETHBTC 等常见对）
+        def _cold_rank(sym: str) -> tuple[int, str]:
+            if sym.endswith(("BTC", "ETH")) and not sym.endswith("USDT"):
+                return (0, sym)
+            if not sym.endswith("USDT"):
+                return (1, sym)
+            return (2, sym)
+
+        ordered = sorted(cold, key=_cold_rank)
+        # 每拍 4 个，限速避免打爆上游 / write_gate
+        for j in range(4):
+            symbol = ordered[(i + j) % len(ordered)]
+            try:
+                _poll_binance_book(symbol)
+            except Exception as exc:
+                if i % 200 == 0:
+                    print(f"binance cold book {symbol} failed: {exc}", flush=True)
+            time.sleep(0.15)
+        i = (i + 4) % max(len(ordered), 1)
+        time.sleep(0.2)
+
+
 def binance_ws_healthy() -> bool:
     from binance_ws import feed_healthy
 
@@ -448,12 +543,14 @@ def poll_quotes_hot() -> None:
 
 
 def poll_slow(cycle: int) -> None:
-    """慢路径：WS 不健康时 REST 盘口（RWA 由 start_rwa_feed 独立线程负责）。"""
-    if BINANCE_SYMBOLS and not binance_ws_healthy():
-        symbol = BINANCE_SYMBOLS[cycle % len(BINANCE_SYMBOLS)]
-        try:
-            _poll_binance_book(symbol)
-        except Exception as exc:
+    """慢路径：WS 全挂时 REST 盘口兜底（常态冷盘口见 start_binance_cold_book_feed）。"""
+    if not BINANCE_SYMBOLS or binance_ws_healthy():
+        return
+    symbol = BINANCE_SYMBOLS[cycle % len(BINANCE_SYMBOLS)]
+    try:
+        _poll_binance_book(symbol)
+    except Exception as exc:
+        if cycle % 50 == 0:
             print(f"binance book {symbol} failed: {exc}", flush=True)
 
 
@@ -744,7 +841,8 @@ def _poll_binance_book(symbol: str) -> None:
         [
             {"key": f"binance:depth:{symbol}", "value": depth},
             {"key": f"binance:trades:{symbol}", "value": trades},
-        ]
+        ],
+        priority="low",
     )
 
 
