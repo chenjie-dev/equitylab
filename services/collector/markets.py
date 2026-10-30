@@ -72,11 +72,12 @@ _RWA_DYNAMIC = "/bapi/defi/v2/public/wallet-direct/buw/wallet/market/token/rwa/d
 _RWA_KLINE = "/bapi/defi/v1/public/wallet-direct/buw/wallet/dex/market/token/kline/ai"
 # 全市场并行扫盘；前端只读聚合 doc `rwa:board`。设 0 可停（www.binance.com 不可达时）
 # 默认降并发：扫盘并行拉上游，但 qdb 写入经 write_gate 低优先合并
-RWA_WORKERS = max(0, int(os.environ.get("RWA_WORKERS", "8")))
-RWA_CHUNK = max(8, int(os.environ.get("RWA_CHUNK", "32")))
+# 默认压并发：SSL/代理抖动时过高并行会打爆 write_gate docs 并拖垮 A 股/现货及时性
+RWA_WORKERS = max(0, int(os.environ.get("RWA_WORKERS", "6")))
+RWA_CHUNK = max(8, int(os.environ.get("RWA_CHUNK", "24")))
 # K 线：全市场持续写 `rwa:kline:{TICKER}:{interval}`，读路径优先此 doc
-RWA_KLINE_WORKERS = max(0, int(os.environ.get("RWA_KLINE_WORKERS", "4")))
-RWA_KLINE_CHUNK = max(4, int(os.environ.get("RWA_KLINE_CHUNK", "16")))
+RWA_KLINE_WORKERS = max(0, int(os.environ.get("RWA_KLINE_WORKERS", "2")))
+RWA_KLINE_CHUNK = max(4, int(os.environ.get("RWA_KLINE_CHUNK", "8")))
 # rwa:board 全量覆盖写节流（秒）；避免每 chunk 重写巨大 JSON 饿死现货
 RWA_BOARD_FLUSH_SEC = max(0.2, float(os.environ.get("RWA_BOARD_FLUSH_SEC", "1.5")))
 # 仅热门 ticker 写引擎 /v1/quotes（snapshots）；冷门只落 board/docs
@@ -498,7 +499,8 @@ def _rwa_store_chunk(chunk: list[dict]) -> tuple[int, int]:
                 ok += 1
             except Exception as exc:
                 fail += 1
-                print(f"rwa dynamic {ticker} failed: {exc}", flush=True)
+                if "circuit open" not in str(exc):
+                    print(f"rwa dynamic {ticker} failed: {exc}", flush=True)
     if docs:
         _put_docs(docs, priority="low")
     if quotes:
@@ -519,6 +521,9 @@ def _rwa_worker() -> None:
         t0 = time.monotonic()
         try:
             now = time.monotonic()
+            if now < _rwa_circuit_until:
+                time.sleep(min(5.0, _rwa_circuit_until - now))
+                continue
             if now - _last_catalog_at > 60.0:
                 _refresh_rwa_catalog()
                 _last_catalog_at = now
@@ -649,10 +654,41 @@ def _board_put(token: dict, dynamic: dict | None) -> None:
         _board_dirty = True
 
 
+# SSL/EOF 连续失败时熔断，避免全市场扫盘打满代理与 write_gate
+_rwa_circuit_until = 0.0
+_rwa_ssl_streak = 0
+RWA_CIRCUIT_FAILS = max(3, int(os.environ.get("RWA_CIRCUIT_FAILS", "8")))
+RWA_CIRCUIT_SEC = max(15.0, float(os.environ.get("RWA_CIRCUIT_SEC", "90")))
+
+
+def _rwa_is_ssl_or_eof(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        n in msg
+        for n in (
+            "ssleoferror",
+            "unexpected_eof",
+            "ssl:",
+            "wrong version number",
+            "connection reset",
+            "remotedisconnected",
+            "max retries exceeded",
+        )
+    )
+
+
 def _rwa_get(path: str, params: dict | None = None, timeout: int = 12) -> Any:
-    """RWA bapi：短超时易 EOF/Read timeout，加重试一次。"""
+    """RWA bapi：指数退避重试；SSL/EOF 连续失败则短熔断。"""
+    global _rwa_circuit_until, _rwa_ssl_streak
+    now = time.monotonic()
+    if now < _rwa_circuit_until:
+        raise RuntimeError(
+            f"rwa circuit open for {_rwa_circuit_until - now:.0f}s "
+            f"(ssl_streak={_rwa_ssl_streak})"
+        )
     last_err: Exception | None = None
-    for _ in range(2):
+    attempts = max(2, int(os.environ.get("RWA_HTTP_RETRIES", "3")))
+    for attempt in range(attempts):
         try:
             r = requests.get(
                 f"{RWA}{path}",
@@ -661,10 +697,22 @@ def _rwa_get(path: str, params: dict | None = None, timeout: int = 12) -> Any:
                 proxies=_rwa_proxies(),
             )
             r.raise_for_status()
+            _rwa_ssl_streak = 0
             return r.json()
         except Exception as exc:
             last_err = exc
-            continue
+            if _rwa_is_ssl_or_eof(exc):
+                _rwa_ssl_streak += 1
+                if _rwa_ssl_streak >= RWA_CIRCUIT_FAILS:
+                    _rwa_circuit_until = time.monotonic() + RWA_CIRCUIT_SEC
+                    print(
+                        f"rwa circuit open {RWA_CIRCUIT_SEC:.0f}s "
+                        f"after {_rwa_ssl_streak} ssl/eof fails",
+                        flush=True,
+                    )
+            if attempt + 1 < attempts:
+                time.sleep(min(4.0, 0.4 * (2**attempt)))
+                continue
     assert last_err is not None
     raise last_err
 
@@ -737,6 +785,10 @@ def _rwa_kline_worker() -> None:
     while True:
         t0 = time.monotonic()
         try:
+            now = time.monotonic()
+            if now < _rwa_circuit_until:
+                time.sleep(min(5.0, _rwa_circuit_until - now))
+                continue
             tokens = _ensure_tokens()
             if not tokens:
                 time.sleep(2.0)
@@ -775,7 +827,11 @@ def _rwa_kline_worker() -> None:
                         ok += 1
                     except Exception as exc:
                         fail += 1
-                        print(f"rwa kline {ticker}:{interval} failed: {exc}", flush=True)
+                        if "circuit open" not in str(exc):
+                            print(
+                                f"rwa kline {ticker}:{interval} failed: {exc}",
+                                flush=True,
+                            )
             print(
                 f"rwa kline {interval} [{start}:{end}]/{n} ok={ok} fail={fail} "
                 f"ms={int((time.monotonic() - t0) * 1000)}",

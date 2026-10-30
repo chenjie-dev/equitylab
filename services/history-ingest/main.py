@@ -31,6 +31,8 @@ BATCH_FILL = int(os.environ.get("HISTORY_INGEST_BATCH", "50"))
 FAIL_TTL_SEC = float(os.environ.get("HISTORY_INGEST_FAIL_TTL_SEC", "1800"))
 # 上游有数但不在窗口内（退市/停更）：长退避，避免空转打上游
 EXHAUSTED_TTL_SEC = float(os.environ.get("HISTORY_INGEST_EXHAUSTED_TTL_SEC", str(7 * 24 * 3600)))
+# 已写入但仍不足 MIN_BARS（新股/新基）：中退避，等上市日自然长大，勿每 30min 占满 batch
+PARTIAL_TTL_SEC = float(os.environ.get("HISTORY_INGEST_PARTIAL_TTL_SEC", str(6 * 3600)))
 MAX_PER_ROUND = int(os.environ.get("HISTORY_INGEST_MAX_PER_ROUND", "200"))
 
 qdb = Client(timeout=15.0)
@@ -86,7 +88,7 @@ def load_universe() -> list[dict[str, str]]:
 
 
 def _in_backoff(scope: str) -> bool:
-    """fail 短退避 / exhausted 长退避。"""
+    """fail 短退避 / partial 中退避 / exhausted 长退避。"""
     row = pg_market.get_watermark(SOURCE, COVERAGE_DATASET, scope)
     if not row or not row.get("updated_at"):
         return False
@@ -96,6 +98,8 @@ def _in_backoff(scope: str) -> bool:
     status = detail.get("status")
     if status == "fail":
         ttl = FAIL_TTL_SEC
+    elif status == "partial":
+        ttl = PARTIAL_TTL_SEC
     elif status == "exhausted":
         ttl = EXHAUSTED_TTL_SEC
     else:
@@ -162,8 +166,11 @@ def fill_one(gap: dict[str, Any]) -> dict[str, Any]:
     elif written == 0:
         # 空响应多为非现货/无 K 线码（如 980*）；长退避，避免占满 BATCH_FILL
         status = "exhausted"
+    elif written > 0 and cnt < MIN_BARS:
+        # 新股/新 ETF/转债：本轮已灌满上游能给的，中退避等自然加长
+        status = "partial"
     else:
-        status = "fail"  # 写了但仍不足 MIN_BARS：短退避后再试
+        status = "fail"
     pg_market.set_watermark(
         SOURCE,
         COVERAGE_DATASET,

@@ -212,7 +212,14 @@ class BinanceWsFeed:
     def _on_error(self, _ws: Any, err: Any) -> None:
         text = str(err)
         print(f"binance ws error: {err}", flush=True)
-        if "502" in text or "CONNECT" in text.upper():
+        low = text.lower()
+        if (
+            "502" in text
+            or "CONNECT" in text.upper()
+            or "ssl" in low
+            or "wrong version" in low
+            or "record layer" in low
+        ):
             self._prefer_direct = True
             self._last_proxy_err = True
 

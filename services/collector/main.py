@@ -108,27 +108,8 @@ def main() -> None:
     )
     import markets
 
-    try:
-        markets.start_binance_ws()
-    except Exception as exc:
-        print(f"binance ws start failed: {exc}", flush=True)
-    try:
-        markets.start_binance_kline_feed()
-    except Exception as exc:
-        print(f"binance kline feed start failed: {exc}", flush=True)
-    try:
-        markets.start_rwa_feed()
-    except Exception as exc:
-        print(f"rwa feed start failed: {exc}", flush=True)
-    try:
-        markets.start_rwa_kline_feed()
-    except Exception as exc:
-        print(f"rwa kline feed start failed: {exc}", flush=True)
-    try:
-        markets.start_retention_gc()
-    except Exception as exc:
-        print(f"retention gc start failed: {exc}", flush=True)
-
+    # A 股 seed 回填独占 qdb 写路径；现货 WS / RWA 并行会把 write_gate 打满，
+    # 导致 backfill Read timeout、live poll 起不来。全部放到回填完成后再启动。
     # A 股历史回填必须在首轮 live poll 之前完成：qdb 对「早于当前未闭合桶」的
     # 成交记 late_tick，不进 K 线。全宇宙时默认只回填 seed（CN_EQUITY_KLINE_CODES）。
     # 粗填沪深北工作日日历（节假日由日线再确认）
@@ -166,6 +147,27 @@ def main() -> None:
         print("collector index backfill done", flush=True)
     else:
         print("collector cn_equity backfill skipped (COLLECTOR_SKIP_CN_EQUITY)", flush=True)
+
+    try:
+        markets.start_binance_ws()
+    except Exception as exc:
+        print(f"binance ws start failed: {exc}", flush=True)
+    try:
+        markets.start_binance_kline_feed()
+    except Exception as exc:
+        print(f"binance kline feed start failed: {exc}", flush=True)
+    try:
+        markets.start_rwa_feed()
+    except Exception as exc:
+        print(f"rwa feed start failed: {exc}", flush=True)
+    try:
+        markets.start_rwa_kline_feed()
+    except Exception as exc:
+        print(f"rwa kline feed start failed: {exc}", flush=True)
+    try:
+        markets.start_retention_gc()
+    except Exception as exc:
+        print(f"retention gc start failed: {exc}", flush=True)
 
     threading.Thread(
         target=_market_backfill_worker,

@@ -58,6 +58,12 @@ def _is_transient_upstream(exc: BaseException) -> bool:
     return False
 
 
+def _is_empty_or_schema_mismatch(exc: BaseException) -> bool:
+    """上游空表/列对不齐：不重试，静默当无数据（如 stock_margin_szse 休市空页）。"""
+    msg = str(exc).lower()
+    return "length mismatch" in msg or "expected axis has 0" in msg
+
+
 def call_ak(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """调用 akshare；连接类错误最多 3 次指数退避，仍失败返回 None。"""
     name = getattr(fn, "__name__", str(fn))
@@ -68,6 +74,9 @@ def call_ak(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
             return fn(*args, **kwargs)
         except Exception as exc:
             last_exc = exc
+            if _is_empty_or_schema_mismatch(exc):
+                print(f"akshare-ingest call {name} empty/skip: {exc}", flush=True)
+                return None
             if attempt < retries and _is_transient_upstream(exc):
                 backoff = min(8.0, 0.5 * (2 ** (attempt - 1)))
                 print(

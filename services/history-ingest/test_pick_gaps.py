@@ -39,3 +39,15 @@ def test_pick_gaps_orders_lowest_coverage_first():
 def test_cn_equity_exchange_bse():
     assert cn_equity_exchange("920088") == "BSE"
     assert cn_equity_exchange("600519") == "SSE"
+
+
+def test_partial_watermark_backs_off():
+    from datetime import datetime, timezone
+
+    hi.pg_market.get_watermark = lambda *a, **k: {
+        "updated_at": datetime.now(timezone.utc),
+        "detail": {"status": "partial", "count": 70, "written": 70},
+    }
+    assert hi._in_backoff("SSE:515040") is True
+    hi.pg_market.get_watermark = lambda *a, **k: None
+    assert hi._in_backoff("SSE:515040") is False
