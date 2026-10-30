@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { HotTickerStrip } from "./markets/HotTickerStrip";
 
 const NAV = [
-  { href: "/markets", label: "现货" },
+  { href: "/markets", label: "加密货币现货" },
   { href: "/markets/stocks", label: "代币化美股" },
   { href: "/markets/cn", label: "A股" },
   { href: "/chat", label: "对话" },

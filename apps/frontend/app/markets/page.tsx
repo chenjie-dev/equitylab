@@ -563,7 +563,7 @@ function MarketsPageInner() {
             >
               ★
             </button>
-            <span className="bn-pill">现货</span>
+            <span className="bn-pill">加密货币现货</span>
           </div>
           <div
             className={`bn-top-last ${changeUp ? "up" : "down"} ${flashClass(lastFlash)}`}

@@ -2,7 +2,7 @@
 
 /**
  * 研究对话。经同源 `/api/chat`（gateway → orchestrator）。
- * 首页是现货虚拟币行情，对话从顶栏进入。
+ * 首页是加密货币现货行情，对话从顶栏进入。
  */
 
 import { FormEvent, useState } from "react";
