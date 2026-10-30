@@ -258,8 +258,7 @@ class CnEquityService:
         *,
         category: str | None = None,
     ) -> dict[str, Any]:
-        """报价：qdb 优先；指数/ETF 等缺快照时回落 market.bar_daily 末日。"""
-        from app.cn_equity.qdb_client import snapshots
+        """报价：qdb 优先；缺快照或价为 0 时回落 market.bar_daily 末日。"""
         from app.cn_equity import pg_client
 
         parsed: list[tuple[str | None, str]] = []
@@ -304,27 +303,82 @@ class CnEquityService:
                 "category": cat,
             }
 
-        plain_codes = list(dict.fromkeys(c for _, c in uniq))
-        now = time.monotonic()
-        cached: list[dict[str, Any]] = []
-        missing: list[str] = []
-        for code in plain_codes:
-            hit = self._quote_cache.get(code)
-            if hit and now - hit[0] < self._quote_ttl:
-                cached.append(hit[1])
-            else:
-                missing.append(code)
+        from app.cn_equity.qdb_client import cn_equity_exchange, snapshots_symbols
 
-        if missing:
-            fetched = snapshots(missing)
+        now = time.monotonic()
+        # 缓存键带交易所，避免 000001 等跨所串价
+        cache_keys: list[str] = []
+        symbols: list[str] = []
+        for ex_hint, code in uniq:
+            ex = (
+                pg_client.normalize_exchange(ex_hint, code=code)
+                if ex_hint
+                else cn_equity_exchange(code)
+            )
+            cache_keys.append(f"{ex}:{code}")
+            symbols.append(f"{ex}:{code}")
+
+        by_key: dict[str, dict[str, Any]] = {}
+        missing_syms: list[str] = []
+        for key, sym in zip(cache_keys, symbols):
+            hit = self._quote_cache.get(key)
+            if hit and now - hit[0] < self._quote_ttl:
+                row = hit[1]
+                px = row.get("price")
+                if px is not None and float(px) > 0:
+                    by_key[key] = row
+                    continue
+            missing_syms.append(sym)
+
+        if missing_syms:
+            fetched = snapshots_symbols(missing_syms)
             for row in fetched.get("data") or []:
                 code = str(row.get("stock_code") or "").zfill(6)
-                self._quote_cache[code] = (now, row)
-                cached.append(row)
+                ex = str(row.get("exchange") or cn_equity_exchange(code))
+                key = f"{ex}:{code}"
+                px = row.get("price")
+                if px is None or float(px) <= 0:
+                    # 停牌/退市常见全 0：不当有效盘中价，走冷日线兜底
+                    continue
+                self._quote_cache[key] = (now, row)
+                by_key[key] = row
 
-        by_code = {str(r.get("stock_code") or "").zfill(6): r for r in cached}
-        ordered = [by_code[c] for _, c in uniq if c in by_code]
-        return {"data": ordered, "source": "qdb", "category": cat}
+        # 盘中未扫到或 qdb 为 0：用 bar_daily 末日价填列表（标 source）
+        need_pg: list[tuple[str, str]] = []
+        for ex_hint, code in uniq:
+            ex = (
+                pg_client.normalize_exchange(ex_hint, code=code)
+                if ex_hint
+                else cn_equity_exchange(code)
+            )
+            if f"{ex}:{code}" not in by_key:
+                need_pg.append((ex, code))
+        pg_n = 0
+        if need_pg and pg_client.enabled():
+            for row in pg_client.last_daily_quotes(need_pg):
+                code = str(row.get("stock_code") or "").zfill(6)
+                ex = pg_client.normalize_exchange(
+                    row.get("exchange"), code=code
+                )
+                key = f"{ex}:{code}"
+                if key in by_key:
+                    continue
+                px = row.get("price")
+                if px is None or float(px) <= 0:
+                    continue
+                enriched = dict(row)
+                enriched["quote_source"] = "postgres:bar_daily"
+                self._quote_cache[key] = (now, enriched)
+                by_key[key] = enriched
+                pg_n += 1
+
+        ordered = [by_key[k] for k in cache_keys if k in by_key]
+        source = "qdb"
+        if pg_n and pg_n == len(ordered):
+            source = "postgres:bar_daily"
+        elif pg_n:
+            source = "qdb+postgres:bar_daily"
+        return {"data": ordered, "source": source, "category": cat}
 
     def index_strip(self) -> dict[str, Any]:
         """顶栏主流指数（上证/深成/创业板/沪深300/上证50/中证1000）。"""

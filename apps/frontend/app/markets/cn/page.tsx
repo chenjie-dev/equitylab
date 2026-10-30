@@ -81,9 +81,9 @@ const PRIORITY = [
 ] as const;
 
 /** research `/cn-equity/quotes` 单次最多约 80；分块拉可视窗口。 */
-const QUOTE_CHUNK = 60;
+const QUOTE_CHUNK = 80;
 /** 报价窗口在可视区外再多拉若干行，滚动时少闪「—」。 */
-const QUOTE_BUFFER = 24;
+const QUOTE_BUFFER = 40;
 
 /** 主 Tab：分时 | 日K | 其他周期 */
 type ChartTab = "intraday" | "1d" | "other";
@@ -211,12 +211,14 @@ function defaultSelected(asset: CnAssetClass): string {
 }
 
 function quoteToken(row: Pick<CodeRow, "stock_code" | "exchange" | "category" | "qdb_exchange">): string {
-  const cat = row.category || "stock";
-  if (cat !== "stock") {
-    const ex = row.qdb_exchange || uiToQdbExchange(row.exchange);
-    return `${ex}:${row.stock_code}`;
-  }
-  return row.stock_code;
+  // 一律带交易所，避免 000001 等跨所串价；research 可精确打 qdb / 冷日线兜底
+  const ex = row.qdb_exchange || uiToQdbExchange(row.exchange);
+  return `${ex}:${row.stock_code}`;
+}
+
+function quotePriceOk(price: unknown): boolean {
+  const n = Number(price);
+  return Number.isFinite(n) && n > 0;
 }
 
 type Quote = {
@@ -431,7 +433,7 @@ export default function CnEquityPage() {
         );
       } else if (body.meta?.universe === "full" || (typeof n === "number" && n > 100)) {
         setCatalogNote(
-          `全市场 ${n ?? "—"} 只；列表可滚动；报价按可视窗口分批（有滞后）；K 线完整回填仅热门 seed`,
+          `全市场 ${n ?? "—"} 只；可视区分批报价（盘中有滞后）；缺价回落日线收盘；K 线完整回填仅热门 seed`,
         );
       } else if (body.meta?.note) {
         setCatalogNote(body.meta.note);
@@ -1596,7 +1598,7 @@ export default function CnEquityPage() {
         <span className="bn-label">红涨绿跌 · 指数/ETF/转债已接冷库</span>
         <span className="bn-status-right">
           {selected} {name}
-          {q?.price != null ? ` · ${fmt(q.price, 2)}` : ""}
+          {quotePriceOk(q?.price) ? ` · ${fmt(q.price, 2)}` : ""}
         </span>
       </footer>
     </div>
@@ -1627,10 +1629,18 @@ function CnEquityMktRow({
         <em>{row.short_name || quote?.short_name || "—"}</em>
       </span>
       <span className={`bn-mono ${flashClass(flash)}`}>
-        {fmt(quote?.price, 2)}
+        {quotePriceOk(quote?.price) ? fmt(quote?.price, 2) : "—"}
       </span>
-      <span className={Number.isFinite(pct) ? (pct >= 0 ? "up" : "down") : ""}>
-        {Number.isFinite(pct)
+      <span
+        className={
+          quotePriceOk(quote?.price) && Number.isFinite(pct)
+            ? pct >= 0
+              ? "up"
+              : "down"
+            : ""
+        }
+      >
+        {quotePriceOk(quote?.price) && Number.isFinite(pct)
           ? `${pct >= 0 ? "+" : ""}${fmt(pct, 2)}%`
           : "—"}
       </span>

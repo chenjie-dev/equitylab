@@ -145,6 +145,18 @@ def main() -> None:
             except Exception as exc:
                 print(f"backfill index {ex}:{code} failed: {exc}", flush=True)
         print("collector index backfill done", flush=True)
+        # 回填后再立刻刷一轮 seed 报价，列表首屏不必等完整 round-robin
+        try:
+            from volume_anchor import VolumeState
+
+            prime_vol: dict[str, VolumeState] = {}
+            poll_quotes(list(kline_codes), prime_vol)
+            print(
+                f"collector cn_equity prime quotes n={len(kline_codes)}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"collector cn_equity prime quotes failed: {exc}", flush=True)
     else:
         print("collector cn_equity backfill skipped (COLLECTOR_SKIP_CN_EQUITY)", flush=True)
 
@@ -288,7 +300,11 @@ def backfill(code: str) -> None:
 
 
 def backfill_ex(exchange: str, code: str) -> None:
-    """按交易所回填 K 线（指数用 SSE:000001，勿走个股前缀）。"""
+    """按交易所回填 K 线（指数用 SSE:000001，勿走个股前缀）。
+
+    启动期只灌最近若干棒进 qdb（防 /v1/trades 120s 卡住拖死 live poll）；
+    冷库日线/分钟仍尽量写满 Postgres。
+    """
     from retention import cutoff_ns
 
     from equitylab_market import pg as pg_market
@@ -296,8 +312,14 @@ def backfill_ex(exchange: str, code: str) -> None:
 
     code6 = _cn_code6(code)
     symbol = f"{exchange}:{code6}"
-    have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m")}
-    have_1d = {int(row["ts"]) for row in get_klines(symbol, "1d")}
+    qdb_bar_cap = max(16, int(os.environ.get("COLLECTOR_BACKFILL_QDB_BARS", "48")))
+    post_timeout = max(5.0, float(os.environ.get("COLLECTOR_BACKFILL_POST_TIMEOUT", "20")))
+    try:
+        have_5m = {int(row["ts"]) for row in get_klines(symbol, "5m", limit=500)}
+        have_1d = {int(row["ts"]) for row in get_klines(symbol, "1d", limit=400)}
+    except Exception as exc:
+        print(f"backfill {symbol} klines probe failed: {exc}", flush=True)
+        have_5m, have_1d = set(), set()
     minute = sina_klines_pkg(code6, scale_min=5, limit=500, exchange=exchange)
     daily = sina_klines_pkg(code6, scale_min=240, limit=300, exchange=exchange)
     # 历史棒同时落 Postgres market.*（冷库）；失败不阻断 qdb 回填
@@ -329,15 +351,34 @@ def backfill_ex(exchange: str, code: str) -> None:
             continue
         events.append((ts, bar, "5m"))
     events.sort(key=lambda item: item[0])
+    # 默认不把历史 trades 灌进 qdb：冷启动大批量 /v1/trades 易把引擎拖死，
+    # live poll 起不来 → 列表长期无现价。冷库已在 PG；K 线可由盘中成交再长。
+    # 需要种子 K 线时设 COLLECTOR_BACKFILL_QDB_TRADES=1。
+    write_qdb_trades = _env_flag("COLLECTOR_BACKFILL_QDB_TRADES", "0")
+    if not write_qdb_trades:
+        return
+    if len(events) > qdb_bar_cap:
+        events = events[-qdb_bar_cap:]
     trades: list[dict] = []
     for ts, bar, _kind in events:
         trades.extend(ohlc_trades(exchange, code6, ts, bar))
     if trades:
-        # 启动期尚无 live poll：直写 qdb，避免与币安高优先队列抢、并保证先于未闭合桶落盘
-        batch = 256
+        # 直写 qdb；短超时，单批失败即停本票，不拖全表
+        batch = 128
+        written = 0
         for i in range(0, len(trades), batch):
-            _post_raw("/v1/trades", {"items": trades[i : i + batch]})
-        print(f"backfill {symbol} trades={len(trades)}", flush=True)
+            chunk = trades[i : i + batch]
+            try:
+                qdb.post_json("/v1/trades", {"items": chunk}, timeout=post_timeout)
+                written += len(chunk)
+            except Exception as exc:
+                print(
+                    f"backfill {symbol} trades batch failed "
+                    f"written={written}/{len(trades)}: {exc}",
+                    flush=True,
+                )
+                break
+        print(f"backfill {symbol} trades={written}/{len(trades)}", flush=True)
 
 
 def poll_index_quotes(last_vol: dict) -> None:
@@ -386,21 +427,28 @@ def _ingest_sina_hq(
     clock_date = _shanghai_clock_date()
     session_day = sess_cal.is_cn_session_day(clock_date)
     for row in rows:
+        px = float(row.get("price") or 0)
+        pre = float(row.get("pre_close") or 0)
+        # 新浪停牌/退市常见全 0；写入会盖掉旧好价且列表显示 0.00
+        if px <= 0:
+            if pre <= 0:
+                continue
+            px = pre
         quotes.append(
             {
                 "exchange": row["exchange"],
                 "code": row["code"],
                 "ts_ns": now_ns,
-                "last": scale(row["price"]),
+                "last": scale(px),
                 # qdb QuoteIn：bid_px/ask_px 为 scale 整数（第 1 档）
                 "bid_px": scale(row["bid"]) if row.get("bid") else 0,
                 "ask_px": scale(row["ask"]) if row.get("ask") else 0,
                 "name": row["name"],
-                "open": row["open"],
-                "high": row["high"],
-                "low": row["low"],
-                "pre_close": row["pre_close"],
-                "price": row["price"],
+                "open": row["open"] or px,
+                "high": row["high"] or px,
+                "low": row["low"] or px,
+                "pre_close": pre or px,
+                "price": px,
                 "volume": row["volume"],
                 "amount": row["amount"],
             }
