@@ -72,18 +72,22 @@ def main() -> None:
         post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
         rotator = cn_u.QuoteRotator(codes, seed=seed)
         pm.set_universe(len(codes))
-        # 每批实际旋转量 ≈ min(batch, 100-热门seed)；估算全表一轮滞后
+        # 热门与旋转并行各吃满 100；盘中 interval 取 SESSION 与 base 较小者
         rotate_n = max(1, len(codes) - len(seed))
-        seed_slots = cn_u.quote_seed_prepend_n()
-        per_tick = max(
-            1,
-            min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX - seed_slots),
-        )
-        lag_s = (rotate_n / per_tick) * INTERVAL if codes else 0.0
+        per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX))
+        try:
+            from session_calendar import SESSION_INTERVAL_MS
+
+            session_iv = max(0.2, SESSION_INTERVAL_MS / 1000.0)
+        except Exception:
+            session_iv = INTERVAL
+        tick_iv = min(INTERVAL, session_iv) if INTERVAL > 0 else session_iv
+        lag_s = (rotate_n / per_tick) * tick_iv if codes else 0.0
         pm.set_full_cycle_seconds(lag_s)
         print(
             f"collector cn_equity catalog count={doc['count']} source={doc['source']} "
             f"kline_backfill={len(kline_codes)} quote_full_cycle_s≈{lag_s:.0f} "
+            f"(parallel seed+rotate, session_ms≈{int(tick_iv * 1000)}) "
             f"doc={cn_u.CODES_DOC_KEY}",
             flush=True,
         )
@@ -206,8 +210,28 @@ def main() -> None:
         session_day = sess_cal.is_cn_session_day()
         if not skip_cn_equity and rotator is not None:
             try:
-                batch = rotator.next_batch()
-                poll_quotes(batch, last_vol)
+                hot = rotator.hot_seed()
+                rotate = rotator.next_rotate_batch()
+                # 并行拉新浪：热门与全表旋转各一请求，全表一轮约快一倍
+                fetch_jobs: list[tuple[str, list[str]]] = []
+                if hot:
+                    fetch_jobs.append(("seed", hot))
+                if rotate:
+                    fetch_jobs.append(("rotate", rotate))
+                texts: list[str] = []
+                if len(fetch_jobs) >= 2:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        futs = [
+                            pool.submit(_fetch_sina_hq_text, codes)
+                            for _, codes in fetch_jobs
+                        ]
+                        texts = [f.result() for f in futs]
+                elif fetch_jobs:
+                    texts = [_fetch_sina_hq_text(fetch_jobs[0][1])]
+                for text in texts:
+                    _ingest_sina_hq(parse_sina(text), last_vol)
             except Exception as exc:
                 print(f"cn_equity poll failed: {exc}", flush=True)
                 pm.inc_qdb_error()
@@ -381,20 +405,43 @@ def backfill_ex(exchange: str, code: str) -> None:
         print(f"backfill {symbol} trades={written}/{len(trades)}", flush=True)
 
 
+# 新浪直连：勿走 COLLECTOR_HTTPS_PROXY / 全局代理（国内节点，代理只会拖慢）
+_sina_session: requests.Session | None = None
+_depth_tick = 0
+DEPTH_EVERY = max(1, int(os.environ.get("CN_EQUITY_DEPTH_EVERY", "4")))
+
+
+def _sina_http() -> requests.Session:
+    global _sina_session
+    if _sina_session is None:
+        _sina_session = requests.Session()
+        _sina_session.trust_env = False
+        _sina_session.headers.update(UA)
+    return _sina_session
+
+
+def _fetch_sina_hq_text(codes: list[str]) -> str:
+    if not codes:
+        return ""
+    symbols = ",".join(sina_symbol(c) for c in codes)
+    r = _sina_http().get(f"https://hq.sinajs.cn/list={symbols}", timeout=8)
+    r.raise_for_status()
+    return r.content.decode("gb18030", "replace")
+
+
 def poll_index_quotes(last_vol: dict) -> None:
     """主流指数报价 → qdb（sh000001 等；与个股 000001 分交易所）。"""
     from equitylab_market.sina import sina_symbol_ex
 
     symbols = ",".join(sina_symbol_ex(ex, code) for ex, code in INDEX_SEED)
-    text = requests.get(
-        f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8
-    ).content.decode("gb18030", "replace")
+    r = _sina_http().get(f"https://hq.sinajs.cn/list={symbols}", timeout=8)
+    r.raise_for_status()
+    text = r.content.decode("gb18030", "replace")
     _ingest_sina_hq(parse_sina(text), last_vol, vol_key_prefix="idx:")
 
 
 def poll_quotes(codes: list[str], last_vol: dict) -> None:
-    symbols = ",".join(sina_symbol(c) for c in codes)
-    text = requests.get(f"https://hq.sinajs.cn/list={symbols}", headers=UA, timeout=8).content.decode("gb18030", "replace")
+    text = _fetch_sina_hq_text(codes)
     _ingest_sina_hq(parse_sina(text), last_vol)
 
 
@@ -420,12 +467,15 @@ def _ingest_sina_hq(
     from volume_anchor import next_volume_anchor
     import session_calendar as sess_cal
 
+    global _depth_tick
     quotes = []
     trades = []
     depth_docs: list[dict] = []
     now_ns = int(time.time() * 1_000_000_000)
     clock_date = _shanghai_clock_date()
     session_day = sess_cal.is_cn_session_day(clock_date)
+    _depth_tick += 1
+    write_depth = (_depth_tick % DEPTH_EVERY) == 0 or vol_key_prefix == "idx:"
     for row in rows:
         px = float(row.get("price") or 0)
         pre = float(row.get("pre_close") or 0)
@@ -454,9 +504,10 @@ def _ingest_sina_hq(
             }
         )
         # 五档进 docs（引擎 quotes 只落买一/卖一）；读路径经 GET /v1/docs
+        # 全表每 tick 写五档会打满 write_gate；按 CN_EQUITY_DEPTH_EVERY 节流
         bids = row.get("bids") or []
         asks = row.get("asks") or []
-        if bids or asks:
+        if write_depth and (bids or asks):
             symbol = f"{row['exchange']}:{row['code']}"
             depth_docs.append(
                 {
@@ -487,7 +538,7 @@ def _ingest_sina_hq(
                     "exchange": row["exchange"],
                     "code": row["code"],
                     "ts_ns": now_ns,
-                    "price": scale(row["price"]),
+                    "price": scale(px),
                     "volume": delta,
                 }
             )

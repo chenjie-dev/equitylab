@@ -100,8 +100,22 @@ def is_cn_session_day(day: date | str | None = None) -> bool:
     return _weekday_fallback(d)
 
 
+# 盘中目标间隔（ms）；可低于 QDB_FEED_MS，加快全表一轮
+SESSION_INTERVAL_MS = float(os.environ.get("COLLECTOR_SESSION_INTERVAL_MS", "800"))
+
+
+def _in_cn_trading_hours(now: datetime | None = None) -> bool:
+    """沪深连续/集合竞价窗（含午休外）：09:15–11:30、13:00–15:05。"""
+    t = now or datetime.now(SH)
+    hm = t.hour * 60 + t.minute
+    return (9 * 60 + 15) <= hm <= (11 * 60 + 30) or (13 * 60) <= hm <= (15 * 60 + 5)
+
+
 def poll_interval_sec(base_interval: float) -> float:
-    """交易日用 COLLECTOR_INTERVAL；休市日拉长。"""
-    if is_cn_session_day():
-        return base_interval
-    return max(base_interval, OFF_SESSION_INTERVAL_SEC)
+    """休市拉长；交易日盘中可压到 COLLECTOR_SESSION_INTERVAL_MS。"""
+    if not is_cn_session_day():
+        return max(base_interval, OFF_SESSION_INTERVAL_SEC)
+    if _in_cn_trading_hours():
+        session_iv = max(0.2, SESSION_INTERVAL_MS / 1000.0)
+        return min(base_interval, session_iv)
+    return base_interval

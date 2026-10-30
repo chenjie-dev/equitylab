@@ -336,18 +336,34 @@ class QuoteRotator:
         if self._i >= len(self._rotate):
             self._i = 0
 
-    def next_batch(self) -> list[str]:
+    def hot_seed(self) -> list[str]:
+        """每 tick 单独请求的热门码（不占旋转批席位）。"""
+        if not self.prepend_seed or not self.seed or self.seed_prepend_n <= 0:
+            return []
+        return list(self.seed[: self.seed_prepend_n])
+
+    def next_rotate_batch(self) -> list[str]:
+        """全表旋转批，吃满新浪硬顶（默认 100），与 hot_seed 并行请求。"""
         if not self.codes:
             return []
         rotate = self._rotate
         if not rotate:
             return list(self.codes)[:SINA_HQ_BATCH_MAX]
-        # 预留热门 seed 名额（默认前 N 只），避免 22 种子吃光 100 硬顶拖慢全表一轮
-        hot = (
-            self.seed[: self.seed_prepend_n]
-            if self.prepend_seed and self.seed and self.seed_prepend_n > 0
-            else []
-        )
+        take = min(max(1, self.batch), SINA_HQ_BATCH_MAX, len(rotate))
+        chunk: list[str] = []
+        for _ in range(take):
+            chunk.append(rotate[self._i % len(rotate)])
+            self._i = (self._i + 1) % len(rotate)
+        return chunk
+
+    def next_batch(self) -> list[str]:
+        """兼容旧路径：热门 + 旋转合并（单请求）；优先用 hot_seed + next_rotate_batch 并行。"""
+        if not self.codes:
+            return []
+        hot = self.hot_seed()
+        rotate = self._rotate
+        if not rotate:
+            return list(dict.fromkeys([*hot, *self.codes]))[:SINA_HQ_BATCH_MAX]
         seed_n = len(hot)
         room = max(1, SINA_HQ_BATCH_MAX - seed_n)
         take = min(max(1, self.batch), room, len(rotate))

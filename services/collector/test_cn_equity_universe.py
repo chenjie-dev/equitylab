@@ -40,6 +40,20 @@ def test_quote_rotator_prepends_seed_and_caps_sina_batch():
     assert batch != batch2
 
 
+def test_quote_rotator_parallel_seed_and_full_rotate():
+    seed = [f"{i:06d}" for i in range(1, 23)]
+    rotate = [f"{i:06d}" for i in range(100000, 100200)]
+    rot = QuoteRotator(seed + rotate, seed=seed, batch=100, prepend_seed=True)
+    rot.seed_prepend_n = 12
+    hot = rot.hot_seed()
+    chunk = rot.next_rotate_batch()
+    assert hot == seed[:12]
+    assert len(chunk) == 100
+    assert not set(hot).intersection(chunk)
+    chunk2 = rot.next_rotate_batch()
+    assert chunk != chunk2
+
+
 def test_build_codes_doc_shape():
     rows = merge_seed_rows([], ["600519", "000001"])
     doc = build_codes_doc(
