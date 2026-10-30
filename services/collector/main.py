@@ -72,9 +72,10 @@ def main() -> None:
         post("/v1/docs", {"items": cn_u.codes_doc_items(doc)})
         rotator = cn_u.QuoteRotator(codes, seed=seed)
         pm.set_universe(len(codes))
-        # 热门与旋转并行各吃满 100；盘中 interval 取 SESSION 与 base 较小者
+        # 热门 1 路 + 旋转 N 路并行；盘中 interval 取 SESSION 与 base 较小者
         rotate_n = max(1, len(codes) - len(seed))
-        per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX))
+        lanes = cn_u.rotate_lanes()
+        per_tick = max(1, min(cn_u.quote_batch_size(), cn_u.SINA_HQ_BATCH_MAX)) * lanes
         try:
             from session_calendar import SESSION_INTERVAL_MS
 
@@ -87,7 +88,7 @@ def main() -> None:
         print(
             f"collector cn_equity catalog count={doc['count']} source={doc['source']} "
             f"kline_backfill={len(kline_codes)} quote_full_cycle_s≈{lag_s:.0f} "
-            f"(parallel seed+rotate, session_ms≈{int(tick_iv * 1000)}) "
+            f"(seed+rotate×{lanes}, session_ms≈{int(tick_iv * 1000)}) "
             f"doc={cn_u.CODES_DOC_KEY}",
             flush=True,
         )
@@ -211,35 +212,28 @@ def main() -> None:
         if not skip_cn_equity and rotator is not None:
             try:
                 hot = rotator.hot_seed()
-                rotate = rotator.next_rotate_batch()
-                # 并行拉新浪：热门与全表旋转各一请求，全表一轮约快一倍
-                fetch_jobs: list[tuple[str, list[str]]] = []
+                lanes = cn_u.rotate_lanes()
+                rotate_batches = [
+                    rotator.next_rotate_batch() for _ in range(lanes)
+                ]
+                # 并行拉新浪：1 路热门 + N 路旋转（各 ≤100）
+                fetch_codes: list[list[str]] = []
                 if hot:
-                    fetch_jobs.append(("seed", hot))
-                if rotate:
-                    fetch_jobs.append(("rotate", rotate))
-                texts: list[str] = []
-                if len(fetch_jobs) >= 2:
-                    from concurrent.futures import ThreadPoolExecutor
-
-                    with ThreadPoolExecutor(max_workers=2) as pool:
-                        futs = [
-                            pool.submit(_fetch_sina_hq_text, codes)
-                            for _, codes in fetch_jobs
-                        ]
-                        texts = [f.result() for f in futs]
-                elif fetch_jobs:
-                    texts = [_fetch_sina_hq_text(fetch_jobs[0][1])]
+                    fetch_codes.append(hot)
+                fetch_codes.extend(b for b in rotate_batches if b)
+                texts = _fetch_sina_hq_parallel(fetch_codes)
                 for text in texts:
                     _ingest_sina_hq(parse_sina(text), last_vol)
             except Exception as exc:
                 print(f"cn_equity poll failed: {exc}", flush=True)
                 pm.inc_qdb_error()
-            try:
-                poll_index_quotes(last_vol)
-            except Exception as exc:
-                print(f"cn_equity index poll failed: {exc}", flush=True)
-                pm.inc_qdb_error()
+            # 指数体量小，隔轮刷新即可，把带宽留给个股旋转
+            if cycle % max(1, int(os.environ.get("CN_EQUITY_INDEX_EVERY", "2"))) == 0:
+                try:
+                    poll_index_quotes(last_vol)
+                except Exception as exc:
+                    print(f"cn_equity index poll failed: {exc}", flush=True)
+                    pm.inc_qdb_error()
         # WS 健康时 noop；断流才 REST 兜底
         try:
             markets.poll_quotes_hot()
@@ -407,6 +401,7 @@ def backfill_ex(exchange: str, code: str) -> None:
 
 # 新浪直连：勿走 COLLECTOR_HTTPS_PROXY / 全局代理（国内节点，代理只会拖慢）
 _sina_session: requests.Session | None = None
+_sina_pool = None  # ThreadPoolExecutor，懒创建
 _depth_tick = 0
 DEPTH_EVERY = max(1, int(os.environ.get("CN_EQUITY_DEPTH_EVERY", "4")))
 
@@ -420,6 +415,18 @@ def _sina_http() -> requests.Session:
     return _sina_session
 
 
+def _sina_executor():
+    global _sina_pool
+    if _sina_pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        # seed + 最多 4 旋转车道
+        _sina_pool = ThreadPoolExecutor(
+            max_workers=5, thread_name_prefix="sina-hq"
+        )
+    return _sina_pool
+
+
 def _fetch_sina_hq_text(codes: list[str]) -> str:
     if not codes:
         return ""
@@ -427,6 +434,17 @@ def _fetch_sina_hq_text(codes: list[str]) -> str:
     r = _sina_http().get(f"https://hq.sinajs.cn/list={symbols}", timeout=8)
     r.raise_for_status()
     return r.content.decode("gb18030", "replace")
+
+
+def _fetch_sina_hq_parallel(batches: list[list[str]]) -> list[str]:
+    """并行拉多批 hq；单批则同步，避免线程池开销。"""
+    clean = [b for b in batches if b]
+    if not clean:
+        return []
+    if len(clean) == 1:
+        return [_fetch_sina_hq_text(clean[0])]
+    futs = [_sina_executor().submit(_fetch_sina_hq_text, b) for b in clean]
+    return [f.result() for f in futs]
 
 
 def poll_index_quotes(last_vol: dict) -> None:

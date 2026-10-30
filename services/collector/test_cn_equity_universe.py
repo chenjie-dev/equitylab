@@ -54,6 +54,20 @@ def test_quote_rotator_parallel_seed_and_full_rotate():
     assert chunk != chunk2
 
 
+def test_rotate_lanes_advances_without_overlap():
+    from cn_equity_universe import rotate_lanes
+
+    assert 1 <= rotate_lanes() <= 4
+    seed = [f"{i:06d}" for i in range(1, 5)]
+    rotate = [f"{i:06d}" for i in range(100000, 100300)]
+    rot = QuoteRotator(seed + rotate, seed=seed, batch=100, prepend_seed=True)
+    rot.seed_prepend_n = 2
+    a = rot.next_rotate_batch()
+    b = rot.next_rotate_batch()
+    assert len(a) == 100 and len(b) == 100
+    assert not set(a).intersection(b)
+
+
 def test_build_codes_doc_shape():
     rows = merge_seed_rows([], ["600519", "000001"])
     doc = build_codes_doc(

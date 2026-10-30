@@ -67,6 +67,15 @@ def quote_seed_prepend_n() -> int:
     return max(0, min(SINA_HQ_BATCH_MAX - 1, n))
 
 
+def rotate_lanes() -> int:
+    """每 tick 并行旋转批次数（各 ≤100）；默认 2 → 全表一轮约减半。"""
+    try:
+        n = int(os.environ.get("CN_EQUITY_ROTATE_LANES", "2"))
+    except ValueError:
+        n = 2
+    return max(1, min(4, n))
+
+
 def universe_refresh_sec() -> float:
     return max(300.0, float(os.environ.get("CN_EQUITY_UNIVERSE_REFRESH_SEC", "21600")))
 
