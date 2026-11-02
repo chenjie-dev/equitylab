@@ -41,6 +41,9 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `COLLECTOR_METRICS_PORT` / `COLLECTOR_HEALTH_HOST_PORT` | 9101 / 9105 | collector Prometheus + 守护 `/health`（宿主机映射） |
 | `HISTORY_INGEST_METRICS_PORT` | 9102 | history-ingest metrics（内网 scrape） |
 | `COLLECTOR_WATCHDOG_SEC` / `_WS_RESTART_SEC` / `_ACTION_COOLDOWN_SEC` | 15 / 90 / 180 | 守护探测间隔；热 WS 持续不健康后重启；自愈冷却 |
+| `COLLECTOR_SKIP_CN_EQUITY` | `1`（默认） | A 股 history-only：跳过盘中报价/盘口；冷 K 走 history-ingest |
+| `HISTORY_INGEST_MINUTE_PERIODS` | `5m,15m,60m` | A 股分钟冷回补周期（60m 存 `1h`） |
+| `HISTORY_INGEST_MINUTE_DATALEN` / `_MIN_BARS` / `_WINDOW_DAYS` | 500 / 80 / 40 | 分钟短窗；不做半年硬灌 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector、history-ingest |
@@ -110,7 +113,8 @@ docker compose down
 | market-data 日志 Redis warn | 启动瞬间 Redis 未就绪或 URL 错 | 检查 `REDIS_URL=redis://redis:6379`；无缓存仍可返回报价 |
 | chat 502 | 编排层未起或路径错误 | `docker compose ps` / `logs orchestrator` |
 | 币安 K 线浅 / 左滑空 | PG 未回补或 `BINANCE_KLINE_BACKFILL=0` | `SELECT count(*) … exchange_code='BINANCE'`；`logs collector` 找 `binance PG backfill`；见 [热冷分离](../market/2026-10-30-binance-热冷分离.md) |
-| A 股 `/markets/cn` 或 `SSE:600519` 快照一直空 | `.env` 留着 `COLLECTOR_SKIP_CN_EQUITY=1`（排障应急未关回） | 设 `COLLECTOR_SKIP_CN_EQUITY=0`（或删掉该行，compose 默认 0）；`docker compose up -d --force-recreate collector`；日志应有 `cn_equity=N` 而非 `cn_equity=skip`；再 curl `http://localhost:9090/v1/snapshots?symbols=SSE:600519` |
+| A 股无盘中报价（预期） | 默认 `COLLECTOR_SKIP_CN_EQUITY=1` | 列表价看 `bar_daily`；K 线 `curl .../cn-equity/klines/600519?view=history&k_type=5m`；需盘中时显式设 `=0` 并 recreate collector |
+| A 股分钟 K 空 | history-ingest 未灌分钟或窗口不够 | 日志含 `minute_periods=`；`SELECT period,count(*) FROM market.bar_minute GROUP BY 1`；检查 `HISTORY_INGEST_MINUTE_SKIP` |
 | 非 seed 票历史 K 很少 / `source=qdb` 短窗 | `history-ingest` 未跑或刚起步 | `docker compose logs history-ingest` 应有 `cover=` / `fill=`；PG：`SELECT count(*) FROM market.bar_daily`；设 `HISTORY_INGEST_SKIP=0` |
 | A 股有数但价格落后新浪 / 倒退 | write_gate quotes FIFO 积压，过期 last 盖回快照 | collector `write_gate` quotes 按 `exchange:code` 只留最新；日志 `q_pending` 应≈标的数；对比新浪 `hq.sinajs.cn/list=sh600519` vs `localhost:9090/v1/snapshots?symbols=SSE:600519`，盘中 \|lag\| 宜 <1 元 |
 | A 股报价对、日/分钟 K 几乎只有今天 | live poll 早于 backfill → qdb `late_tick` 丢历史；或 `bar_ts` 曾把北京时间当 UTC | collector 须先同步 cn_equity backfill 再 poll；清空卷 `docker compose stop collector && docker volume rm equitylab-qdbdata && docker compose up -d --build qdb collector`；日志应先有 `cn_equity backfill … blocking` / `cn_equity backfill done` 再有 live tick |

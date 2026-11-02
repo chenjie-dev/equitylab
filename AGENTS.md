@@ -129,7 +129,7 @@ docs/<topic>/YYYY-MM-DD-<标题>.md   # 例：market/ platform/ agents/
 2. **读写顺序**：collector 写入就绪 → research / market-data 读通 → frontend；逆序不得报绿。 
 3. **符号**：A 股 `SSE` / `SZSE` / `BSE` + 6 位码；北交所 `4*`/`8*`/`92*` **先于**「9→SSE」；cn-equity 列表 **禁止** `BINANCE` / `ONDO` / 加密货币代码。 
 4. **图表**：换票须全量 `setData`（禁止旧序列挂新 `seriesKey`）；价格轴按 OHLC 自适应，**不得**默认从 0 起压扁走势。 
-5. **环境陷阱**：`COLLECTOR_SKIP_CN_EQUITY=1`、`BINANCE_WS_WRITE_QUOTES=0` 等仅为排障应急；**不得**作为默认完成态。冒烟须断言日志（如 `cn_equity=N` 而非 `cn_equity=skip`）或 snapshots / `market.bar_*` 非空。 
+5. **环境陷阱**：A 股产品面默认 **history-only**（`COLLECTOR_SKIP_CN_EQUITY=1`）：冒烟断言 history-ingest 日志/`market.bar_*`（日+分钟），勿要求 `cn_equity=N` 盘中报价。`BINANCE_WS_WRITE_QUOTES=0` 仍仅为排障应急，不得当币安完成态。 
 6. **可观测**：数据面改动至少验证一条日志关键字或 docs/snapshots / PG 计数字段（如 `cn-equity:codes` count、`pg_market`、`write gate`）。 
 7. **热冷不串权**：research 不得把 realtime 写进 `market`；collector 以外不得写 `market`；market-data 不读 A 股 `market` 历史。
 

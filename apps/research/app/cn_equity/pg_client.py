@@ -20,12 +20,13 @@ _conn = None  # type: ignore[var-annotated]
 SH = ZoneInfo("Asia/Shanghai")
 
 # k_type → (store, period)
+# period 与 equitylab_market.pg.normalize_bar_period 对齐：60m 存 1h
 _PERIOD_MAP = {
     "1d": ("daily", None),
     "5m": ("minute", "5m"),
     "15m": ("minute", "15m"),
-    "60m": ("minute", "60m"),
-    "1h": ("minute", "60m"),
+    "60m": ("minute", "1h"),
+    "1h": ("minute", "1h"),
     "1m": ("minute", "1m"),
     # 周/月：读日线后由 service 折叠
     "1w": ("daily", None),

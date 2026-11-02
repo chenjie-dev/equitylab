@@ -2,7 +2,7 @@
 
 /**
  * A 股行情台（同花顺启发布局）：左列表 | 中图 | 右五档/资金/财务/热榜。
- * 只读 qdb / Postgres 冷库；浏览器 `/api/cn-equity/*` 经 gateway 直转 research。
+ * 历史模式：K/列表价读冷库；无盘中报价/盘口/qdb 订阅。
  */
 
 import {
@@ -35,25 +35,10 @@ import {
   type IndexStripItem,
 } from "../../components/markets/CnIndexStrip";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
-import { useQdbSnapshot } from "../../components/markets/useQdbSnapshot";
-
-/** 与 research/collector 一致：北交所 4/8/92 → BSE；须先于「9→SSE」。 */
-function cnEquityQdbSymbol(code: string, exchange?: string): string {
-  const c = code.replace(/\D/g, "").slice(-6).padStart(6, "0");
-  if (exchange) return `${uiToQdbExchange(exchange)}:${c}`;
-  let ex = "SZSE";
-  if (c.startsWith("4") || c.startsWith("8") || c.startsWith("92")) {
-    ex = "BSE";
-  } else if (c.startsWith("5") || c.startsWith("6") || c.startsWith("9")) {
-    ex = "SSE";
-  }
-  return `${ex}:${c}`;
-}
 
 /**
- * 热门置顶（与 collector seed / K 线回填集对齐）。
- * 全市场代码来自 qdb `cn-equity:codes`（数千）；列表报价 round-robin 有滞后。
- * K 线历史默认仅 seed/priority 有回填，其余可能只有盘中快照合成。
+ * 热门置顶（与 history-ingest seed 对齐）。
+ * 全市场代码来自 qdb `cn-equity:codes`；列表价取日线收盘（历史模式）。
  */
 const PRIORITY = [
   "600519",
@@ -361,7 +346,6 @@ export default function CnEquityPage() {
     { seat_name?: string; side?: string; net_amount?: number | null }[]
   >([]);
   const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
   const [loadingCodes, setLoadingCodes] = useState(true);
   const [catalogNote, setCatalogNote] = useState<string | null>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 40 });
@@ -429,11 +413,11 @@ export default function CnEquityPage() {
       if (assetClass !== "stock") {
         setCatalogNote(
           body.meta?.note ||
-            `${assetClass} ${n ?? "—"} 只 · 目录 Postgres · 报价 qdb/日线`,
+            `${assetClass} ${n ?? "—"} 只 · 历史模式 · 列表价取日线收盘`,
         );
       } else if (body.meta?.universe === "full" || (typeof n === "number" && n > 100)) {
         setCatalogNote(
-          `全市场 ${n ?? "—"} 只；可视区分批报价（盘中有滞后）；缺价回落日线收盘；K 线完整回填仅热门 seed`,
+          `全市场 ${n ?? "—"} 只 · 历史模式（无盘中报价）· K 线多周期冷库回补中`,
         );
       } else if (body.meta?.note) {
         setCatalogNote(body.meta.note);
@@ -516,7 +500,7 @@ export default function CnEquityPage() {
         k_type: kt,
         limit: "300",
         adjust_type: "1",
-        view: "merged",
+        view: "history",
         exchange: ex,
         category: assetClass,
       });
@@ -535,13 +519,14 @@ export default function CnEquityPage() {
         history?: { count?: number };
         realtime?: { bar?: unknown } | null;
         view?: string;
+        source?: string;
       };
       setKlines(mapCandles(body.data ?? []));
       setKMeta({
         session: body.session?.status,
-        historyCount: body.history?.count,
-        hasRealtime: Boolean(body.realtime?.bar),
-        view: body.view ?? "merged",
+        historyCount: body.history?.count ?? body.data?.length,
+        hasRealtime: false,
+        view: body.view ?? "history",
       });
     },
     [],
@@ -821,47 +806,11 @@ export default function CnEquityPage() {
     return want;
   }, [displayList, visibleRange, selected, selectedEx, asset]);
 
+  // 历史模式：列表价拉一次日线收盘即可，不轮询盘中
   useEffect(() => {
     if (!quoteCodes.length) return;
     void loadQuotes(quoteCodes, asset);
-    const id = setInterval(() => setTick((n) => n + 1), 30_000);
-    return () => clearInterval(id);
   }, [quoteCodes, loadQuotes, asset]);
-
-  useEffect(() => {
-    if (tick === 0) return;
-    void loadQuotes(quoteCodes, asset);
-  }, [tick, quoteCodes, loadQuotes, asset]);
-
-  useQdbSnapshot(
-    selected ? cnEquityQdbSymbol(selected, selectedEx) : null,
-    (row) => {
-      const price = row.last;
-      setQuotes((prev) => {
-        const cur = prev[selected];
-        const pre = Number(cur?.pre_close);
-        let change = cur?.change;
-        let changePct = cur?.change_pct;
-        if (Number.isFinite(price) && Number.isFinite(pre) && pre !== 0) {
-          change = Math.round((price - pre) * 10000) / 10000;
-          changePct = Math.round(((price - pre) / pre) * 10000) / 100;
-        }
-        return {
-          ...prev,
-          [selected]: {
-            ...cur,
-            stock_code: selected,
-            short_name: cur?.short_name ?? "",
-            price,
-            change,
-            change_pct: changePct,
-            bid: row.bid ?? cur?.bid,
-            ask: row.ask ?? cur?.ask,
-          },
-        };
-      });
-    },
-  );
 
   useEffect(() => {
     if (!selected) return;
@@ -877,12 +826,12 @@ export default function CnEquityPage() {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
+    // K 线冷库偶发补数：低频刷新；不刷五档
     const id = setInterval(() => {
       void loadKlines(selected, activeKType, selectedEx, asset).catch(
         () => undefined,
       );
-      void loadFive(selected, selectedEx, asset);
-    }, 15_000);
+    }, 120_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1265,10 +1214,8 @@ export default function CnEquityPage() {
             ) : null}
             <span className="bn-label">
               {chartTab === "intraday"
-                ? `分时 · 5 分钟合成 · ${kMeta.historyCount ?? klines.length} 根`
-                : kMeta.hasRealtime
-                  ? `历史 ${kMeta.historyCount ?? "—"} + 实时 · ${kMeta.session ?? "—"}`
-                  : `纯历史 ${kMeta.historyCount ?? klines.length} · ${kMeta.session ?? "closed"}`}
+                ? `分时 · 历史 5 分钟 · ${kMeta.historyCount ?? klines.length} 根`
+                : `历史 ${kMeta.historyCount ?? klines.length} · ${activeKType} · 无盘中`}
               {chartTab !== "intraday" ? " · 前复权" : ""}
             </span>
           </div>
@@ -1357,7 +1304,7 @@ export default function CnEquityPage() {
                 </div>
                 <p className="bn-demo-hint ths-five-note">
                   {five.note ||
-                    "盘口来自 qdb；完整五档依赖 collector 写入 cn-equity:depth。"}
+                    "A 股历史模式：已关闭盘中报价/盘口；最新价取日线收盘。"}
                 </p>
               </>
             ) : null}

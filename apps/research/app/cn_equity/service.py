@@ -374,11 +374,19 @@ class CnEquityService:
 
         ordered = [by_key[k] for k in cache_keys if k in by_key]
         source = "qdb"
+        note = ""
         if pg_n and pg_n == len(ordered):
             source = "postgres:bar_daily"
+            note = "A股历史模式：列表价取末日收盘（盘中报价已关闭）"
         elif pg_n:
             source = "qdb+postgres:bar_daily"
-        return {"data": ordered, "source": source, "category": cat}
+            note = "部分标的无盘中快照，已用日线末日价补齐"
+        elif not ordered:
+            note = "无报价：A股默认关闭盘中采集，待 history-ingest 写入日线后可见末日价"
+        out: dict[str, Any] = {"data": ordered, "source": source, "category": cat}
+        if note:
+            out["note"] = note
+        return out
 
     def index_strip(self) -> dict[str, Any]:
         """顶栏主流指数（上证/深成/创业板/沪深300/上证50/中证1000）。"""
@@ -425,15 +433,15 @@ class CnEquityService:
         end_date: str | None = None,
         adjust_type: int = 1,
         limit: int = 300,
-        view: str = "merged",
+        view: str = "history",
         exchange: str | None = None,
         category: str | None = None,
     ) -> dict[str, Any]:
         """Wind 风格：历史(WSD)与实时(WSQ)分离，再按需合并。
 
-        - history：仅已收盘/已完成 bar
-        - realtime：当日快照合成的未完成 bar（盘中）
-        - merged：history + realtime（默认，供图表）
+        - history：仅已收盘/已完成 bar（A 股产品默认；盘中 qdb 默认关闭）
+        - realtime：当日快照合成的未完成 bar（无热数据时为空）
+        - merged：history + realtime
         - view：history | realtime | merged
         """
         ex_hint, code = self._parse_quote_token(stock_code)
@@ -441,9 +449,9 @@ class CnEquityService:
             code = "".join(ch for ch in stock_code if ch.isdigit())[-6:].zfill(6)
         if ex_hint and not exchange:
             exchange = ex_hint
-        view = (view or "merged").lower()
+        view = (view or "history").lower()
         if view not in ("history", "realtime", "merged"):
-            view = "merged"
+            view = "history"
 
         candles, raw_source = _candles_history(
             code, k_type, limit, exchange=exchange, category=category
@@ -593,9 +601,9 @@ class CnEquityService:
                 note = "仅买一/卖一（snapshots）；完整五档待 collector 写入 cn-equity:depth"
         if not note:
             if (category or "").lower() == "index":
-                note = "指数通常无买卖五档；右侧展示最新价"
+                note = "指数通常无买卖五档"
             else:
-                note = "无盘口数据；等 collector 补 cn-equity:depth 或 quotes bid/ask"
+                note = "A股已关闭盘中报价/盘口（COLLECTOR_SKIP_CN_EQUITY=1）；无五档"
         return {
             "stock_code": code,
             "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
@@ -606,7 +614,8 @@ class CnEquityService:
             "note": note,
             "quote": quote,
             "data": snap_rows,
-            "source": "qdb",
+            "source": "qdb" if (bids or asks or quote) else "none",
+            "history_only": True,
         }
 
     def intraday(
@@ -624,10 +633,16 @@ class CnEquityService:
         ex = pg_client.normalize_exchange(
             exchange or ex_hint, code=code, category=category
         )
-        candles = _candles_from_qdb(code, "5m", 240, exchange=ex)
-        source = "qdb"
-        note = ""
-        # 指数/ETF 缺盘中 5m 时：用近日日线作分时占位（标明 synthetic）
+        # 历史优先：PG 5m；无则回落 qdb 短窗；再无则指数/ETF 用日线占位
+        candles, source = _candles_history(
+            code, "5m", 240, exchange=ex, category=category
+        )
+        note = "历史 5 分钟（冷库）；A股默认无盘中分时"
+        if not candles:
+            candles = _candles_from_qdb(code, "5m", 240, exchange=ex)
+            if candles:
+                source = "qdb"
+                note = "qdb 短窗 5m（冷库尚未覆盖）"
         if not candles and (category or "").lower() in (
             "index",
             "etf",
@@ -639,7 +654,9 @@ class CnEquityService:
             if daily:
                 candles = daily
                 source = f"{src}+synthetic_intraday"
-                note = "无盘中 5m，暂用近日日线占位；等 collector 写入指数分时"
+                note = "无 5m 历史，暂用近日日线占位"
+        if not candles:
+            note = "无分时：待 history-ingest 写入 5m"
         return {
             "stock_code": code,
             "exchange": {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(ex, ex),
@@ -647,6 +664,7 @@ class CnEquityService:
             "data": candles,
             "source": source,
             "note": note,
+            "history_only": True,
         }
 
     def fundamentals(

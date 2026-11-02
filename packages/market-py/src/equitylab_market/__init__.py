@@ -8,6 +8,6 @@
 
 from __future__ import annotations
 
-from equitylab_market import pg, pmc_calendar, sina, symbols
+from equitylab_market import cn_universe, pg, pmc_calendar, sina, symbols
 
-__all__ = ["pg", "pmc_calendar", "sina", "symbols"]
+__all__ = ["cn_universe", "pg", "pmc_calendar", "sina", "symbols"]

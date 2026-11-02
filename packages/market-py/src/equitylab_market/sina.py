@@ -78,3 +78,36 @@ def klines(
 
 def daily_klines(code: str, limit: int = 200, *, timeout: float = 25.0) -> list[dict[str, Any]]:
     return klines(code, scale_min=240, limit=limit, timeout=timeout)
+
+
+# 产品周期 → 新浪 scale（分钟）；60m 写入经 normalize → 1h
+_MINUTE_SCALE: dict[str, int] = {
+    "1m": 1,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "60m": 60,
+    "1h": 60,
+}
+
+
+def minute_scale(period: str) -> int | None:
+    """产品/存库周期 → 新浪 scale；日线请用 240。"""
+    p = (period or "").strip().lower()
+    return _MINUTE_SCALE.get(p)
+
+
+def minute_klines(
+    code: str,
+    period: str,
+    limit: int = 500,
+    *,
+    timeout: float = 25.0,
+    exchange: str | None = None,
+) -> list[dict[str, Any]]:
+    scale = minute_scale(period)
+    if scale is None:
+        return []
+    return klines(
+        code, scale_min=scale, limit=limit, timeout=timeout, exchange=exchange
+    )

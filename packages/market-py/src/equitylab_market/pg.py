@@ -1724,6 +1724,103 @@ def daily_bar_count(
     return {"count": int(row[0] or 0), "min_day": row[1], "max_day": row[2]}
 
 
+def minute_coverage_map(
+    period: str,
+    *,
+    window_start: date | str,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """全表窗口内某分钟周期覆盖（按 trading_day）。period 经 normalize（60m→1h）。"""
+    start = (
+        window_start
+        if isinstance(window_start, date)
+        else date.fromisoformat(str(window_start)[:10])
+    )
+    store = normalize_bar_period(period)
+    conn = _connect()
+    if conn is None:
+        return {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.exchange_code, s.secu_code,
+                   COUNT(b.bar_time)::int AS cnt,
+                   MIN(b.trading_day) AS min_day,
+                   MAX(b.trading_day) AS max_day
+            FROM market.security s
+            LEFT JOIN market.bar_minute b
+              ON b.inner_code = s.inner_code
+             AND b.period = %s
+             AND b.trading_day >= %s
+            WHERE s.exchange_code IN ('SSE', 'SZSE', 'BSE')
+            GROUP BY s.exchange_code, s.secu_code
+            """,
+            (store, start),
+        )
+        for ex, code, cnt, min_day, max_day in cur.fetchall():
+            out[(str(ex), str(code))] = {
+                "count": int(cnt or 0),
+                "min_day": min_day,
+                "max_day": max_day,
+            }
+    return out
+
+
+def minute_bar_count(
+    exchange_code: str,
+    secu_code: str,
+    period: str,
+    *,
+    window_start: date | str,
+) -> dict[str, Any]:
+    """单票窗口内分钟线覆盖。"""
+    start = (
+        window_start
+        if isinstance(window_start, date)
+        else date.fromisoformat(str(window_start)[:10])
+    )
+    store = normalize_bar_period(period)
+    inner = ensure_security(exchange_code, secu_code)
+    if inner is None:
+        return {"count": 0, "min_day": None, "max_day": None}
+    conn = _connect()
+    if conn is None:
+        return {"count": 0, "min_day": None, "max_day": None}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)::int, MIN(trading_day), MAX(trading_day)
+            FROM market.bar_minute
+            WHERE inner_code=%s AND period=%s AND trading_day >= %s
+            """,
+            (inner, store, start),
+        )
+        row = cur.fetchone()
+    if not row:
+        return {"count": 0, "min_day": None, "max_day": None}
+    return {"count": int(row[0] or 0), "min_day": row[1], "max_day": row[2]}
+
+
+def count_bar_minute(*, period: str | None = None) -> int | None:
+    """`market.bar_minute` 行数；可按 period 过滤。"""
+    conn = _connect()
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        if period:
+            store = normalize_bar_period(period)
+            cur.execute(
+                "SELECT COUNT(*)::bigint FROM market.bar_minute WHERE period=%s",
+                (store,),
+            )
+        else:
+            cur.execute("SELECT COUNT(*)::bigint FROM market.bar_minute")
+        row = cur.fetchone()
+    if not row:
+        return 0
+    return int(row[0] or 0)
+
+
 def ingest_sina_klines(
     exchange_code: str,
     secu_code: str,

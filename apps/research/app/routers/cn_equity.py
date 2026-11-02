@@ -116,9 +116,9 @@ async def klines(
     view: Annotated[
         str,
         Query(
-            description="history=已完成 | realtime=盘中未完成 | merged=合成图"
+            description="history=已完成冷K（默认）| realtime=盘中未完成 | merged=合成图"
         ),
-    ] = "merged",
+    ] = "history",
     exchange: Annotated[
         str | None,
         Query(description="SSE/SZSE/BSE 或 SH/SZ/BJ；指数勿省略"),
