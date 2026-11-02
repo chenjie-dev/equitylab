@@ -72,6 +72,13 @@ services:
       - "${QDB_PORT:-9090}:9090"
     volumes:
       - equitylab_qdb:/var/lib/qdb
+    # 全市场卷冷启动常 >20s；镜像默认 start-period 过短会标 unhealthy，拖死 research→前端 klines 500
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9090/v1/snapshots || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
     networks: [equitylab]
 
   # 唯一回源进程：公开行情写入 qdb，其它服务只读 qdb
@@ -349,8 +356,9 @@ services:
       MARKET_DATA_URL: http://market-data:3002
       QDB_URL: ${QDB_URL:-http://qdb:9090}
     depends_on:
+      # A 股 history-only 主读 PG；qdb 慢启动时勿阻塞 cn-equity/klines
       qdb:
-        condition: service_healthy
+        condition: service_started
       qdrant:
         condition: service_started
       market-data:

@@ -71,7 +71,9 @@ const QUOTE_CHUNK = 80;
 const QUOTE_BUFFER = 40;
 
 /** 主 Tab：分时 | 日K | 其他周期 */
-type ChartTab = "intraday" | "1d" | "other";
+/** 与币安页同款平铺；仅冷库/读面已支持的周期 */
+const INTERVALS = ["5m", "15m", "30m", "60m", "1d", "1w", "1M"] as const;
+type Interval = (typeof INTERVALS)[number];
 
 /** 右侧：五档 | 资金 | 财务 | 热榜 */
 type SideTab = "book" | "fund" | "finance" | "hot";
@@ -158,15 +160,6 @@ type LhbRow = {
   net_buy?: number | null;
   change_pct?: number | null;
 };
-
-const OTHER_INTERVALS = [
-  { id: "1w", label: "周K" },
-  { id: "1M", label: "月K" },
-  { id: "60m", label: "60分" },
-  { id: "30m", label: "30分" },
-  { id: "15m", label: "15分" },
-  { id: "5m", label: "5分" },
-] as const;
 
 type CodeRow = {
   stock_code: string;
@@ -322,8 +315,7 @@ export default function CnEquityPage() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState("600519");
   const [selectedEx, setSelectedEx] = useState("SH");
-  const [chartTab, setChartTab] = useState<ChartTab>("intraday");
-  const [otherK, setOtherK] = useState<string>("60m");
+  const [interval, setIntervalTf] = useState<Interval>("1d");
   const [klines, setKlines] = useState<Kline[]>([]);
   const [five, setFive] = useState<FiveBook>({
     bids: [],
@@ -355,8 +347,6 @@ export default function CnEquityPage() {
     hasRealtime?: boolean;
     view?: string;
   }>({});
-
-  const activeKType = chartTab === "1d" ? "1d" : chartTab === "intraday" ? "intraday" : otherK;
 
   // 滚动会高频回调；合并到 rAF，减少 quotes 分块打爆网关（cn-equity 虽已豁免限流，仍降抖）
   const rangeRaf = useRef<number | null>(null);
@@ -460,41 +450,13 @@ export default function CnEquityPage() {
   );
 
   const loadKlines = useCallback(
-    async (code: string, kt: string, exchange: string, assetClass: CnAssetClass) => {
-      if (kt === "intraday") {
-        if (!code?.trim()) return;
-        const qs = new URLSearchParams({
-          exchange: uiToQdbExchange(exchange),
-          category: assetClass,
-        });
-        const res = await fetch(
-          `/api/cn-equity/intraday/${encodeURIComponent(code.trim())}?${qs}`,
-        );
-        if (res.status === 429) return;
-        if (!res.ok) throw new Error(`intraday ${res.status}`);
-        const body = (await res.json()) as {
-          data?: {
-            time?: number | null;
-            open?: number;
-            high?: number;
-            low?: number;
-            close?: number;
-            volume?: number;
-          }[];
-          note?: string;
-          source?: string;
-        };
-        setKlines(mapCandles(body.data ?? []));
-        setKMeta({
-          session: undefined,
-          historyCount: body.data?.length,
-          hasRealtime: false,
-          view: body.note?.includes("占位")
-            ? "intraday-fallback"
-            : "intraday-5m",
-        });
-        return;
-      }
+    async (
+      code: string,
+      kt: Interval,
+      exchange: string,
+      assetClass: CnAssetClass,
+    ) => {
+      if (!code?.trim()) return;
       const ex = uiToQdbExchange(exchange);
       const qs = new URLSearchParams({
         k_type: kt,
@@ -505,7 +467,13 @@ export default function CnEquityPage() {
         category: assetClass,
       });
       const res = await fetch(`/api/cn-equity/klines/${code}?${qs}`);
-      if (!res.ok) throw new Error(`klines ${res.status}`);
+      if (!res.ok) {
+        const hint =
+          res.status >= 500
+            ? "（网关/研究层未就绪，多半是 qdb 冷启动中）"
+            : "";
+        throw new Error(`klines ${res.status}${hint}`);
+      }
       const body = (await res.json()) as {
         data?: {
           time?: number | null;
@@ -517,7 +485,6 @@ export default function CnEquityPage() {
         }[];
         session?: { status?: string };
         history?: { count?: number };
-        realtime?: { bar?: unknown } | null;
         view?: string;
         source?: string;
       };
@@ -725,8 +692,7 @@ export default function CnEquityPage() {
         (asset === "index" && next.startsWith("000"));
       setSelectedEx(sh ? "SH" : "SZ");
     }
-    // 指数/ETF 也默认分时（有 5m 则盘中；否则日线占位）
-    setChartTab("intraday");
+    setIntervalTf("1d");
     setBoard("all");
     setQuery("");
   }, [asset]);
@@ -818,7 +784,7 @@ export default function CnEquityPage() {
     void (async () => {
       try {
         await Promise.all([
-          loadKlines(selected, activeKType, selectedEx, asset),
+          loadKlines(selected, interval, selectedEx, asset),
           loadFive(selected, selectedEx, asset),
         ]);
         if (!cancelled) setError(null);
@@ -828,7 +794,7 @@ export default function CnEquityPage() {
     })();
     // K 线冷库偶发补数：低频刷新；不刷五档
     const id = setInterval(() => {
-      void loadKlines(selected, activeKType, selectedEx, asset).catch(
+      void loadKlines(selected, interval, selectedEx, asset).catch(
         () => undefined,
       );
     }, 120_000);
@@ -836,7 +802,7 @@ export default function CnEquityPage() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [selected, selectedEx, asset, activeKType, loadKlines, loadFive]);
+  }, [selected, selectedEx, asset, interval, loadKlines, loadFive]);
 
   const pickRow = useCallback((row: CodeRow) => {
     startTransition(() => {
@@ -850,7 +816,7 @@ export default function CnEquityPage() {
       setAsset("index");
       setSelected(item.stock_code);
       setSelectedEx(item.exchange);
-      setChartTab("1d");
+      setIntervalTf("1d");
     });
   }, []);
 
@@ -1174,55 +1140,28 @@ export default function CnEquityPage() {
         </aside>
 
         <section className="bn-card bn-chart-panel ths-chart">
-          <div className="bn-tf-row ths-tabs">
+          <div className="bn-tf-row">
             <div className="bn-tf-group">
-              <button
-                type="button"
-                className={chartTab === "intraday" ? "bn-tf active" : "bn-tf"}
-                onClick={() => setChartTab("intraday")}
-              >
-                分时
-              </button>
-              <button
-                type="button"
-                className={chartTab === "1d" ? "bn-tf active" : "bn-tf"}
-                onClick={() => setChartTab("1d")}
-              >
-                日K
-              </button>
-              <button
-                type="button"
-                className={chartTab === "other" ? "bn-tf active" : "bn-tf"}
-                onClick={() => setChartTab("other")}
-              >
-                其他周期
-              </button>
+              <span className="bn-tf-label">周期</span>
+              {INTERVALS.map((tf) => (
+                <button
+                  key={tf}
+                  type="button"
+                  className={tf === interval ? "bn-tf active" : "bn-tf"}
+                  onClick={() => setIntervalTf(tf)}
+                >
+                  {tf}
+                </button>
+              ))}
             </div>
-            {chartTab === "other" ? (
-              <div className="bn-tf-group ths-other">
-                {OTHER_INTERVALS.map((tf) => (
-                  <button
-                    key={tf.id}
-                    type="button"
-                    className={tf.id === otherK ? "bn-tf active" : "bn-tf"}
-                    onClick={() => setOtherK(tf.id)}
-                  >
-                    {tf.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
             <span className="bn-label">
-              {chartTab === "intraday"
-                ? `分时 · 历史 5 分钟 · ${kMeta.historyCount ?? klines.length} 根`
-                : `历史 ${kMeta.historyCount ?? klines.length} · ${activeKType} · 无盘中`}
-              {chartTab !== "intraday" ? " · 前复权" : ""}
+              历史 {kMeta.historyCount ?? klines.length} · {interval} · 前复权
             </span>
           </div>
           <BinanceChart
             klines={klines}
             symbol={`${selected}.${selectedEx}`}
-            seriesKey={`${selectedEx}:${selected}:${activeKType}:${asset}`}
+            seriesKey={`${selectedEx}:${selected}:${interval}:${asset}`}
             palette="wind"
           />
         </section>
