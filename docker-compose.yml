@@ -90,6 +90,11 @@ services:
       COLLECTOR_INTERVAL_MS: ${QDB_FEED_MS:-500}
       COLLECTOR_SKIP_CN_EQUITY: ${COLLECTOR_SKIP_CN_EQUITY:-0}
       METRICS_PORT: ${COLLECTOR_METRICS_PORT:-9101}
+      # 容器内固定 9105（避开 adata 9103 / akshare 9104）；宿主机映射见 ports
+      COLLECTOR_HEALTH_PORT: "9105"
+      COLLECTOR_WATCHDOG_SEC: ${COLLECTOR_WATCHDOG_SEC:-15}
+      COLLECTOR_WATCHDOG_WS_RESTART_SEC: ${COLLECTOR_WATCHDOG_WS_RESTART_SEC:-90}
+      COLLECTOR_WATCHDOG_ACTION_COOLDOWN_SEC: ${COLLECTOR_WATCHDOG_ACTION_COOLDOWN_SEC:-180}
       # full=新浪 hs_a→docs cn-equity:codes + 分批报价；seed=仅 COLLECTOR_CODES
       CN_EQUITY_UNIVERSE: ${CN_EQUITY_UNIVERSE:-full}
       CN_EQUITY_QUOTE_BATCH: ${CN_EQUITY_QUOTE_BATCH:-100}
@@ -141,6 +146,19 @@ services:
       BINANCE_WS_DOC_FLUSH_MS: ${BINANCE_WS_DOC_FLUSH_MS:-400}
       BINANCE_WS_HOT: ${BINANCE_WS_HOT:-}
       BINANCE_WS_SHARD_STAGGER_SEC: ${BINANCE_WS_SHARD_STAGGER_SEC:-0.25}
+    ports:
+      - "${COLLECTOR_METRICS_PORT:-9101}:9101"
+      - "${COLLECTOR_HEALTH_HOST_PORT:-9105}:9105"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9105/health', timeout=3)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
     depends_on:
       qdb:
         condition: service_healthy

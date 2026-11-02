@@ -60,6 +60,19 @@ SNAPSHOT_STALE = Gauge(
     "样本中超过 STALE_QUOTE_SEC 未更新的只数（休市可偏高）",
     ["sample"],
 )
+WATCHDOG_OK = Gauge("equitylab_collector_watchdog_ok", "守护综合健康 1=ok 0=unhealthy")
+WATCHDOG_QDB = Gauge("equitylab_collector_qdb_up", "守护探测 qdb 可达")
+WATCHDOG_CATALOG = Gauge("equitylab_collector_catalog_ok", "binance exchangeInfo 目录就绪")
+WATCHDOG_WS_SHARDS = Gauge(
+    "equitylab_binance_ws_shards",
+    "币安 WS 分片数（tier=hot|cold, state=ok|total）",
+    ["tier", "state"],
+)
+WATCHDOG_ACTIONS = Counter(
+    "equitylab_collector_watchdog_actions_total",
+    "守护自愈动作次数",
+    ["action"],
+)
 
 # 本进程内每标的最后写价时间（unix），供 seed 新鲜度旁路
 _last_write_by_symbol: dict[str, float] = {}
@@ -99,6 +112,31 @@ def observe_poll(seconds: float) -> None:
 
 def set_binance_ws(up: bool) -> None:
     BINANCE_WS_UP.set(1 if up else 0)
+
+
+def set_watchdog(
+    *,
+    ok: bool,
+    qdb_ok: bool,
+    catalog_ok: bool,
+    ws_ok: bool,
+    ws_hot_ok: int,
+    ws_hot_total: int,
+    ws_cold_ok: int,
+    ws_cold_total: int,
+) -> None:
+    WATCHDOG_OK.set(1 if ok else 0)
+    WATCHDOG_QDB.set(1 if qdb_ok else 0)
+    WATCHDOG_CATALOG.set(1 if catalog_ok else 0)
+    BINANCE_WS_UP.set(1 if ws_ok else 0)
+    WATCHDOG_WS_SHARDS.labels(tier="hot", state="ok").set(max(0, ws_hot_ok))
+    WATCHDOG_WS_SHARDS.labels(tier="hot", state="total").set(max(0, ws_hot_total))
+    WATCHDOG_WS_SHARDS.labels(tier="cold", state="ok").set(max(0, ws_cold_ok))
+    WATCHDOG_WS_SHARDS.labels(tier="cold", state="total").set(max(0, ws_cold_total))
+
+
+def inc_watchdog_action(action: str) -> None:
+    WATCHDOG_ACTIONS.labels(action=(action or "unknown")[:64]).inc()
 
 
 def inc_qdb_error() -> None:

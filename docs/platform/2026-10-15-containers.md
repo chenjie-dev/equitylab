@@ -38,7 +38,9 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 |---|---|---|
 | `GATEWAY_PORT` / `FRONTEND_PORT` / `MARKET_DATA_PORT` | 3000 / 3001 / 3002 | 宿主机映射 |
 | `PROMETHEUS_PORT` / `GRAFANA_PORT` / `LOKI_PORT` | 9091 / 3003 / 3100 | 可观测性 UI |
-| `COLLECTOR_METRICS_PORT` / `HISTORY_INGEST_METRICS_PORT` | 9101 / 9102 | 采集族 metrics（仅内网 scrape） |
+| `COLLECTOR_METRICS_PORT` / `COLLECTOR_HEALTH_HOST_PORT` | 9101 / 9105 | collector Prometheus + 守护 `/health`（宿主机映射） |
+| `HISTORY_INGEST_METRICS_PORT` | 9102 | history-ingest metrics（内网 scrape） |
+| `COLLECTOR_WATCHDOG_SEC` / `_WS_RESTART_SEC` / `_ACTION_COOLDOWN_SEC` | 15 / 90 / 180 | 守护探测间隔；热 WS 持续不健康后重启；自愈冷却 |
 | `REDIS_PORT` | 16379 | Redis 宿主机端口 |
 | `DATABASE_URL` / `REDIS_URL` | 指向 compose 服务名 | 容器内互联 |
 | `QDB_URL` / `QDB_PORT` | `http://qdb:9090` / 9090 | research、market-data、collector、history-ingest |
@@ -114,6 +116,7 @@ docker compose down
 | A 股报价对、日/分钟 K 几乎只有今天 | live poll 早于 backfill → qdb `late_tick` 丢历史；或 `bar_ts` 曾把北京时间当 UTC | collector 须先同步 cn_equity backfill 再 poll；清空卷 `docker compose stop collector && docker volume rm equitylab-qdbdata && docker compose up -d --build qdb collector`；日志应先有 `cn_equity backfill … blocking` / `cn_equity backfill done` 再有 live tick |
 | `/v1/klines` 超时、图表 Loading | cn-equity/全量 backfill/过密 trades 占住引擎锁 | `.env`：**临时** `COLLECTOR_SKIP_CN_EQUITY=1`、`BINANCE_KLINE_BACKFILL=0`、`BINANCE_WS_WRITE_TRADES=0`、`BINANCE_KLINE_WRITE_TRADES=0`；**保持** `BINANCE_WS_WRITE_QUOTES=1`（write_gate 已抬优先）；先 `stop collector` 再 `restart qdb`；引擎恢复后**务必**把 `COLLECTOR_SKIP_CN_EQUITY` 改回 `0`，否则 A 股会一直空 |
 | 现货报价很慢 / snapshots 空 | `BINANCE_WS_WRITE_QUOTES=0` 或 RWA 抢写 | 打开 `WRITE_QUOTES=1`；确认日志有 `qdb write gate`；`RWA_WORKERS≤8`、`RWA_BOARD_FLUSH_SEC≥1`；recreate collector |
+| collector `unhealthy` / 行情断流 | qdb 重启、WS 分片断、catalog 丢 | `curl -s localhost:9105/health`；日志 `watchdog`；守护会有限自愈（重发 catalog / 重启 WS）；仍挂则 `compose logs qdb collector` 与 recreate |
 | Stocks 页「暂无标的」/ quote 503 | `www.binance.com` 超时或 `RWA_WORKERS=0` | 宿主机 Clash 等代理测通 bapi 后设 `COLLECTOR_RWA_PROXY=http://host.docker.internal:7897`、`RWA_WORKERS=4`，recreate collector；现货仍可用 `COLLECTOR_HTTPS_PROXY=…:18080` |
 | 行情台卡顿 / 请求过多 | 后台轮询过密、全量 board | 前端已：可见性停表、Stocks 虚拟列表、board `?tickers=` 热路径、K 线 `update` 尾刷；勿把盘口轮询压到 &lt;3s |
 | docs K 线越积越多 | 未开时间窗 | `QDB_RETENTION_DAYS=15`（默认）+ collector `qdb-retention-gc`；日志有 `retention gc`；引擎 WAL 仍无按日删除（见 qdb 行情库文档） |

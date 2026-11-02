@@ -592,12 +592,37 @@ def start_feed(
         return feeds[0] if feeds else None
 
 
-def feed_healthy() -> bool:
+def feed_health_stats() -> dict[str, int]:
+    """分片健康统计，供 watchdog / 指标。"""
     with _HUB_LOCK:
         feeds = list(_HUB_FEEDS)
-    if not feeds:
+    hot_ok = hot_total = cold_ok = cold_total = 0
+    for f in feeds:
+        if f.tier == "hot":
+            hot_total += 1
+            if f.healthy():
+                hot_ok += 1
+        else:
+            cold_total += 1
+            if f.healthy():
+                cold_ok += 1
+    return {
+        "hot_ok": hot_ok,
+        "hot_total": hot_total,
+        "cold_ok": cold_ok,
+        "cold_total": cold_total,
+        "shards": len(feeds),
+    }
+
+
+def feed_healthy() -> bool:
+    st = feed_health_stats()
+    if st["shards"] <= 0:
         return False
-    return any(f.healthy() for f in feeds)
+    # 热门全活；冷端至少一半（错峰启动期）
+    hot_ok = st["hot_total"] == 0 or st["hot_ok"] >= st["hot_total"]
+    cold_ok = st["cold_total"] == 0 or st["cold_ok"] >= max(1, st["cold_total"] // 2)
+    return bool(hot_ok and cold_ok)
 
 
 def hot_set() -> set[str]:

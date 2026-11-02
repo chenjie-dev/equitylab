@@ -52,6 +52,13 @@ def main() -> None:
     from write_gate import start_gate
 
     start_gate(_post_raw)
+    # 进程守护：qdb/WS/catalog/write_gate 探测 + /health + 有限自愈
+    try:
+        from watchdog import start_watchdog
+
+        start_watchdog()
+    except Exception as exc:
+        print(f"collector watchdog start failed: {exc}", flush=True)
     skip_cn_equity = _env_flag("COLLECTOR_SKIP_CN_EQUITY", "0")
     pm.set_skip(skip_cn_equity)
 
