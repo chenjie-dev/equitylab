@@ -444,7 +444,10 @@ def _binance_universe_refresh_worker() -> None:
 
 
 def _binance_catalog_heal_worker() -> None:
-    """qdb 重建后 catalog 易丢；周期检查并重发 exchangeInfo。"""
+    """qdb 重建后 catalog 易丢；连续两次偏低才重发，并 5min 退避防刷屏。"""
+    empty_streak = 0
+    last_heal_at = 0.0
+    heal_cooldown = float(os.environ.get("BINANCE_CATALOG_HEAL_COOLDOWN_SEC", "300"))
     while True:
         time.sleep(60.0)
         try:
@@ -455,13 +458,28 @@ def _binance_catalog_heal_worker() -> None:
             if isinstance(doc, dict):
                 count = int(doc.get("count") or len(doc.get("symbols") or []))
             want = len(BINANCE_SYMBOLS)
-            if want > 64 and count < max(64, want // 2):
+            missing = want > 64 and count < max(64, want // 2)
+            if not missing:
+                empty_streak = 0
+                continue
+            empty_streak += 1
+            now = time.monotonic()
+            if empty_streak < 2 or (now - last_heal_at) < heal_cooldown:
                 print(
-                    f"binance catalog heal: qdb count={count} want={want}; republish",
+                    f"binance catalog heal defer streak={empty_streak} "
+                    f"qdb={count} want={want}",
                     flush=True,
                 )
-                publish_binance_exchange_info()
+                continue
+            print(
+                f"binance catalog heal: qdb count={count} want={want}; republish",
+                flush=True,
+            )
+            publish_binance_exchange_info()
+            last_heal_at = now
+            empty_streak = 0
         except Exception as exc:
+            # 连接拒绝不计入「空目录」，避免重建窗口连发
             print(f"binance catalog heal failed: {exc}", flush=True)
 
 
@@ -493,18 +511,41 @@ def start_binance_cold_book_feed() -> None:
     ).start()
 
 
+def _write_gate_docs_pending() -> int:
+    try:
+        from write_gate import get_gate
+
+        gate = get_gate()
+        if gate is None:
+            return 0
+        return int(gate.pending_counts().get("docs") or 0)
+    except Exception:
+        return 0
+
+
 def _binance_cold_book_worker() -> None:
+    """非热门盘口 REST 轮转：按 docs 积压背压；TTL 内跳过已有 depth。"""
     from binance_ws import hot_set
 
+    ttl = float(os.environ.get("BINANCE_COLD_BOOK_TTL_SEC", "60"))
+    pending_pause = int(os.environ.get("BINANCE_COLD_BOOK_PENDING_PAUSE", "250"))
+    last_ok: dict[str, float] = {}
     i = 0
-    print("binance cold book REST feed start", flush=True)
+    print(
+        f"binance cold book REST feed start ttl={ttl:.0f}s pause_pending={pending_pause}",
+        flush=True,
+    )
     while True:
+        pending = _write_gate_docs_pending()
+        if pending >= pending_pause:
+            time.sleep(1.0)
+            continue
         hot = hot_set()
         cold = [s for s in BINANCE_SYMBOLS if s not in hot]
         if not cold:
             time.sleep(2.0)
             continue
-        # 非 USDT 优先；其中 BTC/ETH 计价再提前（ETHBTC 等常见对）
+
         def _cold_rank(sym: str) -> tuple[int, str]:
             if sym.endswith(("BTC", "ETH")) and not sym.endswith("USDT"):
                 return (0, sym)
@@ -513,17 +554,27 @@ def _binance_cold_book_worker() -> None:
             return (2, sym)
 
         ordered = sorted(cold, key=_cold_rank)
-        # 每拍 4 个，限速避免打爆上游 / write_gate
-        for j in range(4):
-            symbol = ordered[(i + j) % len(ordered)]
+        # 积压低时加快；高时（未达 pause）减批
+        batch = 8 if pending < 80 else 4 if pending < 150 else 2
+        now = time.monotonic()
+        did = 0
+        scanned = 0
+        while did < batch and scanned < len(ordered):
+            symbol = ordered[(i + scanned) % len(ordered)]
+            scanned += 1
+            prev = last_ok.get(symbol, 0.0)
+            if prev and (now - prev) < ttl:
+                continue
             try:
                 _poll_binance_book(symbol)
+                last_ok[symbol] = time.monotonic()
+                did += 1
             except Exception as exc:
                 if i % 200 == 0:
                     print(f"binance cold book {symbol} failed: {exc}", flush=True)
-            time.sleep(0.15)
-        i = (i + 4) % max(len(ordered), 1)
-        time.sleep(0.2)
+            time.sleep(0.08 if pending < 80 else 0.2)
+        i = (i + max(scanned, 1)) % max(len(ordered), 1)
+        time.sleep(0.15 if pending < 80 else 0.4)
 
 
 def binance_ws_healthy() -> bool:

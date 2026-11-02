@@ -26,7 +26,9 @@ BINANCE_WS_FALLBACK = os.environ.get(
 ).rstrip("/")
 QUOTE_FLUSH_MS = float(os.environ.get("BINANCE_WS_QUOTE_FLUSH_MS", "50"))
 DOC_FLUSH_MS = float(os.environ.get("BINANCE_WS_DOC_FLUSH_MS", "400"))
-STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "12"))
+STALE_SEC = float(os.environ.get("BINANCE_WS_STALE_SEC", "20"))
+WS_PING_INTERVAL = max(20, int(os.environ.get("BINANCE_WS_PING_INTERVAL", "45")))
+WS_PING_TIMEOUT = max(10, int(os.environ.get("BINANCE_WS_PING_TIMEOUT", "30")))
 # combined URL 长度约束：热分片可更小；冷端流更少可略大
 WS_SHARD_SIZE = max(10, int(os.environ.get("BINANCE_WS_SHARD_SIZE", "40")))
 WS_SHARD_STAGGER_SEC = float(os.environ.get("BINANCE_WS_SHARD_STAGGER_SEC", "0.25"))
@@ -231,8 +233,8 @@ class BinanceWsFeed:
                     ),
                 )
                 app.run_forever(
-                    ping_interval=60,
-                    ping_timeout=20,
+                    ping_interval=WS_PING_INTERVAL,
+                    ping_timeout=WS_PING_TIMEOUT,
                     **self._proxy_kwargs(),
                 )
             except Exception as exc:
@@ -417,7 +419,11 @@ class BinanceWsFeed:
 
     def _flush_loop(self) -> None:
         quote_every = max(QUOTE_FLUSH_MS, 20) / 1000.0
-        doc_every = max(DOC_FLUSH_MS, 50) / 1000.0
+        # 冷端 ticker/depth docs 降频，避免 18 分片同时打满 write_gate
+        base_doc = max(DOC_FLUSH_MS, 50)
+        if self.tier != "hot":
+            base_doc = max(base_doc, float(os.environ.get("BINANCE_WS_COLD_DOC_FLUSH_MS", "2000")))
+        doc_every = base_doc / 1000.0
         next_quote = time.monotonic()
         next_doc = time.monotonic()
         while not self._stop.is_set():
