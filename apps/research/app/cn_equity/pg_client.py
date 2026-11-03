@@ -155,16 +155,23 @@ def list_securities(
     q: str | None = None,
     limit: int = 5000,
 ) -> list[dict[str, Any]]:
-    """按 secu_category 列目录（index / etf / convertible）。"""
+    """按 secu_category 列目录（stock / index / etf / convertible）。
+
+    stock 供 history-only：qdb `cn-equity:codes` 缺失时回落，避免只剩 seed。
+    """
     cat = (category or "").strip().lower()
-    if cat not in ("index", "etf", "convertible"):
+    if cat not in ("stock", "index", "etf", "convertible"):
         return []
     conn = _connect()
     if conn is None:
         return []
     lim = max(1, min(int(limit or 5000), 12000))
-    # 指数：主流代码优先，避免 LIMIT 被北交所冷门号段占满
-    order_sql = "ORDER BY exchange_code, secu_code"
+    # 沪深优先：避免 LIMIT 被北交所号段占满（exchange_code 字典序 BSE < SSE）
+    order_sql = """
+            ORDER BY CASE exchange_code
+              WHEN 'SSE' THEN 0 WHEN 'SZSE' THEN 1 ELSE 2 END,
+              secu_code
+        """
     if cat == "index":
         order_sql = """
             ORDER BY CASE secu_code
@@ -186,6 +193,7 @@ def list_securities(
             SELECT exchange_code, secu_code, name, secu_category
             FROM market.security
             WHERE secu_category = %s
+              AND exchange_code IN ('SSE', 'SZSE', 'BSE')
             {order_sql}
             LIMIT %s
             """,

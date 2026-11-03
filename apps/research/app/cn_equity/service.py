@@ -150,6 +150,33 @@ class CnEquityService:
                         "exchange": exchange,
                         "symbol": f"{code}.{exchange}",
                     }
+            else:
+                # qdb 清卷 / history-ingest 未补目录时：回落 PG，勿只剩 seed 22
+                from app.cn_equity import pg_client
+
+                pg_rows = pg_client.list_securities("stock", limit=10000)
+                if pg_rows:
+                    source = "postgres:security"
+                    meta = {
+                        "note": "qdb cn-equity:codes 缺失，回落 market.security",
+                        "catalog_count": len(pg_rows),
+                    }
+                    for item in pg_rows:
+                        code = _cn_code6(str(item.get("stock_code") or item.get("code") or ""))
+                        if not code:
+                            continue
+                        by_code[code] = {
+                            "stock_code": code,
+                            "short_name": str(
+                                item.get("short_name") or item.get("name") or ""
+                            )
+                            or by_code.get(code, {}).get("short_name", ""),
+                            "exchange": str(item.get("exchange") or "SH"),
+                            "symbol": str(
+                                item.get("symbol")
+                                or f"{code}.{item.get('exchange') or 'SH'}"
+                            ),
+                        }
             for row in snapshots_all().get("data") or []:
                 ex_raw = str(row.get("exchange") or "").upper()
                 if ex_raw not in _CN_EQUITY_EXCHANGES:

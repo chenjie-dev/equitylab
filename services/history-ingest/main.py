@@ -170,10 +170,24 @@ def refresh_codes_doc_retry(*, attempts: int = 12, delay_s: float = 5.0) -> int:
 
 
 def _codes_refresh_worker() -> None:
+    """定期刷新；qdb 清卷导致 docs 丢失时立刻补写，不等满刷新间隔。"""
     while True:
         try:
-            time.sleep(cn_universe.universe_refresh_sec())
-            refresh_codes_doc()
+            missing = True
+            try:
+                doc = qdb.get_doc(CODES_DOC_KEY)
+                missing = not (isinstance(doc, dict) and doc.get("codes"))
+            except Exception:
+                missing = True
+            if not missing:
+                time.sleep(cn_universe.universe_refresh_sec())
+            n = refresh_codes_doc()
+            if missing:
+                print(
+                    f"history-ingest codes heal after missing doc count={n}",
+                    flush=True,
+                )
+                time.sleep(30)
         except Exception as exc:
             print(f"history-ingest codes refresh failed: {exc}", flush=True)
             time.sleep(60)
