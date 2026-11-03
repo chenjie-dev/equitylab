@@ -52,6 +52,8 @@ qdb 镜像从同级仓库 `../qdb` 构建，只提供读写接口（`QDB_FEED=0`
 | `HISTORY_INGEST_SLEEP_MS` | `400` | 每票拉取间隔 |
 | `HISTORY_INGEST_SKIP` | `0` | `1`=停回补（进程空转） |
 | `QDB_FEED` | `0` | 关闭 qdb 内置采集 |
+| `QDB_MAX_SYMBOLS` / `QDB_RING_CAPACITY` | `65536` / `65536` | qdb 共享内存 market 档（手册 desk 缺省更小）；`RING` 须 2 的幂 |
+| `QDB_TICK_RETENTION_SECS` | `7200` | 内存 ticks 保留秒；`0`=不剪。引擎 sealed K **无**条数硬上限 |
 | `QDB_FEED_CODES` / `COLLECTOR_CODES` | seed≈22（茅台/宁德/北交所/ETF） | A 股 **seed**：热门报价前置 + 默认 K 线回填集 |
 | `CN_EQUITY_UNIVERSE` | `full` | `full`=新浪 hs_a→docs `cn-equity:codes`（数千）+ 分批报价；`seed`=仅上表 |
 | `CN_EQUITY_QUOTE_BATCH` | `80` | 每 tick 旋转批大小（新浪 `hq.sinajs.cn` 硬顶≈100） |
@@ -122,6 +124,7 @@ docker compose down
 | 现货报价很慢 / snapshots 空 | `BINANCE_WS_WRITE_QUOTES=0` 或 RWA 抢写 | 打开 `WRITE_QUOTES=1`；确认日志有 `qdb write gate`；`RWA_WORKERS≤8`、`RWA_BOARD_FLUSH_SEC≥1`；recreate collector |
 | collector `unhealthy` / 行情断流 | qdb 重启、WS 分片断、catalog 丢 | `curl -s localhost:9105/health`；日志 `watchdog`；守护会有限自愈（重发 catalog / 重启 WS）；仍挂则 `compose logs qdb collector` 与 recreate |
 | 前端 `klines 500` / Internal Server Error | qdb 冷启动未听 9090 → research/gateway 未起，Next 反代失败 | Compose 已放宽 qdb `start_period=300s`；research 仅 `service_started` 依赖 qdb。等 `curl :9090/v1/snapshots` 通后 `compose up -d research gateway frontend` |
+| qdb OOM / `RestartCount` 暴涨 / collector `Connection refused` | 旧卷重放大量 sealed K+ticks，私有堆撑爆 Docker 内存（~8GiB）；引擎已无 K 线条数硬上限 | `compose stop collector qdb` → `docker volume rm equitylab-qdbdata`（丢热态）→ `compose up -d --build qdb` 确认 stderr 有容量行 → 再起 collector。保持 `BINANCE_KLINE_WRITE_TRADES=0`；可压 `QDB_TICK_RETENTION_SECS`；勿把历史 trades 灌引擎 |
 | Stocks 页「暂无标的」/ quote 503 | `www.binance.com` 超时或 `RWA_WORKERS=0` | 宿主机 Clash 等代理测通 bapi 后设 `COLLECTOR_RWA_PROXY=http://host.docker.internal:7897`、`RWA_WORKERS=4`，recreate collector；现货仍可用 `COLLECTOR_HTTPS_PROXY=…:18080` |
 | 行情台卡顿 / 请求过多 | 后台轮询过密、全量 board | 前端已：可见性停表、Stocks 虚拟列表、board `?tickers=` 热路径、K 线 `update` 尾刷；勿把盘口轮询压到 &lt;3s |
 | docs K 线越积越多 | 未开时间窗 | `QDB_RETENTION_DAYS=15`（默认）+ collector `qdb-retention-gc`；日志有 `retention gc`；引擎 WAL 仍无按日删除（见 qdb 行情库文档） |
