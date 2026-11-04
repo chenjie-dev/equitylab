@@ -130,6 +130,14 @@ BINANCE_KLINE_LIMIT = min(
 )
 BINANCE_KLINE_REFRESH = max(2, int(os.environ.get("BINANCE_KLINE_REFRESH", "8")))
 BINANCE_KLINE_PAUSE = float(os.environ.get("BINANCE_KLINE_PAUSE_SEC", "1.0"))
+# 热门 K 线快刷：全市场×全周期一轮要数小时，图表会停在旧闭合棒
+_hot_iv_raw = os.environ.get("BINANCE_KLINE_HOT_INTERVALS", "1m,5m,15m,1h").strip()
+BINANCE_KLINE_HOT_INTERVALS = (
+    []
+    if _hot_iv_raw.lower() in ("", "0", "off", "none", "-")
+    else [s.strip() for s in _hot_iv_raw.split(",") if s.strip()]
+)
+BINANCE_KLINE_HOT_PAUSE = float(os.environ.get("BINANCE_KLINE_HOT_PAUSE_SEC", "0.2"))
 # PG 冷回补：每 symbol×interval 向更早翻页次数（每页≤1000）；全市场默认少页
 BINANCE_KLINE_PG_BACKFILL_PAGES = max(
     1,
@@ -493,10 +501,37 @@ def start_rwa_kline_feed() -> None:
     threading.Thread(target=_rwa_kline_worker, name="collector-rwa-kline", daemon=True).start()
 
 
+def _binance_hot_symbols() -> list[str]:
+    """种子 + BINANCE_WS_HOT；与 WS 热分片对齐。"""
+    hot = list(_SEED_SYMBOLS)
+    extra = os.environ.get("BINANCE_WS_HOT", "").strip()
+    if extra:
+        hot.extend(s.strip().upper() for s in extra.split(",") if s.strip())
+    # 只保留当前宇宙内的（resolve 前可能只有 seed）
+    universe = set(BINANCE_SYMBOLS) if BINANCE_SYMBOLS else set(hot)
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in hot:
+        u = s.upper()
+        if u in seen:
+            continue
+        if universe and u not in universe:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out or list(_SEED_SYMBOLS)
+
+
 def start_binance_kline_feed() -> None:
-    """独立线程：现货 REST K 线持续写入 qdb（补 WS 不推 kline 的缺口）。"""
+    """现货 REST K 线：热门快刷 + 全市场慢轮（补 WS 不推 kline 的缺口）。"""
     if not BINANCE_SYMBOLS or not BINANCE_KLINE_INTERVALS:
         return
+    if BINANCE_KLINE_HOT_INTERVALS:
+        threading.Thread(
+            target=_binance_kline_hot_worker,
+            name="collector-binance-kline-hot",
+            daemon=True,
+        ).start()
     threading.Thread(
         target=_binance_kline_worker, name="collector-binance-kline", daemon=True
     ).start()
@@ -623,22 +658,67 @@ def _backfill_binance(symbol: str) -> None:
         print(f"backfill {qsym} trades={total}", flush=True)
 
 
+def _binance_kline_hot_worker() -> None:
+    """热门×短周期快刷，避免图表卡在数十分钟前的闭合棒。"""
+    pause = max(0.05, BINANCE_KLINE_HOT_PAUSE)
+    print(
+        f"binance kline hot feed intervals={BINANCE_KLINE_HOT_INTERVALS} "
+        f"pause={pause}s limit={BINANCE_KLINE_LIMIT}",
+        flush=True,
+    )
+    round_n = 0
+    while True:
+        hot = _binance_hot_symbols()
+        if not hot or not BINANCE_KLINE_HOT_INTERVALS:
+            time.sleep(5.0)
+            continue
+        round_n += 1
+        for symbol in hot:
+            for interval in BINANCE_KLINE_HOT_INTERVALS:
+                try:
+                    n = _store_binance_klines(
+                        symbol,
+                        interval,
+                        limit=BINANCE_KLINE_LIMIT,
+                        only_missing=False,
+                        keep_last=BINANCE_KLINE_REFRESH,
+                    )
+                    if n and round_n % 5 == 1 and symbol == hot[0]:
+                        print(
+                            f"binance kline hot {symbol}:{interval} bars={n}",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(
+                        f"binance kline hot {symbol}:{interval} failed: {exc}",
+                        flush=True,
+                    )
+                time.sleep(pause)
+
+
 def _binance_kline_worker() -> None:
+    """全市场慢轮：覆盖冷门；热门同周期由 hot worker 负责时可跳过以省配额。"""
     global _binance_kline_i
     n_sym = len(BINANCE_SYMBOLS)
     n_iv = len(BINANCE_KLINE_INTERVALS)
+    hot_iv = set(BINANCE_KLINE_HOT_INTERVALS)
     print(
         f"binance kline feed symbols={n_sym} intervals={BINANCE_KLINE_INTERVALS} "
-        f"limit={BINANCE_KLINE_LIMIT}",
+        f"limit={BINANCE_KLINE_LIMIT} pause={BINANCE_KLINE_PAUSE}s",
         flush=True,
     )
     while True:
+        n_sym = len(BINANCE_SYMBOLS)
         if not n_sym or not n_iv:
             time.sleep(5.0)
             continue
         symbol = BINANCE_SYMBOLS[_binance_kline_i % n_sym]
         interval = BINANCE_KLINE_INTERVALS[(_binance_kline_i // n_sym) % n_iv]
         _binance_kline_i += 1
+        # 热门+热周期交给 hot worker，避免重复打 REST/写 docs
+        if interval in hot_iv and symbol in set(_binance_hot_symbols()):
+            time.sleep(0.01)
+            continue
         try:
             n = _store_binance_klines(
                 symbol,
