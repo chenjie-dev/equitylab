@@ -68,11 +68,13 @@ services:
       QDB_FEED_MS: ${QDB_FEED_MS:-1000}
       # 与 collector / research seed 对齐（22）；扩大：.env 设 QDB_FEED_CODES
       QDB_FEED_CODES: ${QDB_FEED_CODES:-600519,000001,300750,601318,000858,002594,600036,601012,688981,510300,830879,835185,000568,600900,601899,300059,002475,600276,000333,601166,600030,002415}
-      # qdb ≥2026-11-03：缺省 desk 区（8k/16k）；全市场热写须显式抬到 market 档（约 84 MiB 逻辑）
+      # qdb ≥2026-11-05：缺省热总线 2 MiB（1024/4096）；全市场须显式抬到 65536
       QDB_MAX_SYMBOLS: ${QDB_MAX_SYMBOLS:-65536}
       QDB_RING_CAPACITY: ${QDB_RING_CAPACITY:-65536}
-      # 内存 ticks 按事件时间保留；0=不剪。已闭合 K 线无条数硬上限（靠少写引擎 trades + 清卷）
+      # 内存 ticks 按事件时间保留；0=不剪。已闭合 K 线无条数硬上限
       QDB_TICK_RETENTION_SECS: ${QDB_TICK_RETENTION_SECS:-7200}
+      # 私有数据集预算（不含 region.bin）。0=不限制，本机 ~8GiB Docker 会 OOM 重启死循环
+      QDB_MAXMEMORY: ${QDB_MAXMEMORY:-2gb}
     ports:
       - "${QDB_PORT:-9090}:9090"
     volumes:
