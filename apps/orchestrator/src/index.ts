@@ -1,7 +1,8 @@
 /**
  * EquityLab 编排层 HTTP 入口。
  *
- * 业务图见 `graph/run.ts`（LangGraph 风格状态机）。
+ * 业务图见 `graph/run.ts`。工具只经 `TOOL_REGISTRY`。
+ * 权限与评测要求见 `docs/agents/2026-10-27-agent-开发流程与设计清单.md`。
  * @see docs/platform/2026-10-15-architecture.md
  * @see docs/platform/2026-10-15-api.md
  */

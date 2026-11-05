@@ -1,6 +1,10 @@
 /**
  * Graph 节点：route → plan → execute → synthesize。
- * 每个节点接收完整 state，返回 partial update。
+ *
+ * 对齐 `docs/agents/2026-10-27-agent-开发流程与设计清单.md`：
+ * 模型只规划；算数在 research。计划只产出注册表里的工具名。
+ * A 股六位码必须走 `get_cn_equity_quote`，避免 market-data mock 的演示价。
+ * execute 截断到 `MAX_TOOL_ROUNDS`。synthesize 是 MVP stub：有工具失败时不得把结果说成已算出的行情/IC/回测。
  */
 
 import { hasModelKey, MAX_TOOL_ROUNDS } from "../config.js";
@@ -33,8 +37,16 @@ export function planNode(state: GraphState): Partial<GraphState> {
 
 function planTools(agent: AgentKind, message: string): PlannedCall[] {
   if (agent === "data") {
-    const symbol = message.match(/\b\d{6}(?:\.(?:SH|SZ))?\b/)?.[0] ?? "600519.SH";
-    return [{ name: "get_stock_quote", args: { symbol } }];
+    // 六位码是 A 股：读 cn-equity。字母交易对才走 market-data（币安等）。
+    const cn = message.match(/\b(\d{6})(?:\.(?:SH|SZ|BJ))?\b/i);
+    if (cn) {
+      return [{ name: "get_cn_equity_quote", args: { codes: cn[1] } }];
+    }
+    const spot = message.match(/\b[A-Za-z]{2,20}USDT\b/);
+    if (spot) {
+      return [{ name: "get_stock_quote", args: { symbol: spot[0].toUpperCase() } }];
+    }
+    return [{ name: "get_cn_equity_quote", args: { codes: "600519" } }];
   }
   if (agent === "factor") {
     const uni = message.match(/\b\d{6}(?:\.(?:SH|SZ|BJ))?\b/)?.[0] ?? "600519";
@@ -70,13 +82,21 @@ export async function executeNode(state: GraphState): Promise<Partial<GraphState
   return appendTrace({ ...state, toolResults }, `execute→${toolResults.length} tools`);
 }
 
-/** Synthesize：MVP 返回确定性摘要；有模型 Key 时仍标明后续接 LLM 节点。 */
+/** Synthesize：MVP stub。只转述工具观察；失败结果显式标出，避免假成功。 */
 export function synthesizeNode(state: GraphState): Partial<GraphState> {
+  const failed = state.toolResults.filter((r) => !r.ok).length;
   const header = hasModelKey()
-    ? `[agent=${state.agent}] 模型 Key 已配置；MVP 仍走确定性 synthesize 节点（后续替换为 LLM 节点）。`
+    ? `[agent=${state.agent}] 模型 Key 已配置；MVP stub 仍走确定性 synthesize（后续替换为 LLM 节点）。`
     : `[agent=${state.agent}] 未配置模型 Key；以下为确定性工具结果摘要。`;
+  const honesty =
+    failed > 0
+      ? `有 ${failed} 个工具失败：不得把 error 当成行情、IC 或回测结论。`
+      : state.toolResults.length === 0
+        ? "未调用工具：不得编造价格或指标。"
+        : "结论只解释下列工具观察。";
   const answer = [
     header,
+    honesty,
     `用户问题：${state.message}`,
     "工具结果：",
     JSON.stringify(state.toolResults, null, 2),

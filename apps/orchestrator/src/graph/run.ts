@@ -1,6 +1,8 @@
 /**
- * 编译并运行线性图：START → route → plan → execute → synthesize → END。
- * 官方 @langchain/langgraph 接入时，保持节点函数签名即可迁移。
+ * 单环基线：START → route → plan → execute → synthesize → END。
+ *
+ * 加 planner / 多 Agent / 重试前先对照本环（见 Agent 开发清单 §1）。
+ * 节点签名保持稳定，便于以后换成官方 StateGraph。
  */
 
 import { createInitialState, type GraphState } from "./state.js";

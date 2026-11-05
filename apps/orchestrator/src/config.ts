@@ -1,6 +1,8 @@
 /**
  * 编排层运行时配置（环境即真相）。
- * 工具循环上限对齐立项：最多 5 轮、单工具 30s。
+ *
+ * 硬闸见 `docs/agents/2026-10-27-agent-开发流程与设计清单.md` §2.5：
+ * 最多 5 轮工具、单工具 ≤30s。闸在本文件常量，不靠 prompt。
  */
 
 export const PORT = Number(process.env.PORT ?? 8001);

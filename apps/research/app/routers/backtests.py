@@ -1,3 +1,8 @@
+"""策略回测 HTTP：确定性引擎，不接下单。
+
+响应带 `mode` / `source`。缺 K 线返回空或错误，不伪造夏普或收益。
+"""
+
 from typing import Any
 
 import httpx
