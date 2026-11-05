@@ -110,6 +110,11 @@ function toCandle(k: Kline): CandlestickData {
 
 export type ChartPalette = "wind" | "binance";
 
+/** A 股（wind）用同花顺常见 5/10/20；币安页保持 7/25/99。 */
+function maPeriods(palette: ChartPalette): [number, number, number] {
+  return palette === "wind" ? [5, 10, 20] : [7, 25, 99];
+}
+
 const PALETTE = {
   wind: {
     up: "#e53935",
@@ -175,6 +180,7 @@ function findKline(rows: Kline[], localSec: number): Kline | null {
 function priceScaleRange(
   rows: Kline[],
   flags: IndFlags,
+  periods: readonly number[],
 ): { minValue: number; maxValue: number } | null {
   if (!rows.length) return null;
   let min = Infinity;
@@ -189,7 +195,7 @@ function priceScaleRange(
     bump(Number(k[3]));
   }
   if (flags.ma) {
-    for (const period of [7, 25, 99]) {
+    for (const period of periods) {
       for (const pt of toMaLine(rows, period)) bump(pt.value);
     }
   }
@@ -286,9 +292,10 @@ export function BinanceChart({
       volumeRef.current?.setData([]);
     }
     if (flags.ma) {
-      ma7Ref.current?.setData(toMaLine(rows, 7));
-      ma25Ref.current?.setData(toMaLine(rows, 25));
-      ma99Ref.current?.setData(toMaLine(rows, 99));
+      const [p1, p2, p3] = maPeriods(pal);
+      ma7Ref.current?.setData(toMaLine(rows, p1));
+      ma25Ref.current?.setData(toMaLine(rows, p2));
+      ma99Ref.current?.setData(toMaLine(rows, p3));
     } else {
       ma7Ref.current?.setData([]);
       ma25Ref.current?.setData([]);
@@ -376,7 +383,11 @@ export function BinanceChart({
       priceLineVisible: false,
       // 主图唯一价格轴贡献者：按可见 OHLC/均线拟合，避免量能/基线 0 拉扁
       autoscaleInfoProvider: () => {
-        const range = priceScaleRange(klinesRef.current, indRef.current);
+        const range = priceScaleRange(
+          klinesRef.current,
+          indRef.current,
+          maPeriods(paletteRef.current),
+        );
         return range ? { priceRange: range } : null;
       },
     });
@@ -869,9 +880,9 @@ export function BinanceChart({
         </div>
         {ind.ma ? (
           <span className="bn-ma-legend">
-            <i style={{ color: "#f0b90b" }}>MA(7)</i>
-            <i style={{ color: "#d94cff" }}>MA(25)</i>
-            <i style={{ color: "#1e88e5" }}>MA(99)</i>
+            <i style={{ color: "#f0b90b" }}>MA({maPeriods(palette)[0]})</i>
+            <i style={{ color: "#d94cff" }}>MA({maPeriods(palette)[1]})</i>
+            <i style={{ color: "#1e88e5" }}>MA({maPeriods(palette)[2]})</i>
           </span>
         ) : null}
         {ind.boll ? (

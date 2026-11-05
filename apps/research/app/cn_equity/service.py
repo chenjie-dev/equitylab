@@ -450,7 +450,39 @@ class CnEquityService:
                     "pre_close": row.get("pre_close"),
                 }
             )
-        return {"data": data, "source": body.get("source"), "category": "index"}
+        from app.cn_equity import pg_client
+
+        out: dict[str, Any] = {
+            "data": data,
+            "source": body.get("source"),
+            "category": "index",
+        }
+        if pg_client.enabled():
+            out["breadth"] = pg_client.market_breadth()
+        return out
+
+    def board(
+        self,
+        *,
+        sort: str = "change_pct",
+        order: str = "desc",
+        limit: int = 80,
+    ) -> dict[str, Any]:
+        """同花顺式涨跌榜 / 成交额榜：只读最近交易日 bar_daily。"""
+        from app.cn_equity import pg_client
+
+        key = sort if sort in ("amount", "volume", "change_pct") else "change_pct"
+        direction = "asc" if str(order).lower() == "asc" else "desc"
+        if not pg_client.enabled():
+            return {
+                "data": [],
+                "source": "none",
+                "note": "未配置 DATABASE_URL",
+                "sort": key,
+                "order": direction,
+                "breadth": {"up": 0, "down": 0, "flat": 0},
+            }
+        return pg_client.daily_board(sort=key, order=direction, limit=limit)
 
     def klines(
         self,

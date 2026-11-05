@@ -54,6 +54,13 @@ function StripCell({
   );
 }
 
+export type MarketBreadth = {
+  trade_date?: string | null;
+  up?: number;
+  down?: number;
+  flat?: number;
+};
+
 export function CnIndexStrip({
   selectedCode,
   onPick,
@@ -62,13 +69,18 @@ export function CnIndexStrip({
   onPick: (item: IndexStripItem) => void;
 }) {
   const [items, setItems] = useState<IndexStripItem[]>([]);
+  const [breadth, setBreadth] = useState<MarketBreadth | null>(null);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/cn-equity/index-strip");
       if (!res.ok) return;
-      const body = (await res.json()) as { data?: IndexStripItem[] };
+      const body = (await res.json()) as {
+        data?: IndexStripItem[];
+        breadth?: MarketBreadth;
+      };
       if (body.data?.length) setItems(body.data);
+      if (body.breadth) setBreadth(body.breadth);
     } catch {
       /* 顶栏失败不阻断主台 */
     }
@@ -82,6 +94,10 @@ export function CnIndexStrip({
 
   if (!items.length) return null;
 
+  const upN = breadth?.up ?? 0;
+  const downN = breadth?.down ?? 0;
+  const flatN = breadth?.flat ?? 0;
+
   return (
     <div className="ths-index-strip" aria-label="主流指数">
       {items.map((it) => (
@@ -92,6 +108,13 @@ export function CnIndexStrip({
           onPick={() => onPick(it)}
         />
       ))}
+      {breadth?.trade_date ? (
+        <div className="ths-breadth" title={`末日 ${breadth.trade_date} 涨跌家数`}>
+          <span className="up">{upN}</span>
+          <span className="flat">{flatN}</span>
+          <span className="down">{downN}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

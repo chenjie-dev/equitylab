@@ -304,6 +304,176 @@ def last_daily_quotes(
     return out
 
 
+# 完整交易日阈值：近期尾部常只有几十只补录，不能拿来排涨跌榜。
+_FULL_SESSION_MIN = 1000
+
+# bar_daily.prev_close 基本为空，昨收用窗口内前一根 close。
+_SESSION_CTE = """
+WITH bounds AS (
+  SELECT MAX(b.trading_day) AS max_day
+  FROM market.bar_daily b
+  JOIN market.security s ON s.inner_code = b.inner_code
+  WHERE s.secu_category = 'stock'
+    AND s.exchange_code IN ('SSE', 'SZSE', 'BSE')
+    AND s.listed_status <> 'delisted'
+),
+bars AS (
+  SELECT b.inner_code, s.exchange_code, s.secu_code, s.name,
+         b.trading_day, b.open, b.high, b.low, b.close, b.volume, b.amount,
+         LAG(b.close) OVER (
+           PARTITION BY b.inner_code ORDER BY b.trading_day
+         ) AS prev_px
+  FROM market.bar_daily b
+  JOIN market.security s ON s.inner_code = b.inner_code
+  JOIN bounds ON b.trading_day >= bounds.max_day - 45
+  WHERE s.secu_category = 'stock'
+    AND s.exchange_code IN ('SSE', 'SZSE', 'BSE')
+    AND s.listed_status <> 'delisted'
+),
+day AS (
+  SELECT trading_day AS d
+  FROM bars
+  GROUP BY trading_day
+  HAVING COUNT(*) >= %s
+  ORDER BY trading_day DESC
+  LIMIT 1
+)
+"""
+
+
+def market_breadth() -> dict[str, Any]:
+    """最近一个完整交易日的 A 股涨/跌/平家数。只读 bar_daily。"""
+    conn = _connect()
+    if conn is None:
+        return {"trade_date": None, "up": 0, "down": 0, "flat": 0}
+    with conn.cursor() as cur:
+        cur.execute(
+            _SESSION_CTE
+            + """
+            SELECT day.d,
+                   COUNT(*) FILTER (
+                     WHERE bars.prev_px IS NOT NULL AND bars.prev_px <> 0
+                       AND bars.close > bars.prev_px
+                   ),
+                   COUNT(*) FILTER (
+                     WHERE bars.prev_px IS NOT NULL AND bars.prev_px <> 0
+                       AND bars.close < bars.prev_px
+                   ),
+                   COUNT(*) FILTER (
+                     WHERE bars.prev_px IS NULL OR bars.prev_px = 0
+                       OR bars.close = bars.prev_px
+                   )
+            FROM bars
+            JOIN day ON bars.trading_day = day.d
+            GROUP BY day.d
+            """,
+            (_FULL_SESSION_MIN,),
+        )
+        row = cur.fetchone()
+    if not row or row[0] is None:
+        return {"trade_date": None, "up": 0, "down": 0, "flat": 0}
+    day, up, down, flat = row
+    return {
+        "trade_date": day.isoformat() if hasattr(day, "isoformat") else str(day),
+        "up": int(up or 0),
+        "down": int(down or 0),
+        "flat": int(flat or 0),
+    }
+
+
+def daily_board(*, sort: str, order: str, limit: int) -> dict[str, Any]:
+    """完整交易日涨跌榜 / 成交量榜。sort 只允许 change_pct、volume、amount。"""
+    sort_sql = {"change_pct": "change_pct", "volume": "volume", "amount": "amount"}.get(
+        sort, "change_pct"
+    )
+    direction = "ASC" if order == "asc" else "DESC"
+    want = max(1, min(int(limit), 200))
+    empty: dict[str, Any] = {
+        "trade_date": None,
+        "source": "postgres:bar_daily",
+        "note": "无日线：待 history-ingest 写入后再排榜",
+        "sort": sort_sql,
+        "order": "asc" if direction == "ASC" else "desc",
+        "breadth": {"up": 0, "down": 0, "flat": 0},
+        "data": [],
+    }
+    conn = _connect()
+    if conn is None:
+        empty["note"] = "未配置 DATABASE_URL"
+        empty["source"] = "none"
+        return empty
+    with conn.cursor() as cur:
+        cur.execute(
+            _SESSION_CTE
+            + f"""
+            SELECT bars.exchange_code, bars.secu_code, bars.name,
+                   bars.open, bars.high, bars.low, bars.close, bars.prev_px,
+                   bars.volume, bars.amount, day.d,
+                   CASE
+                     WHEN bars.prev_px IS NOT NULL AND bars.prev_px <> 0
+                     THEN ROUND(((bars.close - bars.prev_px) / bars.prev_px) * 100, 2)
+                   END AS change_pct,
+                   CASE
+                     WHEN bars.prev_px IS NOT NULL
+                     THEN ROUND(bars.close - bars.prev_px, 4)
+                   END AS change
+            FROM bars
+            JOIN day ON bars.trading_day = day.d
+            ORDER BY {sort_sql} {direction} NULLS LAST, bars.secu_code
+            LIMIT %s
+            """,
+            (_FULL_SESSION_MIN, want),
+        )
+        rows = cur.fetchall()
+    data: list[dict[str, Any]] = []
+    day = None
+    for ex, code, name, o, h, l, c, prev, vol, amt, session_day, pct, chg in rows:
+        day = session_day
+        ui = _EX_UI.get(str(ex), "SZ")
+        code6 = str(code).zfill(6)
+        data.append(
+            {
+                "stock_code": code6,
+                "short_name": str(name or ""),
+                "exchange": ui,
+                "symbol": f"{code6}.{ui}",
+                "category": "stock",
+                "price": _f(c),
+                "open": _f(o),
+                "high": _f(h),
+                "low": _f(l),
+                "pre_close": _f(prev),
+                "change": _f(chg),
+                "change_pct": _f(pct),
+                "volume": _f(vol),
+                "amount": _f(amt),
+                "trade_date": (
+                    session_day.isoformat()
+                    if hasattr(session_day, "isoformat")
+                    else str(session_day)
+                ),
+                "quote_source": "postgres:bar_daily",
+            }
+        )
+    if not data or day is None:
+        return empty
+    breadth = market_breadth()
+    day_s = day.isoformat() if hasattr(day, "isoformat") else str(day)
+    return {
+        "trade_date": day_s,
+        "source": "postgres:bar_daily",
+        "note": f"完整交易日 {day_s} 收盘排行（尾部不足千只的补录日不入榜；非盘中）",
+        "sort": sort_sql,
+        "order": "asc" if direction == "ASC" else "desc",
+        "breadth": {
+            "up": breadth.get("up", 0),
+            "down": breadth.get("down", 0),
+            "flat": breadth.get("flat", 0),
+        },
+        "data": data,
+    }
+
+
 def bars(
     code: str,
     k_type: str,

@@ -35,6 +35,7 @@ import {
   type IndexStripItem,
 } from "../../components/markets/CnIndexStrip";
 import { VirtualMktList } from "../../components/markets/VirtualMktList";
+import { CnTimeShare } from "../../components/markets/CnTimeShare";
 
 /**
  * 热门置顶（与 history-ingest seed 对齐）。
@@ -74,6 +75,22 @@ const QUOTE_BUFFER = 40;
 /** 与币安页同款平铺；仅冷库/读面已支持的周期 */
 const INTERVALS = ["5m", "15m", "30m", "60m", "1d", "1w", "1M"] as const;
 type Interval = (typeof INTERVALS)[number];
+/** 分时走 /intraday（最近交易日 5 分钟），其余走 K 线。 */
+type ChartTf = "ts" | Interval;
+type RankMode = "none" | "watch" | "gainers" | "losers" | "volume";
+const WATCH_KEY = "cnWatch:v1";
+
+function loadWatch(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = localStorage.getItem(WATCH_KEY);
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x): x is string => typeof x === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 /** 右侧：五档 | 资金 | 财务 | 热榜 */
 type SideTab = "book" | "fund" | "finance" | "hot";
@@ -202,6 +219,8 @@ function quotePriceOk(price: unknown): boolean {
 type Quote = {
   stock_code: string;
   short_name: string;
+  exchange?: string;
+  symbol?: string;
   price?: number | string;
   open?: number | string;
   high?: number | string;
@@ -315,7 +334,7 @@ export default function CnEquityPage() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState("600519");
   const [selectedEx, setSelectedEx] = useState("SH");
-  const [interval, setIntervalTf] = useState<Interval>("1d");
+  const [interval, setIntervalTf] = useState<ChartTf>("ts");
   const [klines, setKlines] = useState<Kline[]>([]);
   const [five, setFive] = useState<FiveBook>({
     bids: [],
@@ -327,6 +346,11 @@ export default function CnEquityPage() {
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
   const [sentiment, setSentiment] = useState<SentimentSummary | null>(null);
   const [listMode, setListMode] = useState<"symbols" | "plates">("symbols");
+  const [rankMode, setRankMode] = useState<RankMode>("none");
+  const [rankRows, setRankRows] = useState<CodeRow[]>([]);
+  const [boardNote, setBoardNote] = useState("");
+  const [watch, setWatch] = useState<Set<string>>(() => new Set());
+  const [intradayNote, setIntradayNote] = useState("");
   const [plates, setPlates] = useState<PlateRow[]>([]);
   const [plateFocus, setPlateFocus] = useState<PlateRow | null>(null);
   const [plateMembers, setPlateMembers] = useState<PlateMember[]>([]);
@@ -499,6 +523,38 @@ export default function CnEquityPage() {
     [],
   );
 
+  const loadIntraday = useCallback(
+    async (code: string, exchange: string, assetClass: CnAssetClass) => {
+      if (!code?.trim()) return;
+      const qs = new URLSearchParams({
+        exchange: uiToQdbExchange(exchange),
+        category: assetClass,
+      });
+      const res = await fetch(`/api/cn-equity/intraday/${code}?${qs}`);
+      if (!res.ok) throw new Error(`intraday ${res.status}`);
+      const body = (await res.json()) as {
+        data?: {
+          time?: number | null;
+          open?: number;
+          high?: number;
+          low?: number;
+          close?: number;
+          volume?: number;
+        }[];
+        note?: string;
+      };
+      setKlines(mapCandles(body.data ?? []));
+      setIntradayNote(body.note || "最近交易日 · 5 分钟");
+      setKMeta({
+        session: "history",
+        historyCount: body.data?.length,
+        hasRealtime: false,
+        view: "intraday",
+      });
+    },
+    [],
+  );
+
   const loadFive = useCallback(
     async (code: string, exchange: string, assetClass: CnAssetClass) => {
       try {
@@ -647,6 +703,10 @@ export default function CnEquityPage() {
   }, []);
 
   useEffect(() => {
+    setWatch(loadWatch());
+  }, []);
+
+  useEffect(() => {
     void loadCodes(asset);
   }, [asset, loadCodes]);
 
@@ -660,6 +720,50 @@ export default function CnEquityPage() {
   useEffect(() => {
     if (listMode === "plates" && asset === "stock") void loadPlates();
   }, [listMode, asset, loadPlates]);
+
+  useEffect(() => {
+    if (asset !== "stock" || rankMode === "none" || rankMode === "watch") return;
+    const sort = rankMode === "volume" ? "volume" : "change_pct";
+    const order = rankMode === "losers" ? "asc" : "desc";
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/cn-equity/board?sort=${sort}&order=${order}&limit=80`,
+        );
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as {
+          data?: Quote[];
+          note?: string;
+          trade_date?: string;
+        };
+        if (cancelled) return;
+        const rows: CodeRow[] = (body.data ?? []).map((q) => ({
+          stock_code: q.stock_code,
+          short_name: q.short_name || "",
+          exchange: q.exchange || "SZ",
+          symbol: q.symbol || `${q.stock_code}.${q.exchange || "SZ"}`,
+          category: "stock",
+        }));
+        setRankRows(rows);
+        setBoardNote(
+          body.trade_date ? `${body.note || "末日收盘"} · ${body.trade_date}` : body.note || "",
+        );
+        setQuotes((prev) => {
+          const next = { ...prev };
+          for (const q of body.data ?? []) {
+            if (q.stock_code) next[q.stock_code] = { ...prev[q.stock_code], ...q };
+          }
+          return next;
+        });
+      } catch {
+        if (!cancelled) setRankRows([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [asset, rankMode]);
 
   useEffect(() => {
     if (!lhbDay) return;
@@ -681,7 +785,7 @@ export default function CnEquityPage() {
     void loadFundamentals(selected);
   }, [selected, asset, loadFundamentals]);
 
-  // 切换资产类时重置选中与默认图周期（指数/ETF 默认日K）
+  // 切换资产类时重置选中与默认图周期（个股默认分时，指数/ETF 默认日K）
   useEffect(() => {
     const next = defaultSelected(asset);
     if (next) {
@@ -692,7 +796,8 @@ export default function CnEquityPage() {
         (asset === "index" && next.startsWith("000"));
       setSelectedEx(sh ? "SH" : "SZ");
     }
-    setIntervalTf("1d");
+    setIntervalTf(asset === "stock" ? "ts" : "1d");
+    setRankMode("none");
     setBoard("all");
     setQuery("");
   }, [asset]);
@@ -731,6 +836,23 @@ export default function CnEquityPage() {
     return list;
   }, [codes, query, board, asset]);
 
+  const displayList = useMemo(() => {
+    if (asset !== "stock" || listMode !== "symbols" || rankMode === "none") {
+      return filtered;
+    }
+    if (rankMode === "watch") {
+      return filtered.filter((c) => watch.has(`${c.exchange}:${c.stock_code}`));
+    }
+    const q = query.trim();
+    if (!q) return rankRows;
+    return rankRows.filter(
+      (c) =>
+        c.stock_code.includes(q) ||
+        (c.short_name || "").includes(q) ||
+        c.symbol.includes(q.toUpperCase()),
+    );
+  }, [asset, listMode, rankMode, filtered, watch, rankRows, query]);
+
   // 目录到齐后：可转债等无默认码时选第一只；并同步交易所
   useEffect(() => {
     if (!filtered.length) return;
@@ -744,7 +866,6 @@ export default function CnEquityPage() {
     setSelectedEx(first.exchange);
   }, [filtered, selected]);
 
-  const displayList = filtered;
   const listIds = useMemo(
     () => displayList.map((c) => c.stock_code),
     [displayList],
@@ -784,7 +905,9 @@ export default function CnEquityPage() {
     void (async () => {
       try {
         await Promise.all([
-          loadKlines(selected, interval, selectedEx, asset),
+          interval === "ts"
+            ? loadIntraday(selected, selectedEx, asset)
+            : loadKlines(selected, interval, selectedEx, asset),
           loadFive(selected, selectedEx, asset),
         ]);
         if (!cancelled) setError(null);
@@ -794,20 +917,39 @@ export default function CnEquityPage() {
     })();
     // K 线冷库偶发补数：低频刷新；不刷五档
     const id = setInterval(() => {
-      void loadKlines(selected, interval, selectedEx, asset).catch(
-        () => undefined,
-      );
+      if (interval === "ts") {
+        void loadIntraday(selected, selectedEx, asset).catch(() => undefined);
+      } else {
+        void loadKlines(selected, interval, selectedEx, asset).catch(
+          () => undefined,
+        );
+      }
     }, 120_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [selected, selectedEx, asset, interval, loadKlines, loadFive]);
+  }, [selected, selectedEx, asset, interval, loadKlines, loadIntraday, loadFive]);
 
   const pickRow = useCallback((row: CodeRow) => {
     startTransition(() => {
       setSelected(row.stock_code);
       setSelectedEx(row.exchange);
+    });
+  }, []);
+
+  const toggleWatch = useCallback((row: CodeRow) => {
+    const key = `${row.exchange}:${row.stock_code}`;
+    setWatch((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(WATCH_KEY, JSON.stringify([...next]));
+      } catch {
+        /* 隐私模式写不进去时只留在本次会话 */
+      }
+      return next;
     });
   }, []);
 
@@ -1005,6 +1147,32 @@ export default function CnEquityPage() {
                 </button>
               </div>
               {listMode === "symbols" ? (
+                <div className="ths-board-tabs" role="tablist" aria-label="排行">
+                  {(
+                    [
+                      ["none", "全部"],
+                      ["watch", "自选"],
+                      ["gainers", "涨幅"],
+                      ["losers", "跌幅"],
+                      ["volume", "成交量"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={rankMode === id}
+                      className={
+                        rankMode === id ? "ths-board-tab active" : "ths-board-tab"
+                      }
+                      onClick={() => setRankMode(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {listMode === "symbols" && rankMode === "none" ? (
                 <div className="ths-board-tabs" role="tablist" aria-label="A股板块">
                   {CN_EQUITY_BOARDS.map((b) => (
                     <button
@@ -1110,13 +1278,19 @@ export default function CnEquityPage() {
             </div>
           ) : (
             <>
+              {boardNote && rankMode !== "none" && rankMode !== "watch" ? (
+                <p className="bn-demo-hint">{boardNote}</p>
+              ) : null}
+              {rankMode === "watch" && !displayList.length ? (
+                <p className="bn-demo-hint">自选是空的。点列表里的星号加入。</p>
+              ) : null}
               <div className="bn-mkt-head bn-mkt-head-stock">
                 <span>代码</span>
                 <span>现价</span>
                 <span>涨跌%</span>
               </div>
               <VirtualMktList
-                key={`${asset}:${board}:${query.trim() || "all"}`}
+                key={`${asset}:${board}:${rankMode}:${query.trim() || "all"}`}
                 className="bn-mkt-body"
                 items={displayList}
                 rowHeight={40}
@@ -1131,7 +1305,9 @@ export default function CnEquityPage() {
                     active={
                       c.stock_code === selected && c.exchange === selectedEx
                     }
+                    watched={watch.has(`${c.exchange}:${c.stock_code}`)}
                     onPick={() => pickRow(c)}
+                    onToggleWatch={() => toggleWatch(c)}
                   />
                 )}
               />
@@ -1143,6 +1319,13 @@ export default function CnEquityPage() {
           <div className="bn-tf-row">
             <div className="bn-tf-group">
               <span className="bn-tf-label">周期</span>
+              <button
+                type="button"
+                className={interval === "ts" ? "bn-tf active" : "bn-tf"}
+                onClick={() => setIntervalTf("ts")}
+              >
+                分时
+              </button>
               {INTERVALS.map((tf) => (
                 <button
                   key={tf}
@@ -1155,15 +1338,26 @@ export default function CnEquityPage() {
               ))}
             </div>
             <span className="bn-label">
-              历史 {kMeta.historyCount ?? klines.length} · {interval} · 前复权
+              {interval === "ts"
+                ? intradayNote || "分时 · 5 分钟"
+                : `历史 ${kMeta.historyCount ?? klines.length} · ${interval} · 前复权`}
             </span>
           </div>
-          <BinanceChart
-            klines={klines}
-            symbol={`${selected}.${selectedEx}`}
-            seriesKey={`${selectedEx}:${selected}:${interval}:${asset}`}
-            palette="wind"
-          />
+          {interval === "ts" ? (
+            <CnTimeShare
+              klines={klines}
+              preClose={Number(q?.pre_close)}
+              seriesKey={`${selectedEx}:${selected}:ts:${asset}`}
+              note={intradayNote}
+            />
+          ) : (
+            <BinanceChart
+              klines={klines}
+              symbol={`${selected}.${selectedEx}`}
+              seriesKey={`${selectedEx}:${selected}:${interval}:${asset}`}
+              palette="wind"
+            />
+          )}
         </section>
 
         <aside className="bn-right bn-right-quotes ths-book">
@@ -1495,12 +1689,16 @@ function CnEquityMktRow({
   row,
   quote,
   active,
+  watched,
   onPick,
+  onToggleWatch,
 }: {
   row: CodeRow;
   quote?: Quote;
   active: boolean;
+  watched: boolean;
   onPick: () => void;
+  onToggleWatch: () => void;
 }) {
   const pct = Number(quote?.change_pct ?? NaN);
   const flash = usePriceFlash(quote?.price);
@@ -1511,7 +1709,22 @@ function CnEquityMktRow({
       onClick={onPick}
     >
       <span className="bn-mkt-pair">
-        {row.stock_code}
+        <span className="ths-code-line">
+          <span
+            className={watched ? "bn-star-sm on" : "bn-star-sm"}
+            role="checkbox"
+            aria-checked={watched}
+            aria-label="自选"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onToggleWatch();
+            }}
+          >
+            ★
+          </span>
+          {row.stock_code}
+        </span>
         <em>{row.short_name || quote?.short_name || "—"}</em>
       </span>
       <span className={`bn-mono ${flashClass(flash)}`}>

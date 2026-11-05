@@ -1886,6 +1886,26 @@ code {
   font-size: 12px;
 }
 
+.ths-breadth {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ths-breadth .flat {
+  color: var(--bn-text-tertiary);
+}
+
+.ths-code-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .ths-asset-tabs {
   display: flex;
   gap: 0;

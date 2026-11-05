@@ -30,6 +30,7 @@ class Catalog(BaseModel):
             "GET /cn-equity/codes?q=&limit=&category=stock|index|etf|convertible",
             "GET /cn-equity/quotes?codes=000001,SSE:000001&category=",
             "GET /cn-equity/index-strip",
+            "GET /cn-equity/board?sort=change_pct|amount&order=desc|asc&limit=",
             "GET /cn-equity/klines/{code}?k_type=1d&view=merged&exchange=&category=",
             "GET /cn-equity/five/{code}",
             "GET /cn-equity/intraday/{code}",
@@ -103,6 +104,27 @@ async def index_strip() -> dict:
         raise HTTPException(
             status_code=502, detail=f"cn-equity index-strip: {e}"
         ) from e
+
+
+@endpoints.get("/board")
+async def board(
+    sort: Annotated[
+        str,
+        Query(description="change_pct 涨跌幅 | volume 成交量 | amount 成交额"),
+    ] = "change_pct",
+    order: Annotated[str, Query(description="desc|asc")] = "desc",
+    limit: Annotated[int, Query(ge=1, le=200)] = 80,
+) -> dict:
+    """A 股末日涨跌榜。历史收盘，不是盘中排行。"""
+    try:
+        return await asyncio.to_thread(
+            service.board, sort=sort, order=order, limit=limit
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("cn-equity board failed")
+        raise HTTPException(status_code=502, detail=f"cn-equity board: {e}") from e
 
 
 @endpoints.get("/klines/{code}")
